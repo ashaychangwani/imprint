@@ -6,9 +6,13 @@ import { abortSignalError } from './concurrency.ts';
 import { type LLMOptions, type ProviderName, resolveProvider } from './llm.ts';
 import {
   type ApiResearchCandidate,
+  type ApiResearchFollowUpDirective,
+  type ApiResearchHandoff,
+  ApiResearchHandoffSchema,
   type ApiResearchInput,
   ApiResearchInputSchema,
   ApiResearchOutputSchema,
+  type ApiResearchRequiredLink,
   type BaselineMvpReviewInput,
   BaselineMvpReviewInputSchema,
   BaselineMvpReviewOutputSchema,
@@ -67,12 +71,100 @@ const PROMPTS = join(import.meta.dir, '..', '..', 'prompts');
 const same = (left: unknown, right: unknown) => digest(left) === digest(right);
 export const apiResearchCandidateSha256 = (candidate: ApiResearchCandidate): string =>
   digest(candidate);
-export const apiResearchInputsSha256 = (tool: ApiResearchInput['tool']): string =>
+export function apiResearchRequiredLinks(
+  plan: Pick<DesiredTeachingPlan, 'tools' | 'chainEdges'>,
+  tool: Pick<EditableTeachingTool, 'id'>,
+): ApiResearchRequiredLink[] {
+  const toolNameById = new Map(
+    plan.tools.map(({ id, candidate }) => [id, candidate.toolName] as const),
+  );
+  const obligations = plan.chainEdges
+    .filter(
+      ({ producerToolId, consumerToolId }) =>
+        producerToolId === tool.id || consumerToolId === tool.id,
+    )
+    .flatMap(({ producerToolId, producerResultPath, consumerToolId, consumerParameter }) => {
+      const producerToolName = toolNameById.get(producerToolId);
+      const consumerToolName = toolNameById.get(consumerToolId);
+      if (!producerToolName || !consumerToolName) return [];
+      return [
+        ...(producerToolId === tool.id
+          ? [
+              {
+                role: 'producer' as const,
+                toolName: producerToolName,
+                resultPath: producerResultPath,
+              },
+            ]
+          : []),
+        ...(consumerToolId === tool.id
+          ? [
+              {
+                role: 'consumer' as const,
+                toolName: consumerToolName,
+                parameter: consumerParameter,
+              },
+            ]
+          : []),
+      ];
+    });
+  return [
+    ...new Map(obligations.map((link) => [JSON.stringify(link), link] as const)).values(),
+  ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
+}
+
+/** Hash only evidence and public promises that can change request viability.
+ * Prose, confidence, journal ids, and implementation notes do not invalidate
+ * a working request. */
+export const apiResearchInputsSha256 = (
+  tool: ApiResearchInput['tool'],
+  requiredLinks: readonly ApiResearchRequiredLink[] = [],
+): string =>
   digest({
-    id: tool.id,
-    candidate: tool.candidate,
-    compileContext: tool.compileContext,
+    toolName: tool.candidate.toolName,
+    expectedOutput: tool.candidate.expectedOutput,
+    parameters: tool.candidate.likelyParams.map(({ name, type }) => ({ name, type })),
+    requestSeqs: tool.candidate.requestSeqs,
+    representativeSeqs: tool.candidate.representativeSeqs,
+    dependencySeqs: tool.candidate.dependencySeqs,
+    eventSeqs: tool.candidate.eventSeqs,
+    dependsOnTools: [...tool.candidate.dependsOnTools].sort(),
+    transportEvidence: {
+      loginRequestSeqs: tool.compileContext.loginRequestSeqs,
+      authRequestSeqs: tool.compileContext.authRequestSeqs,
+      credentialNames: [...tool.compileContext.credentialNames].sort(),
+    },
+    requiredLinks: [...requiredLinks].sort((left, right) =>
+      JSON.stringify(left).localeCompare(JSON.stringify(right)),
+    ),
   });
+
+/** Bind a follow-up to exactly the current public boundary, retained partial,
+ * and selected sibling research. Repeating this digest cannot reveal new
+ * facts, while any relevant boundary or handoff change produces a new state. */
+export function apiResearchFollowUpStateSha256(
+  plan: Pick<DesiredTeachingPlan, 'tools' | 'chainEdges'>,
+  handoffs: readonly ApiResearchHandoff[],
+  followUp: ApiResearchFollowUpDirective,
+): string {
+  const handoffByName = new Map(handoffs.map((handoff) => [handoff.toolName, handoff] as const));
+  const identity = (toolName: string) => {
+    const tool = plan.tools.find(({ candidate }) => candidate.toolName === toolName);
+    const handoff = handoffByName.get(toolName);
+    return {
+      toolName,
+      researchInputsSha256: tool
+        ? apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
+        : null,
+      handoffSha256: handoff ? digest(handoff) : null,
+    };
+  };
+  return digest({
+    target: identity(followUp.toolName),
+    followUp,
+    siblings: [...followUp.relevantToolNames].sort().map(identity),
+  });
+}
 const refKey = (ref: ContentAddressedRef) => `${ref.path}\u0000${ref.sha256}`;
 function checkSeqs(
   values: readonly number[],
@@ -155,26 +247,122 @@ function apiResearchBinding(input: ApiResearchInput) {
   return {
     runId: input.run.runId,
     recordingSha256: input.run.recordingSha256,
-    toolId: input.tool.id,
-    compileInputsSha256: apiResearchInputsSha256(input.tool),
+    toolName: input.tool.candidate.toolName,
+    compileInputsSha256: apiResearchInputsSha256(input.tool, input.requiredLinks),
   };
+}
+
+function apiResearchPromptTool(input: ApiResearchInput) {
+  const { id: _journalId, ...publicTool } = input.tool;
+  return publicTool;
 }
 
 const ApiResearchInputValidationSchema = ApiResearchInputSchema.superRefine((input, ctx) => {
   if (input.run.recordingSha256 !== input.recordingIndex.recordingSha256)
     issue(ctx, ['run'], 'API research recording binding is stale');
   validateEvidence(input.evidence, input.recordingIndex, ctx, ['evidence']);
+  if ((input.researchPhase === 'follow_up') !== Boolean(input.followUp))
+    issue(ctx, ['followUp'], 'follow-up research requires exactly one master direction');
+  if (Boolean(input.followUp) !== Boolean(input.previousProgress))
+    issue(ctx, ['previousProgress'], 'follow-up research requires its exact preceding handoff');
+  if (input.previousProgress && input.previousProgress.toolName !== input.tool.candidate.toolName)
+    issue(
+      ctx,
+      ['previousProgress', 'toolName'],
+      'previous progress belongs to another public tool',
+    );
+  if (input.followUp) {
+    const knownRequestSeqs = new Set(input.recordingIndex.requestSeqs);
+    input.followUp.relevantRequestSeqs.forEach((seq, index) => {
+      if (!knownRequestSeqs.has(seq))
+        issue(ctx, ['followUp', 'relevantRequestSeqs', index], 'unknown recording request');
+    });
+    input.followUp.siblingResearch.forEach((handoff, index) => {
+      if (handoff.toolName === input.tool.candidate.toolName)
+        issue(ctx, ['followUp', 'siblingResearch', index], 'target tool is not a sibling');
+    });
+  }
+  const knownRequestSeqs = new Set(input.recordingIndex.requestSeqs);
+  (input.requestCatalog ?? []).forEach((entry, index) => {
+    if (!knownRequestSeqs.has(entry.recordingRequestSeq))
+      issue(ctx, ['requestCatalog', index, 'recordingRequestSeq'], 'unknown recording request');
+  });
+  if (input.requestCatalogPage) {
+    if ((input.requestCatalog?.length ?? 0) > input.requestCatalogPage.totalEntries)
+      issue(ctx, ['requestCatalogPage', 'totalEntries'], 'catalog page exceeds total entries');
+    if (
+      input.requestCatalogPage.offset + (input.requestCatalog?.length ?? 0) >
+      input.requestCatalogPage.totalEntries
+    )
+      issue(ctx, ['requestCatalogPage'], 'catalog page range exceeds total entries');
+    if (
+      input.requestCatalogPage.hasMore !==
+      input.requestCatalogPage.offset + (input.requestCatalog?.length ?? 0) <
+        input.requestCatalogPage.totalEntries
+    )
+      issue(ctx, ['requestCatalogPage', 'hasMore'], 'catalog continuation flag is inconsistent');
+  }
+  (input.inspectedRequestSeqs ?? []).forEach((seq, index) => {
+    if (!knownRequestSeqs.has(seq))
+      issue(ctx, ['inspectedRequestSeqs', index], 'unknown inspected recording request');
+  });
+  const requiredLinkKeys = new Set<string>();
+  (input.requiredLinks ?? []).forEach((link, index) => {
+    const key = JSON.stringify(link);
+    if (requiredLinkKeys.has(key))
+      issue(ctx, ['requiredLinks', index], 'duplicate required producer-consumer link');
+    if (link.toolName !== input.tool.candidate.toolName) {
+      issue(ctx, ['requiredLinks', index], 'required link does not involve this public tool');
+    }
+    requiredLinkKeys.add(key);
+  });
 });
 
 function apiResearchOutputSchema(input: ApiResearchInput) {
   return ApiResearchOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, apiResearchBinding(input)))
       issue(ctx, ['binding'], 'stale API-research binding');
+    if (output.action === 'catalog') {
+      if (output.candidate) issue(ctx, ['candidate'], 'catalog paging does not test a candidate');
+      if (output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], 'catalog paging cannot claim a tested candidate');
+      if (output.missingProof)
+        issue(ctx, ['missingProof'], 'catalog paging does not settle a proof gap');
+      if (output.requestedRequestSeqs)
+        issue(ctx, ['requestedRequestSeqs'], 'catalog paging does not inspect request bodies');
+      if (!input.requestCatalogPage?.hasMore)
+        issue(ctx, ['action'], 'the compact request catalog has no next page');
+      return;
+    }
+    if (output.action === 'inspect') {
+      if (output.candidate) issue(ctx, ['candidate'], 'inspection does not test a candidate');
+      if (output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], 'inspection cannot claim a tested candidate');
+      if (output.missingProof)
+        issue(ctx, ['missingProof'], 'inspection does not settle a proof gap');
+      if (!output.requestedRequestSeqs) {
+        issue(ctx, ['requestedRequestSeqs'], 'inspection requires exact catalog request seqs');
+        return;
+      }
+      // The retained conversation may refer back to an earlier catalog page.
+      // Keep the wire bounded without echoing an ever-growing seen-seq list;
+      // the immutable recording index is the complete authorization boundary.
+      const recordingSeqs = new Set(input.recordingIndex.requestSeqs);
+      output.requestedRequestSeqs.forEach((seq, index) => {
+        if (!recordingSeqs.has(seq))
+          issue(ctx, ['requestedRequestSeqs', index], 'request is absent from the recording');
+      });
+      return;
+    }
+    if (output.requestedRequestSeqs)
+      issue(ctx, ['requestedRequestSeqs'], 'only inspection may request recording evidence');
     if (output.action === 'blocked') {
       if (output.candidate)
         issue(ctx, ['candidate'], 'blocked research cannot hand off a candidate');
       if (output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], 'blocked research cannot claim a proven observation');
+      if (output.missingProof)
+        issue(ctx, ['missingProof'], 'blocked research must state its factual blocker in reason');
       return;
     }
     const candidate = output.candidate;
@@ -228,14 +416,36 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
           'API research request is absent from the selected recording',
         );
       }
+      const recordingResponseRequestSeq =
+        request.navigation?.networkResponse?.recordingResponseRequestSeq;
+      if (
+        recordingResponseRequestSeq !== undefined &&
+        !knownRequestSeqs.has(recordingResponseRequestSeq)
+      ) {
+        issue(
+          ctx,
+          [
+            'candidate',
+            'workflow',
+            'requests',
+            index,
+            'navigation',
+            'networkResponse',
+            'recordingResponseRequestSeq',
+          ],
+          'API research response request is absent from the selected recording',
+        );
+      }
     }
     if (output.action === 'test') {
       if (output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], 'a new test cannot claim an older observation');
+      if (output.missingProof)
+        issue(ctx, ['missingProof'], 'a new test cannot claim a settled proof gap');
       return;
     }
     if (!output.basedOnObservationId) {
-      issue(ctx, ['basedOnObservationId'], 'proven research must cite the successful test');
+      issue(ctx, ['basedOnObservationId'], `${output.action} research must cite its exact test`);
       return;
     }
     const observation = input.observations.find(({ id }) => id === output.basedOnObservationId);
@@ -244,9 +454,17 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       return;
     }
     if (!observation.result.ok)
-      issue(ctx, ['basedOnObservationId'], 'failed transport observation cannot prove a request');
+      issue(
+        ctx,
+        ['basedOnObservationId'],
+        `failed transport observation cannot support ${output.action} research`,
+      );
     if (observation.candidateSha256 !== apiResearchCandidateSha256(candidate))
-      issue(ctx, ['candidate'], 'proven candidate differs from the tested request');
+      issue(ctx, ['candidate'], `${output.action} candidate differs from the tested request`);
+    if (output.action === 'partial' && !output.missingProof)
+      issue(ctx, ['missingProof'], 'partial research requires the exact missing proof');
+    if (output.action === 'proven' && output.missingProof)
+      issue(ctx, ['missingProof'], 'proven research cannot have missing proof');
   });
 }
 function validateFocusedPlannerEdges(
@@ -536,7 +754,10 @@ function validateSnapshot(
     if (!tool) return issue(ctx, base, 'stray execution proof');
     const binding = proof.executionBinding;
     checkSeqs(
-      binding.requestProvenance.map(({ recordingRequestSeq }) => recordingRequestSeq),
+      binding.requestProvenance.flatMap(({ recordingRequestSeq, recordingResponseRequestSeq }) => [
+        recordingRequestSeq,
+        ...(recordingResponseRequestSeq === undefined ? [] : [recordingResponseRequestSeq]),
+      ]),
       requestSeqs,
       ctx,
       [...base, 'executionBinding', 'requestProvenance'],
@@ -888,60 +1109,16 @@ function evidenceCoverage(
 
 const MASTER_DECISION_INPUT_CHARACTER_BUDGET = 900_000;
 
-/** The parameter advisor has already read its focused evidence. Do not repeat
- * every large quote when the master weighs several suggestions together. */
 function masterDecisionPromptInput(input: MasterDecisionInput) {
-  const submissions = input.parameterAdvice.map(({ evidence, ...submission }) => {
-    const coverage = evidenceCoverage(evidence, submission.advice.evidenceRefs);
-    return {
-      submission: {
-        ...submission,
-        evidenceSummary: {
-          ...coverage,
-          citedEntries: [] as typeof coverage.citedEntries,
-          omittedCitedEntryCount: coverage.citedEntries.length,
-        },
-      },
-      citedEntries: coverage.citedEntries,
-    };
-  });
-  const promptInput = {
-    ...input,
-    parameterAdvice: submissions.map(({ submission }) => submission),
-  };
-  if (JSON.stringify(promptInput).length > MASTER_DECISION_INPUT_CHARACTER_BUDGET)
+  if (JSON.stringify(input).length > MASTER_DECISION_INPUT_CHARACTER_BUDGET)
     throw new Error('master decision core input exceeds the provider-safe character budget');
-
-  const maximumCitations = Math.max(
-    0,
-    ...submissions.map(({ citedEntries }) => citedEntries.length),
-  );
-  for (let citationIndex = 0; citationIndex < maximumCitations; citationIndex += 1) {
-    for (const { submission, citedEntries } of submissions) {
-      const entry = citedEntries[citationIndex];
-      if (!entry) continue;
-      submission.evidenceSummary.citedEntries.push(entry);
-      submission.evidenceSummary.omittedCitedEntryCount -= 1;
-      if (JSON.stringify(promptInput).length <= MASTER_DECISION_INPUT_CHARACTER_BUDGET) continue;
-      submission.evidenceSummary.citedEntries.pop();
-      submission.evidenceSummary.omittedCitedEntryCount += 1;
-      if (citationIndex === 0)
-        throw new Error(
-          'master decision input cannot preserve one parameter-advice citation per tool',
-        );
-    }
-  }
-  return promptInput;
+  return input;
 }
 
 /** The Codex master is one retained conversation. The first turn establishes
  * discovery; later turns carry only what changed. Host validation continues to
  * use the complete MasterDecisionInput and is intentionally not weakened. */
 function masterDecisionConversationInput(input: MasterDecisionInput) {
-  const parameterAdvice = input.parameterAdvice.map(({ evidence, ...submission }) => ({
-    ...submission,
-    evidenceSummary: evidenceCoverage(evidence, submission.advice.evidenceRefs),
-  }));
   if (input.phase === 'discovery') {
     return {
       phase: input.phase,
@@ -957,21 +1134,57 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
   }
   return {
     phase: input.phase,
+    ...(input.decisionPurpose ? { decisionPurpose: input.decisionPurpose } : {}),
     ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
     current: input.current
       ? {
           run: input.current.run,
-          planRef: input.current.plan.ref,
+          // The retained master must see the plan the host actually accepted.
+          // A ref alone can leave its remembered plan stale after host-side
+          // canonicalization or mechanical invalidation.
+          plan: input.current.plan,
         }
       : undefined,
     ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
     ...(input.apiResearch?.length ? { apiResearch: input.apiResearch } : {}),
-    ...(parameterAdvice.length ? { parameterAdvice } : {}),
+    ...(input.researchNoProgress?.length ? { researchNoProgress: input.researchNoProgress } : {}),
     ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),
   };
 }
 const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => {
   validateDiscovery(input.discovery, ctx);
+  if (input.decisionPurpose === 'research_review') {
+    if (input.phase !== 'revision')
+      issue(ctx, ['decisionPurpose'], 'research review requires the current selected plan');
+    if (input.plannerProposals.length > 0)
+      issue(ctx, ['plannerProposals'], 'research review happens before focused planning');
+    if (input.apiResearch.length === 0 && (input.current?.plan.payload.tools.length ?? 0) > 0)
+      issue(ctx, ['apiResearch'], 'research review requires the selected-operation handoffs');
+  }
+  if (input.researchNoProgress?.length && input.decisionPurpose !== 'research_review') {
+    issue(ctx, ['researchNoProgress'], 'research no-progress facts belong to research review');
+  }
+  const noProgressNames = new Set<string>();
+  input.researchNoProgress?.forEach((notice, index) => {
+    if (noProgressNames.has(notice.toolName)) {
+      issue(ctx, ['researchNoProgress', index, 'toolName'], 'duplicate no-progress target');
+    }
+    const handoff = input.apiResearch.find(({ toolName }) => toolName === notice.toolName);
+    if (!handoff || handoff.status !== 'partial') {
+      issue(
+        ctx,
+        ['researchNoProgress', index, 'toolName'],
+        'no-progress fact requires the current partial handoff',
+      );
+    } else if (digest(handoff) !== notice.partialHandoffSha256) {
+      issue(
+        ctx,
+        ['researchNoProgress', index, 'partialHandoffSha256'],
+        'no-progress fact belongs to an older partial handoff',
+      );
+    }
+    noProgressNames.add(notice.toolName);
+  });
   if (input.toolSelectionAdvice) {
     if (!same(input.toolSelectionAdvice.binding, input.discovery.run))
       issue(ctx, ['toolSelectionAdvice', 'binding'], 'stale tool advice');
@@ -1119,28 +1332,6 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
     }
     proposalIds.add(tool.id);
   });
-  const seenAdvice = new Set<string>();
-  input.parameterAdvice.forEach((submission, index) => {
-    if (!input.current?.snapshot)
-      return issue(ctx, ['parameterAdvice', index], 'parameter advice needs current proof');
-    if (seenAdvice.has(submission.toolId))
-      issue(ctx, ['parameterAdvice', index, 'toolId'], 'duplicate parameter advice');
-    const parameterInput = {
-      run: input.current.run,
-      recordingIndex: input.discovery.recordingIndex,
-      currentPlan: input.current.plan,
-      snapshot: input.current.snapshot,
-      toolId: submission.toolId,
-      evidence: submission.evidence,
-    };
-    const checked = ParameterInputSchema.safeParse(parameterInput);
-    if (!checked.success)
-      for (const problem of checked.error.issues)
-        issue(ctx, ['parameterAdvice', index, ...problem.path], problem.message);
-    if (!same(submission.advice.binding, parameterBinding(parameterInput)))
-      issue(ctx, ['parameterAdvice', index, 'advice', 'binding'], 'stale parameter advice');
-    seenAdvice.add(submission.toolId);
-  });
   if (input.verificationFindings)
     validateEvidence(input.verificationFindings, input.discovery.recordingIndex, ctx, [
       'verificationFindings',
@@ -1201,12 +1392,134 @@ function masterOutputSchema(input: MasterDecisionInput) {
       issue(ctx, ['recallToolNames'], 'duplicate public tool name');
     if (input.phase === 'discovery' && output.recallToolNames.length > 0)
       issue(ctx, ['recallToolNames'], 'initial discovery cannot recall an existing tool');
+    const researchFollowUps = output.researchFollowUps ?? [];
+    if (researchFollowUps.length > 0 && input.decisionPurpose !== 'research_review')
+      issue(ctx, ['researchFollowUps'], 'research follow-ups belong to pre-planning review');
+    if (input.decisionPurpose === 'research_review' && output.recallToolNames.length > 0)
+      issue(ctx, ['recallToolNames'], 'research review directs researchers, not compilers');
     const currentToolNames = new Set(
       input.current?.plan.payload.tools.map(({ candidate }) => candidate.toolName) ?? [],
     );
     const desiredToolNames = new Set(
       output.desiredPlan.tools.map(({ candidate }) => candidate.toolName),
     );
+    output.desiredPlan.tools.forEach((tool, index) => {
+      if (tool.id !== tool.candidate.toolName) {
+        issue(
+          ctx,
+          ['desiredPlan', 'tools', index, 'id'],
+          'tool id must equal the public candidate.toolName; there is no agent-facing internal ID',
+        );
+      }
+    });
+    const suppliedResearch = input.apiResearch ?? [];
+    const canonicalSuppliedResearch = suppliedResearch.map((handoff) =>
+      ApiResearchHandoffSchema.parse(handoff),
+    );
+    const suppliedResearchNames = new Set(suppliedResearch.map(({ toolName }) => toolName));
+    const noProgressNames = new Set(
+      (input.researchNoProgress ?? []).map(({ toolName }) => toolName),
+    );
+    const knownRequestSeqs = new Set(input.discovery.recordingIndex.requestSeqs);
+    const directedNames = new Set<string>();
+    researchFollowUps.forEach((followUp, index) => {
+      if (directedNames.has(followUp.toolName))
+        issue(ctx, ['researchFollowUps', index, 'toolName'], 'duplicate research target');
+      if (!desiredToolNames.has(followUp.toolName))
+        issue(
+          ctx,
+          ['researchFollowUps', index, 'toolName'],
+          'research target is absent from desired plan',
+        );
+      if (!suppliedResearchNames.has(followUp.toolName))
+        issue(
+          ctx,
+          ['researchFollowUps', index, 'toolName'],
+          'research target has no first-pass handoff',
+        );
+      followUp.relevantToolNames.forEach((toolName, toolIndex) => {
+        if (toolName === followUp.toolName)
+          issue(
+            ctx,
+            ['researchFollowUps', index, 'relevantToolNames', toolIndex],
+            'target is not a sibling',
+          );
+        if (!suppliedResearchNames.has(toolName))
+          issue(
+            ctx,
+            ['researchFollowUps', index, 'relevantToolNames', toolIndex],
+            'unknown sibling research',
+          );
+        if (!desiredToolNames.has(toolName))
+          issue(
+            ctx,
+            ['researchFollowUps', index, 'relevantToolNames', toolIndex],
+            'sibling research target is absent from desired plan',
+          );
+      });
+      followUp.relevantRequestSeqs.forEach((seq, seqIndex) => {
+        if (!knownRequestSeqs.has(seq))
+          issue(
+            ctx,
+            ['researchFollowUps', index, 'relevantRequestSeqs', seqIndex],
+            'unknown recording request',
+          );
+      });
+      directedNames.add(followUp.toolName);
+    });
+    for (const notice of input.researchNoProgress ?? []) {
+      const followUp = researchFollowUps.find(({ toolName }) => toolName === notice.toolName);
+      if (
+        followUp &&
+        apiResearchFollowUpStateSha256(output.desiredPlan, canonicalSuppliedResearch, followUp) ===
+          notice.followUpStateSha256
+      ) {
+        issue(
+          ctx,
+          ['researchFollowUps'],
+          `research follow-up for ${notice.toolName} exactly repeats a completed no-progress cycle; change the direction, relevant evidence, or boundary`,
+        );
+      }
+    }
+    if (input.decisionPurpose === 'research_review') {
+      for (const handoff of suppliedResearch) {
+        const desiredTool = output.desiredPlan.tools.find(
+          ({ candidate }) => candidate.toolName === handoff.toolName,
+        );
+        const unchanged =
+          desiredTool &&
+          handoff.researchInputsSha256 ===
+            apiResearchInputsSha256(
+              desiredTool,
+              apiResearchRequiredLinks(output.desiredPlan, desiredTool),
+            );
+        const reviewedNoProgress = noProgressNames.has(handoff.toolName);
+        if (
+          handoff.status === 'partial' &&
+          unchanged &&
+          !(reviewedNoProgress && desiredTool?.strategy?.kind === 'playbook_fallback') &&
+          !directedNames.has(handoff.toolName)
+        ) {
+          issue(
+            ctx,
+            ['researchFollowUps'],
+            `partial research for ${handoff.toolName} must return to its retained researcher or leave the desired plan`,
+          );
+        }
+        if (
+          handoff.status === 'blocked' &&
+          unchanged &&
+          desiredTool?.strategy?.kind !== 'playbook_fallback' &&
+          !directedNames.has(handoff.toolName)
+        ) {
+          issue(
+            ctx,
+            ['researchFollowUps'],
+            `blocked research for ${handoff.toolName} must return to its retained researcher, change its evidence-backed boundary, select an explicit fallback strategy, or leave the desired plan`,
+          );
+        }
+      }
+    }
     output.recallToolNames.forEach((toolName, index) => {
       if (!currentToolNames.has(toolName))
         issue(ctx, ['recallToolNames', index], 'recall target is absent from current plan');
@@ -1834,11 +2147,31 @@ export async function requestApiResearchStep(
       agent.provider === 'codex-cli' && latestObservation
         ? {
             instruction:
-              'Continue the same API-research conversation. Evaluate the newest factual result, then either test one revised complete candidate, mark that exact tested candidate proven, or report the exact plan gap.',
+              checked.researchPhase === 'follow_up'
+                ? 'Continue the same retained API-research conversation. Follow the master direction using only the supplied relevant request evidence and sibling handoffs. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
+                : 'Continue the same API-research conversation. Evaluate the newest factual result. The first pass is only the smallest working MVP: return partial only when the selected core result or a required downstream obligation remains incomplete; defer optional breadth and further minimization.',
             latestObservation,
+            currentTool: apiResearchPromptTool(checked),
+            requiredLinks: checked.requiredLinks ?? [],
+            requestCatalog: checked.requestCatalog ?? [],
+            requestCatalogTruncated: checked.requestCatalogTruncated ?? false,
+            ...(checked.requestCatalogPage
+              ? { requestCatalogPage: checked.requestCatalogPage }
+              : {}),
+            ...(checked.previousProgress ? { previousProgress: checked.previousProgress } : {}),
+            ...(checked.researchPhase ? { researchPhase: checked.researchPhase } : {}),
+            ...(checked.inspectedRequestSeqs?.length
+              ? {
+                  inspectedRequestSeqs: checked.inspectedRequestSeqs,
+                  relevantEvidence: checked.evidence,
+                }
+              : {}),
+            ...(checked.followUp
+              ? { followUp: checked.followUp, relevantEvidence: checked.evidence }
+              : {}),
             ...(checked.blockReview ? { blockReview: checked.blockReview } : {}),
           }
-        : checked,
+        : { ...checked, tool: apiResearchPromptTool(checked) },
     validation: {
       binding: apiResearchBinding(checked),
       testedCandidateSha256: latestObservation?.candidateSha256,

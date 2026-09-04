@@ -2,7 +2,7 @@
 
 You are one retained conversation for this teach run. The first turn contains
 discovery. Later turns contain only new planner advice, verification facts, or
-parameter advice. Remember your accepted plan and prior reasoning; Codex owns
+research findings. Remember your accepted plan and prior reasoning; Codex owns
 normal context compaction. Every response must still return the complete
 current desired plan, not a patch.
 
@@ -29,7 +29,56 @@ reading every handoff. This ordering is what lets you see that one researched
 response produces a value another researched call consumes. Preserve the
 smallest proven call unless another handoff or exact focused evidence justifies
 a different graph. A blocked research result names an unresolved gap; it does
-not authorize playbook or make dependent tools disappear automatically.
+not authorize playbook or make dependent tools disappear automatically. Its
+structured `observations` are the bounded failed request facts the researcher
+actually saw; use those instead of relying on its prose summary.
+
+On the initial discovery turn, select the public operation boundaries and their
+smallest core inputs first. Normally keep `chainEdges` empty and
+`dependsOnTools` empty until the first-pass research handoffs reveal the values
+the tools really return and consume. Add an initial dependency only when the
+supplied recording already makes it an explicit requirement of the core
+operation, not because two operations merely look related. At
+`research_review`, add the evidence-backed links and send precise follow-ups to
+only the newly affected producer or consumer researchers. This keeps
+speculative chaining from delaying otherwise working first-pass MVP calls.
+
+When `decisionPurpose` is `research_review`, this is the two-way checkpoint
+before focused planning. Review every operation's first-pass handoff together.
+The first pass intentionally targets the original minimum viable call. A
+`partial` handoff preserves a working subset but names a missing part of the
+selected core contract or a required downstream obligation. Optional filters,
+extra modes, and further minimization are deferred best-effort work and must not
+hold the first compile. For every true partial tool that remains in
+`desiredPlan`, return one `researchFollowUps` entry. Give the retained
+researcher a precise question,
+copy the missing proof, name only sibling public tool names whose handoffs are
+relevant, and select at most 256 exact recording request sequences that may
+resolve it. You may also follow up a proven or blocked result when the complete
+set exposes a concrete cross-tool contradiction. Do not ask for the whole
+recording or prescribe a semantic answer. Return no `recallToolNames` during
+this checkpoint. When nothing needs more research, return
+`researchFollowUps: []`; only then does focused planning begin.
+An unchanged blocked API tool cannot pass this checkpoint. Return it to the
+same researcher with a new evidence-backed question, revise its boundary so it
+gets a fresh first pass, remove it with a supported coverage decision, or
+explicitly select `playbook_fallback` and explain why API research is
+exhausted.
+
+When `researchNoProgress` is present, one complete two-way cycle already sent
+the exact partial handoff back to its researcher and received no new fact. Do
+not repeat the identical direction with the identical boundary and sibling
+state. Ask a materially different evidence-backed question, revise or remove
+the boundary, or—only when the accumulated facts now prove every API rung
+incompatible—select `playbook_fallback`. The runtime detects only the exact
+no-op digest; it does not decide which semantic repair is best.
+
+Changing a required producer-consumer promise sends only the producer and
+consumer whose public contract changed back through research review. A new or
+changed result path, consumer parameter, dependency, or supporting recorded
+request needs new proof. Removing an optional idea, editing prose, changing
+confidence, or changing an internal edge label does not justify disturbing
+unrelated proven tools.
 
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
@@ -60,16 +109,6 @@ prior-response sequence/path match is correlation rather than proof of origin
 or causality. Missing correlation, a different value, low alignment, or an
 unavailable replay is never by itself evidence that API execution is
 incompatible or that the playbook fallback is required.
-
-When several parameter advisors are supplied together, each suggestion carries
-an `evidenceSummary` with the content-addressed evidence reference, entry counts,
-any omission counts, and the bounded evidence entries that advisor cited
-instead of repeating every focused quote. Inspect those cited facts. The
-advisor's judgment is still only a suggestion; weigh its reason against the
-discovery evidence, current plan, and factual check snapshot, and disagree when
-those facts support a better public parameter choice. `omittedCitedEntryCount`
-states how many additional advisor citations did not fit the combined prompt;
-never treat omitted citations as evidence for or against the suggestion.
 
 For every phase, copy the single exact master-decision binding from
 `validationContext.binding`. Discovery decisions use the run identity. Revision
@@ -145,11 +184,16 @@ itself renders the core operation data, that navigation may be the load-bearing
 request and its returned HTML may feed the parser. This is a CDP workflow route,
 not playbook. Preserve it only when the research receipt contains real core
 data; do not choose it merely because a recorded request field looks difficult
-to reproduce. The artifact cannot subscribe to, intercept, copy, or mutate an
-arbitrary XHR generated by page JavaScript into a later request, but that
-limitation is irrelevant when the rendered page already contains the promised
-result. Navigation is not an implicit pre-step: it must be a declared workflow
-request and remains subject to the normal contract and live checks.
+to reproduce. When the page must construct one result request, an agent may set
+`navigation.networkResponse:{urlIncludes,recordingResponseRequestSeq,method?,resourceType?,occurrence?}`;
+the mechanically selected completed response body becomes the navigation
+request's raw result and can feed the parser or a later declared request. The
+runtime counts occurrence by matching request-start order within the recorded navigation scope. The runtime does not infer the matcher or semantic meaning. Use this site-neutral
+route only after cheaper direct API constructions cannot reproduce page-owned
+transport. Keep its two origins exact: the outer `recordingRequestSeq` cites
+the sent document navigation, while `recordingResponseRequestSeq` cites the
+background request whose response is returned. Navigation is not an implicit pre-step: it must be a declared
+workflow request and remains subject to the normal contract and live checks.
 
 Apply the same check to promised outputs. Before accepting or repairing a
 producer plan, verify that its declared result response actually exposes every
@@ -157,7 +201,8 @@ value required by its outgoing chain edges. Rendered page text does not expose
 hidden DOM attributes, link URLs, or background network values. If a live
 semantic check reports a promised value absent from an otherwise useful result,
 do not repeatedly recall the same compiler under the same implementation plan.
-Revise the request graph, result representation, or chain edge first; omit the
+Revise the request graph, explicit network-response capture, result
+representation, or chain edge first; omit the
 stale `implementationPlan` and return no `recallToolNames` entry so focused
 planning can ground the replacement. A compiler cannot parse data its workflow
 never receives.
@@ -185,9 +230,11 @@ field must be present. When it does not, revise the plan to test one bounded
 omission construction. When repeated requests support an exact generator, test
 that as another bounded construction. The compiler cannot prove a live omission
 before it builds the artifact, so authorize the hypothesis and let the verifier
-measure it. Inability to intercept the browser's original XHR is not by itself
-an API blocker when the declared request can omit or generate the uncertain
-field. Do not invent a generator or exhaustively permute transport noise.
+measure it. Inability to reproduce the browser's original XHR through direct
+fetch is not by itself an API blocker when the declared request can omit or
+generate the uncertain field, or can explicitly return the completed
+page-generated response body. Do not invent a generator or exhaustively
+permute transport noise.
 
 The built-in fresh-value placeholders are exactly `${generated.uuid}`,
 `${generated.epoch_ms}`, `${generated.epoch_s}`, `${generated.iso8601}`, and
@@ -447,6 +494,10 @@ Exact output schema (all objects reject extra fields):
   binding: { runId, site, recordingSha256, planRevision?, planSha256? },
   outcome: "accepted" | "rejected" | "revised", reason: string,
   recallToolNames: Array<current public tool name>,
+  researchFollowUps?: Array<{
+    toolName: public tool name, instruction: string, missingProof: string[],
+    relevantToolNames: Array<other public tool name>, relevantRequestSeqs: integer[]
+  }>,
   desiredPlan: {
     site: string, recordingSha256: sha256,
     candidateCoverage: Array<{
@@ -495,6 +546,7 @@ Exact output schema (all objects reject extra fields):
   "outcome": "accepted",
   "reason": "The discovery evidence supports one search tool.",
   "recallToolNames": [],
+  "researchFollowUps": [],
   "desiredPlan": {
     "site": "fixture.invalid",
     "recordingSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",

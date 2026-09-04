@@ -25,6 +25,11 @@ redact + summarize + discover the complete operation set
 tool-boundary advice ──► master-owned editable plan + dependency waves
    │
    ▼
+focused API research (smallest MVP for every tool)
+   │
+   ├── partial ──► master asks the retained researcher for missing proof
+   │                    using selected sibling/request evidence
+   ▼
 focused plan ──► focused compile ──► factual checks
    │                                      │
    │                        failed ────────┘
@@ -50,6 +55,7 @@ src/imprint/
 ├── master-teach-plan.ts        Editable full tool plan, dependencies, and master-authored build waves
 ├── master-teach-agents.ts      Focused advisor, planner, master, and completion-review calls
 ├── master-teach-agent-contracts.ts  Exact inputs and outputs for those focused roles
+├── api-research-agent.ts       Retained per-tool MVP request tests and partial/proven/blocked handoffs
 ├── master-teach-store.ts       Fresh run record, plan history, artifacts, and factual receipts
 ├── master-teach-checks.ts      Contract, replay, live, and producer-consumer facts
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
@@ -143,6 +149,20 @@ src/imprint/
 
 The **`cdp-replay`** rung is the record-faithful trusted-browser transport for the API path (`cdp-browser-fetch.ts`): a real Chrome launched as `imprint record` does (`launchChromium` + raw CDP, no automation flags) stays **open** for the whole workflow and runs each **same-origin** request *in-page* via `fetch(..., {credentials:'include'})`, while cross-origin requests (e.g. an `api.*` subdomain, which CORS would block in-page and which usually aren't behind the same wall) fall through to a plain fetch. It can sustain sequences of protected requests that cheaper transports cannot, but the runtime does not inspect workflow semantics to move it ahead of those transports. A new `auto` run starts from the fixed ladder order above; later runs may start from a backend that factual probe or execution history already showed to work. It runs **headless by default** — the `HeadlessChrome` UA token is stripped via a CDP UA override before navigating — with a `headed`+Xvfb fallback for GPU-less Linux hosts (see [troubleshooting](troubleshooting.md#running-on-a-headless-server-anti-bot-sites)). The same rung is also available during compile-time verification. The `playbook` rung is the DOM-walk last resort and needs a compiled `playbook.yaml`. The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders later cron and MCP calls from observed results; v2 caches include canonical workflow and capability hashes so stale caches are ignored by runtime but reported by `imprint mcp status`. For multi-tool sites, `cron` requires `--tool <toolName>` unless the provided `--config` path is inside the target tool directory; `probe-backends` can target one tool with `--tool` / `--out` or refresh every generated tool with `--all`. `probe-backends` tests each applicable backend individually, ranks working rungs by observed runtime, and keeps unusually slow successes behind faster working backends. CDP replay gets one extra warm-pool measurement after a successful cold run; `backends.json` records `coldDurationMs`, `warmDurationMs`, and `rankingDurationMs` so warm speed is visible without hiding cold-start cost. MCP and cron persist the backend that actually succeeds so the next process can start from that observed result. The stealth-fetch bootstrap state is shared across probe runs via a per-site cache to avoid re-bootstrapping per backend.
 
+A `mode: "navigate"` request normally returns the rendered document. When the
+page itself must create the load-bearing request, the workflow may instead set
+a `navigation.networkResponse` matcher and return the selected response body.
+The matcher is an explicit URL/method/resource-type/occurrence choice made from
+recorded evidence; occurrence follows request-start order within one navigation,
+and CDP observes the live page traffic and retrieves the chosen
+completed body. The workflow keeps two exact recording origins: the outer
+`recordingRequestSeq` identifies the document navigation being sent, while
+`networkResponse.recordingResponseRequestSeq` identifies the background
+request whose recorded response supplies body, status, and headers during
+offline checks. It does not decide which background call is semantically
+meaningful, and the capability does not automatically change a tool's rung or
+share browser state with another tool.
+
 **CDP pool.** At runtime, the `cdp-replay` backend supports a per-site `cdpPool` option that reuses a live Chrome instance across multiple tool calls instead of launching a fresh browser each time. This cuts per-call overhead from ~33–35s (cold launch + navigate + sensor validation) to ~2–5s (reuse existing page context). The pool is keyed by site and managed by the MCP server (`mcp-server.ts`); idle sessions are closed after 5 minutes (`CDP_IDLE_TIMEOUT_MS`). `probe-backends` also uses a temporary pool only to measure CDP warm reuse after a successful cold probe, then closes it before exiting. Compile uses its own process-global verification pool.
 
 **Authenticate-tool execution.** Authentication never uses the DOM playbook rung. The live verifier runs the compiled workflow in one headed `cdp-replay` browser and keeps that browser open across checkpoints. The browser transport supplies ordinary fetch, top-level navigation, cookies, and page-owned state; it does not interpret the site's authentication protocol.
@@ -185,6 +205,22 @@ type WorkflowRequest = {
   url: string;
   headers: Record<string, string>;
   body?: string;
+  mode?: 'fetch' | 'navigate';
+  navigation?: {
+    waitUntil?: 'domcontentloaded' | 'load';
+    timeoutMs?: number;
+    urlIncludes?: string;
+    selector?: string;
+    actions?: Array<{ action: 'click'; selector: string }>;
+    resultSelector?: string;
+    networkResponse?: {
+      urlIncludes: string;
+      recordingResponseRequestSeq: number;
+      method?: string;
+      resourceType?: string;
+      occurrence?: number;
+    };
+  };
   extract?: Record<string, string>; // legacy ${response[N].name}
   captures?: RequestCapture[];
   effect?: RequestEffect;
@@ -311,24 +347,38 @@ The public teaching path is one fresh foreground controller:
 4. The master writes the editable final tool plan. It may merge, split, rename,
    add, or remove an unsupported duplicate, but it must account for every
    credible discovered operation and explain its decisions.
-5. The master writes explicit build waves. Every planned tool appears exactly
+5. A retained focused researcher for each selected tool first proves the
+   smallest useful API call. Every tool gets this narrow first pass before
+   optional breadth or producer-consumer details can consume the run.
+6. Research has three factual handoffs: `proven`, `partial`, and `blocked`.
+   `partial` preserves a tested working subset but names proof still required by
+   the selected MVP or one of its dependency edges. Optional parameter breadth
+   waits for the later best-effort pass. After all first passes finish, the
+   master may send the required gap back to the same researcher conversation
+   with a bounded set of relevant recorded requests and sibling research
+   results. The loop either closes the gap, revises the MVP, retains an honest
+   partial result for another revision, or establishes a blocker; the runtime
+   does not choose the answer.
+7. The master writes explicit build waves. Every planned tool appears exactly
    once, and every producer is in an earlier wave than its consumers.
-6. A focused planner receives only one tool, its relevant recording evidence,
-   its dependencies, and the exact artifact contract.
-7. A fresh focused compiler builds that tool. Independent tools in the same
+8. A focused planner receives only one tool, its relevant recording evidence,
+   its dependencies, the completed research handoffs, and the exact artifact
+   contract.
+9. A fresh focused compiler builds that tool. Independent tools in the same
    master-authored wave may compile in parallel.
-8. The controller records contract, replay, live, and producer-consumer results
+10. The controller records contract, replay, live, and producer-consumer results
    as factual receipts. A playbook replay check is not applicable, not a
-   failure.
-9. After a tool passes, a focused parameter advisor reviews the public parameter
+    failure. A backend message that a request completed describes transport only;
+   it is not semantic approval.
+11. After a tool passes, a focused parameter advisor reviews the public parameter
    choices. Its advice is not authoritative.
-10. A failed check or useful advisor suggestion returns to the master. If the
+12. A failed check or useful advisor suggestion returns to the master. If the
     accepted tool design is unchanged, the repair goes directly to that tool's
     retained compiler conversation. The focused planner runs again only when
     the master changes the tool contract or request plan. A changed tool
     invalidates only itself and the consumers that depend on it. Unrelated
     verified tools stay current.
-11. A fresh independent reviewer sees the current plan, result evidence, and
+13. A fresh independent reviewer sees the current plan, result evidence, and
     immutable check history. Completion is rejected while any planned tool is
     missing a current verified build.
 

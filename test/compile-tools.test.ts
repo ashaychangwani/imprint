@@ -5,9 +5,11 @@ import { join as pathJoin } from 'node:path';
 import {
   bodyEncodingContractFailures,
   buildCompileTools,
+  crossReferenceCaptures,
   crossReferenceReferencedStateCaptures,
   externalVerification,
   irreversibleProvenanceFailures,
+  networkResponseRecordingFailures,
   parseJUnitResults,
   requestEncodingTestContractFailures,
   requestsNeedingBodyEncodingDecision,
@@ -3139,7 +3141,337 @@ describe('inspect_body_structure compile tool', () => {
   });
 });
 
+describe('navigation network response recording provenance', () => {
+  function fixture(): { session: Session; workflow: ReturnType<typeof WorkflowSchema.parse> } {
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/results',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 10,
+          timestamp: 1,
+          method: 'GET',
+          url: 'https://example.test/results',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: {},
+            body: '<html>outer document has no capture evidence</html>',
+          },
+        },
+        {
+          seq: 15,
+          timestamp: 2,
+          method: 'POST',
+          url: 'https://example.test/api/results?page=1',
+          headers: {},
+          resourceType: 'XHR',
+          response: { status: 200, headers: {}, body: 'first' },
+        },
+        {
+          seq: 20,
+          timestamp: 3,
+          method: 'POST',
+          url: 'https://example.test/api/results?page=2',
+          headers: {},
+          resourceType: 'XHR',
+          response: {
+            status: 200,
+            headers: { 'x-result-token': 'present', 'set-cookie': 'session=recorded; Path=/' },
+            body: 'token=present linked=present',
+          },
+        },
+        {
+          seq: 30,
+          timestamp: 4,
+          method: 'GET',
+          url: 'https://example.test/unrelated',
+          headers: {},
+          resourceType: 'Fetch',
+          response: { status: 200, headers: {}, body: 'unrelated' },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    const workflow = WorkflowSchema.parse({
+      toolName: 'selected_response_fixture',
+      intent: { description: 'Select one page-generated response.' },
+      site: 'fixture',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          mode: 'navigate',
+          url: 'https://example.test/results',
+          headers: {},
+          recordingRequestSeq: 10,
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 20,
+              method: 'POST',
+              resourceType: 'XHR',
+              occurrence: 2,
+            },
+          },
+          captures: [
+            { name: 'header', source: 'response_header', header: 'x-result-token' },
+            { name: 'cookie', source: 'cookie', cookie: 'session' },
+            { name: 'token', source: 'text_regex', pattern: 'token=(\\w+)' },
+            {
+              name: 'linked',
+              source: 'text_regex',
+              pattern: 'linked=(\\w+)',
+              required: false,
+            },
+          ],
+        },
+        {
+          method: 'GET',
+          url: 'https://example.test/use',
+          headers: { 'x-linked': '${state.linked}' },
+        },
+      ],
+    });
+    return { session, workflow };
+  }
+
+  it('validates URL, method, resource type, scoped occurrence, and both recorded sequences', () => {
+    const { session, workflow } = fixture();
+    expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
+
+    const matcher = workflow.requests[0]?.navigation?.networkResponse;
+    if (!matcher || !workflow.requests[0]) throw new Error('bad fixture');
+    matcher.recordingResponseRequestSeq = 15;
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'selects recorded response seq 20',
+    );
+    matcher.recordingResponseRequestSeq = 20;
+    matcher.urlIncludes = '/missing';
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'no matching recorded response',
+    );
+    matcher.urlIncludes = '/api/results';
+    matcher.method = 'GET';
+    expect(networkResponseRecordingFailures(workflow, session)).not.toEqual([]);
+    matcher.method = 'POST';
+    matcher.resourceType = 'Fetch';
+    expect(networkResponseRecordingFailures(workflow, session)).not.toEqual([]);
+    matcher.resourceType = 'XHR';
+    matcher.occurrence = 3;
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'occurrence 3',
+    );
+    matcher.occurrence = 2;
+    workflow.requests[0].recordingRequestSeq = 999;
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'outer recordingRequestSeq 999 does not exist',
+    );
+  });
+
+  it('does not accept response evidence from a later navigation or combined recording', () => {
+    const { session, workflow } = fixture();
+    const matcher = workflow.requests[0]?.navigation?.networkResponse;
+    const later = session.requests.find((request) => request.seq === 30);
+    if (!matcher || !later) throw new Error('bad fixture');
+    later.method = 'POST';
+    later.url = 'https://example.test/api/later';
+    later.resourceType = 'XHR';
+    later.response = { status: 200, headers: {}, body: 'later' };
+    matcher.urlIncludes = '/api/later';
+    matcher.recordingResponseRequestSeq = 30;
+    matcher.occurrence = 1;
+
+    session.events = [
+      { seq: 11, timestamp: 1.1, type: 'navigation', detail: 'https://example.test/results' },
+      { seq: 25, timestamp: 3.5, type: 'navigation', detail: 'https://example.test/later' },
+    ];
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'falls outside the recorded navigation scope',
+    );
+
+    session.events = [];
+    session.narration = [
+      {
+        seq: 25,
+        timestamp: 3.5,
+        text: '[Recording from 2026-08-30 00:00] https://example.test/later',
+      },
+    ];
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'falls outside the recorded navigation scope',
+    );
+  });
+
+  it('cross-references captures and referenced regexes against the selected response', () => {
+    const { session, workflow } = fixture();
+    expect(crossReferenceCaptures(workflow, session).failures).toEqual([]);
+    expect(crossReferenceReferencedStateCaptures(workflow, session).failures).toEqual([]);
+
+    const selected = session.requests.find((request) => request.seq === 20);
+    const outer = session.requests.find((request) => request.seq === 10);
+    if (!selected?.response || !outer?.response) throw new Error('bad fixture');
+    selected.response.headers = {};
+    selected.response.body = 'no selected capture values';
+    outer.response.headers = {
+      'x-result-token': 'wrong-source',
+      'set-cookie': 'session=wrong-source',
+    };
+    outer.response.body = 'token=wrong linked=wrong';
+
+    const required = crossReferenceCaptures(workflow, session);
+    expect(required.failedCaptureNames).toEqual(new Set(['header', 'cookie', 'token']));
+    const referenced = crossReferenceReferencedStateCaptures(workflow, session);
+    expect(referenced.failedCaptureNames.has('linked')).toBe(true);
+  });
+});
+
 describe('compare_rendered_requests compile tool', () => {
+  it('compares navigation with its document request while replaying its selected response', async () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-dual-provenance-'));
+    const session: Session = {
+      site: 'fixture',
+      startedAt: '2026-08-29T00:00:00.000Z',
+      url: 'https://example.test/results',
+      imprintVersion: '0.1.0',
+      requests: [
+        {
+          seq: 10,
+          timestamp: 1,
+          method: 'GET',
+          url: 'https://example.test/results',
+          headers: {},
+          resourceType: 'Document',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'text/html' },
+            mimeType: 'text/html',
+            body: '<html><body>loading</body></html>',
+          },
+        },
+        {
+          seq: 20,
+          timestamp: 2,
+          method: 'POST',
+          url: 'https://example.test/api/results',
+          headers: { 'content-type': 'application/json' },
+          resourceType: 'XHR',
+          body: '{}',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{"token":"selected-background-token","items":[1]}',
+          },
+        },
+        {
+          seq: 30,
+          timestamp: 3,
+          method: 'GET',
+          url: 'https://example.test/details',
+          headers: { 'x-result-token': 'selected-background-token' },
+          resourceType: 'Fetch',
+          response: {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+            mimeType: 'application/json',
+            body: '{"done":true}',
+          },
+        },
+      ],
+      events: [],
+      narration: [],
+      cookieSnapshots: [],
+      storageSnapshots: [],
+    };
+    writeFileSync(
+      pathJoin(dir, 'workflow.json'),
+      JSON.stringify({
+        toolName: 'dual_provenance_fixture',
+        intent: { description: 'Use a response generated by a rendered page.' },
+        site: 'fixture',
+        parameters: [],
+        requests: [
+          {
+            method: 'GET',
+            mode: 'navigate',
+            url: 'https://example.test/results',
+            headers: {},
+            recordingRequestSeq: 10,
+            navigation: {
+              networkResponse: {
+                urlIncludes: '/api/results',
+                recordingResponseRequestSeq: 20,
+                method: 'POST',
+                resourceType: 'XHR',
+              },
+            },
+            captures: [
+              {
+                name: 'token',
+                source: 'json',
+                path: 'token',
+                required: true,
+                capability: 'browser_bootstrap',
+              },
+            ],
+          },
+          {
+            method: 'GET',
+            url: 'https://example.test/details',
+            headers: { 'x-result-token': '${state.token}' },
+            recordingRequestSeq: 30,
+          },
+        ],
+      }),
+    );
+
+    try {
+      const compare = buildCompileTools(session, dir, pathJoin(dir, 'session.json')).find(
+        (tool) => tool.name === 'compare_rendered_requests',
+      );
+      const result = await compare?.handler({});
+      const facts = JSON.parse(result?.result ?? '{}');
+
+      expect(facts).toMatchObject({
+        execution: { ok: true },
+        preparedRequestCount: 2,
+        comparisons: [
+          {
+            artifactRequestIndex: 0,
+            recordingRequestSeq: 10,
+            recordingResponseRequestSeq: 20,
+            method: { equal: true },
+            url: { equal: true },
+          },
+          {
+            artifactRequestIndex: 1,
+            recordingRequestSeq: 30,
+            headers: { state: 'matched' },
+          },
+        ],
+      });
+
+      const invalidWorkflow = JSON.parse(readFileSync(pathJoin(dir, 'workflow.json'), 'utf8'));
+      invalidWorkflow.requests[0].navigation.networkResponse.recordingResponseRequestSeq = 30;
+      writeFileSync(pathJoin(dir, 'workflow.json'), JSON.stringify(invalidWorkflow));
+      const invalid = await compare?.handler({});
+      expect(invalid?.isError).toBe(true);
+      expect(JSON.parse(invalid?.result ?? '{}')).toMatchObject({
+        state: 'invalid_recording_response_provenance',
+        failures: [expect.stringContaining('not declared recordingResponseRequestSeq 30')],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('reports a skipped navigation comparison as not checked rather than N/A', async () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-rendered-navigation-skip-'));
     const session: Session = {

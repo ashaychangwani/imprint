@@ -11,8 +11,10 @@ import { abortSignalError } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import type {
   ApiResearchCandidate,
+  ApiResearchHandoff,
   ApiResearchInput,
   ApiResearchObservation,
+  ApiResearchRequestCatalogEntry,
   PlannableTeachingTool,
 } from './master-teach-agent-contracts.ts';
 import {
@@ -21,6 +23,7 @@ import {
   apiResearchInputsSha256,
   type requestApiResearchStep,
 } from './master-teach-agents.ts';
+import { teachingPlanContentSha256 } from './master-teach-plan.ts';
 import type {
   PromptEvidenceProjection,
   RecordingIndex,
@@ -38,6 +41,8 @@ export interface ApiResearchResult {
   researchedBoundary: {
     requestSeqs: number[];
     dependencySeqs: number[];
+    dependencyToolNames?: string[];
+    requiredLinks?: NonNullable<ApiResearchInput['requiredLinks']>;
   };
   candidate: ApiResearchCandidate;
   workflow: Workflow;
@@ -49,6 +54,13 @@ export interface ApiResearchResult {
   backend?: ConcreteBackend;
 }
 
+export interface ApiResearchPartialResult extends ApiResearchResult {
+  status: 'partial';
+  missingProof: string[];
+}
+
+export type ApiResearchOutcome = ApiResearchResult | ApiResearchPartialResult;
+
 export class ApiResearchBlockedError extends Error {
   constructor(
     message: string,
@@ -59,7 +71,7 @@ export class ApiResearchBlockedError extends Error {
   }
 }
 
-export interface ApiResearchDependencies {
+interface ApiResearchDependencies {
   requestStep: typeof requestApiResearchStep;
   runApiTool(input: {
     workflowPath: string;
@@ -155,14 +167,35 @@ export async function researchApiMvpCall(input: {
   recordingIndex: RecordingIndex;
   tool: PlannableTeachingTool;
   evidence: PromptEvidenceProjection;
+  /** Omitted for the deliberately narrow first pass. A follow-up reuses the
+   * same provider conversation and carries only master-selected extra facts. */
+  followUp?: ApiResearchInput['followUp'];
+  previousProgress?: ApiResearchHandoff;
+  requestCatalog?: readonly ApiResearchRequestCatalogEntry[];
+  requestCatalogTruncated?: boolean;
+  requestCatalogPage?: ApiResearchInput['requestCatalogPage'];
+  loadNextRequestCatalogPage?: (offset: number) => {
+    entries: ApiResearchRequestCatalogEntry[];
+    page: NonNullable<ApiResearchInput['requestCatalogPage']>;
+  };
+  requiredLinks?: ApiResearchInput['requiredLinks'];
+  inspectRequests?: (requestSeqs: readonly number[]) => PromptEvidenceProjection;
   toolDir: string;
   agent: MasterTeachAgentOptions;
   runDeadline: RunDeadlineRef;
   signal?: AbortSignal;
   report?: (message: string) => void;
   dependencies: ApiResearchDependencies;
-}): Promise<ApiResearchResult> {
-  const observations: ApiResearchObservation[] = [];
+}): Promise<ApiResearchOutcome> {
+  let evidence = input.evidence;
+  let requestCatalog = [...(input.requestCatalog ?? [])];
+  let requestCatalogPage = input.requestCatalogPage;
+  const inspectedRequestSeqs = new Set<number>();
+  const completedInspectionStates = new Set<string>();
+  const observations: ApiResearchObservation[] = [
+    ...(input.previousProgress?.observations ?? []),
+    ...(input.previousProgress?.observation ? [input.previousProgress.observation] : []),
+  ].filter((observation, index, all) => all.findIndex(({ id }) => id === observation.id) === index);
   let proposedBlockReason: string | undefined;
   while (true) {
     if (input.signal?.aborted) throw abortSignalError(input.signal);
@@ -176,11 +209,59 @@ export async function researchApiMvpCall(input: {
       run: input.run,
       recordingIndex: input.recordingIndex,
       tool: input.tool,
-      evidence: input.evidence,
+      evidence,
       observations,
+      requestCatalog,
+      requestCatalogTruncated:
+        requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
+      ...(requestCatalogPage ? { requestCatalogPage } : {}),
+      requiredLinks: [...(input.requiredLinks ?? [])],
+      ...(inspectedRequestSeqs.size > 0 ? { inspectedRequestSeqs: [...inspectedRequestSeqs] } : {}),
+      researchPhase: input.followUp ? 'follow_up' : 'mvp',
+      ...(input.followUp ? { followUp: input.followUp } : {}),
+      ...(input.previousProgress ? { previousProgress: input.previousProgress } : {}),
       ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
     };
     const decision = await input.dependencies.requestStep(researchInput, input.agent);
+    if (decision.action === 'catalog') {
+      if (!requestCatalogPage?.hasMore || !input.loadNextRequestCatalogPage) {
+        throw new Error('API researcher requested another catalog page when none is available');
+      }
+      const nextOffset = requestCatalogPage.offset + requestCatalog.length;
+      const next = input.loadNextRequestCatalogPage(nextOffset);
+      if (next.page.offset !== nextOffset || next.entries.length === 0) {
+        throw new Error('API research catalog pagination did not advance');
+      }
+      requestCatalog = [...next.entries];
+      requestCatalogPage = next.page;
+      input.report?.(`${input.tool.candidate.toolName}: reading the next request catalog page`);
+      continue;
+    }
+    if (decision.action === 'inspect') {
+      if (!input.inspectRequests || !decision.requestedRequestSeqs) {
+        throw new Error('API researcher requested evidence inspection without exact request seqs');
+      }
+      const requestedRequestSeqs = [...decision.requestedRequestSeqs].sort(
+        (left, right) => left - right,
+      );
+      const inspectionStateSha256 = teachingPlanContentSha256({
+        evidenceSha256: evidence.ref.sha256,
+        requestedRequestSeqs,
+      });
+      const newRequestSeqs = requestedRequestSeqs.filter((seq) => !inspectedRequestSeqs.has(seq));
+      if (newRequestSeqs.length === 0 || completedInspectionStates.has(inspectionStateSha256)) {
+        throw new ApiResearchBlockedError(
+          'API research requested the exact recording evidence it had already inspected; return this no-progress fact to the master for a different direction or boundary',
+          observations,
+        );
+      }
+      completedInspectionStates.add(inspectionStateSha256);
+      input.report?.(`${input.tool.candidate.toolName}: inspecting selected recorded requests`);
+      for (const seq of newRequestSeqs) inspectedRequestSeqs.add(seq);
+      evidence = input.inspectRequests(newRequestSeqs);
+      proposedBlockReason = undefined;
+      continue;
+    }
     if (decision.action === 'blocked') {
       if (!proposedBlockReason) {
         proposedBlockReason = decision.reason;
@@ -191,22 +272,24 @@ export async function researchApiMvpCall(input: {
     proposedBlockReason = undefined;
     const candidate = decision.candidate;
     if (!candidate) throw new Error('API researcher returned no candidate');
-    if (decision.action === 'proven') {
+    if (decision.action === 'proven' || decision.action === 'partial') {
       const observation = observations.find(({ id }) => id === decision.basedOnObservationId);
       if (!observation) throw new Error('API researcher cited an unavailable observation');
       const workflowPath = writeCandidate(input.toolDir, candidate);
       const backend = concreteBackend(observation.executionMechanism);
-      if (backend) rememberProvenCompileBackend(workflowPath, backend);
+      if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
       writeFileSync(
         pathJoin(input.toolDir, 'api-research.json'),
         `${JSON.stringify({ decision, observation }, null, 2)}\n`,
         'utf8',
       );
       return {
-        researchInputsSha256: apiResearchInputsSha256(input.tool),
+        researchInputsSha256: apiResearchInputsSha256(input.tool, input.requiredLinks),
         researchedBoundary: {
           requestSeqs: [...input.tool.candidate.requestSeqs],
           dependencySeqs: [...input.tool.candidate.dependencySeqs],
+          dependencyToolNames: [...input.tool.candidate.dependsOnTools],
+          requiredLinks: [...(input.requiredLinks ?? [])],
         },
         candidate,
         workflow: candidate.workflow,
@@ -215,6 +298,14 @@ export async function researchApiMvpCall(input: {
         observation,
         parameters: candidate.parameterValues,
         ...(backend ? { backend } : {}),
+        ...(decision.action === 'partial'
+          ? {
+              status: 'partial' as const,
+              missingProof: decision.missingProof ?? [
+                'The researcher did not state the remaining proof gap.',
+              ],
+            }
+          : {}),
       };
     }
 

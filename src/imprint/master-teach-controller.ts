@@ -20,6 +20,7 @@ import {
 import { dirname, join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   ApiResearchBlockedError,
+  type ApiResearchOutcome,
   type ApiResearchResult,
   researchApiMvpCall,
 } from './api-research-agent.ts';
@@ -44,8 +45,12 @@ import { redactFreeformText } from './freeform-redact.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
+  type ApiResearchFollowUpDirective,
   type ApiResearchHandoff,
   ApiResearchHandoffSchema,
+  type ApiResearchNoProgress,
+  type ApiResearchRequestCatalogEntry,
+  type ApiResearchRequiredLink,
   type CompletionReviewInput,
   type CompletionToolResultEvidence,
   CompletionToolResultEvidenceSchema,
@@ -63,7 +68,9 @@ import {
 } from './master-teach-agent-contracts.ts';
 import {
   type MasterTeachAgentOptions,
+  apiResearchFollowUpStateSha256,
   apiResearchInputsSha256,
+  apiResearchRequiredLinks,
   mechanicalProofFailures,
   requestApiResearchStep,
   requestBaselineMvpReview,
@@ -93,6 +100,7 @@ import {
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   normalizeDetectorCompileContextForMaster,
+  reviseEditableTeachingPlan,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
   unresolvedCandidateCoverage,
@@ -1122,7 +1130,6 @@ function redactRecording(recording: RecordingResolution, runRoot: string): Redac
 
 function toolEvidenceScope(tool: EditableTeachingTool): FocusedEvidenceScope {
   return {
-    toolId: tool.id,
     toolName: tool.candidate.toolName,
     requestSeqs: tool.candidate.requestSeqs,
     representativeSeqs: tool.candidate.representativeSeqs,
@@ -1873,14 +1880,25 @@ export function apiResearchMatchesPlan(
   tool: EditableTeachingTool,
   implementation: ImplementationPlanPayload,
   research: ApiResearchResult,
+  requiredLinks: readonly ApiResearchRequiredLink[] = [],
 ): boolean {
   if (tool.strategy?.kind !== 'api' || implementation.strategyKind !== 'api') return false;
-  if (!apiResearchCoversToolBoundary(tool, research)) return false;
+  if (!apiResearchCoversToolBoundary(tool, research, requiredLinks)) return false;
   const plannedRequests = implementation.requestProvenance.map(
-    ({ recordingRequestSeq }) => recordingRequestSeq,
+    ({ recordingRequestSeq, recordingResponseRequestSeq }) => ({
+      recordingRequestSeq,
+      ...(recordingResponseRequestSeq === undefined ? {} : { recordingResponseRequestSeq }),
+    }),
   );
   const researchedRequests = research.workflow.requests.map(
-    ({ recordingRequestSeq }) => recordingRequestSeq,
+    ({ recordingRequestSeq, navigation }) => ({
+      recordingRequestSeq,
+      ...(navigation?.networkResponse
+        ? {
+            recordingResponseRequestSeq: navigation.networkResponse.recordingResponseRequestSeq,
+          }
+        : {}),
+    }),
   );
   return (
     canonicalTeachingPlanJson(plannedRequests) === canonicalTeachingPlanJson(researchedRequests)
@@ -1896,6 +1914,7 @@ export function apiResearchMatchesPlan(
 export function apiResearchCoversToolBoundary(
   tool: EditableTeachingTool,
   research: ApiResearchResult,
+  requiredLinks: readonly ApiResearchRequiredLink[] = [],
 ): boolean {
   if (tool.strategy?.kind !== 'api') return false;
   if (research.workflow.toolName !== tool.candidate.toolName) return false;
@@ -1909,6 +1928,22 @@ export function apiResearchCoversToolBoundary(
   ) {
     return false;
   }
+  const researchedDependencyToolNames = new Set(
+    research.researchedBoundary.dependencyToolNames ?? [],
+  );
+  if (
+    tool.candidate.dependsOnTools.some((toolName) => !researchedDependencyToolNames.has(toolName))
+  ) {
+    return false;
+  }
+  const researchedRequiredLinks = new Set(
+    (research.researchedBoundary.requiredLinks ?? []).map((link) =>
+      canonicalTeachingPlanJson(link),
+    ),
+  );
+  if (requiredLinks.some((link) => !researchedRequiredLinks.has(canonicalTeachingPlanJson(link)))) {
+    return false;
+  }
   const plannedRequestSeqs = new Set([
     ...tool.candidate.requestSeqs,
     ...tool.candidate.dependencySeqs,
@@ -1918,14 +1953,19 @@ export function apiResearchCoversToolBoundary(
     ...research.researchedBoundary.dependencySeqs,
   ]);
   const researchedRequestSeqs = new Set(
-    research.workflow.requests.flatMap(({ recordingRequestSeq }) =>
-      recordingRequestSeq === undefined ? [] : [recordingRequestSeq],
-    ),
+    research.workflow.requests.flatMap(({ recordingRequestSeq, navigation }) => [
+      ...(recordingRequestSeq === undefined ? [] : [recordingRequestSeq]),
+      ...(navigation?.networkResponse
+        ? [navigation.networkResponse.recordingResponseRequestSeq]
+        : []),
+    ]),
   );
   return (
     research.workflow.requests.every(
-      ({ recordingRequestSeq }) =>
-        recordingRequestSeq === undefined || plannedRequestSeqs.has(recordingRequestSeq),
+      ({ recordingRequestSeq, navigation }) =>
+        (recordingRequestSeq === undefined || plannedRequestSeqs.has(recordingRequestSeq)) &&
+        (!navigation?.networkResponse ||
+          plannedRequestSeqs.has(navigation.networkResponse.recordingResponseRequestSeq)),
     ) &&
     [...plannedRequestSeqs].every(
       (seq) => researchedBoundarySeqs.has(seq) || researchedRequestSeqs.has(seq),
@@ -2244,6 +2284,132 @@ interface PrePlanApiResearch {
   resultsByToolId: Map<string, ApiResearchResult>;
 }
 
+function isPartialApiResearch(
+  outcome: ApiResearchOutcome,
+): outcome is ApiResearchOutcome & { status: 'partial'; missingProof: string[] } {
+  return 'status' in outcome && outcome.status === 'partial';
+}
+
+const API_RESEARCH_REQUEST_CATALOG_LIMIT = 256;
+
+function apiResearchUrlShape(value: string): string {
+  try {
+    const parsed = new URL(value);
+    const queryNames = [...new Set(parsed.searchParams.keys())].sort();
+    return utf8Prefix(
+      `${parsed.origin}${parsed.pathname}${queryNames.length ? `?${queryNames.join('&')}` : ''}`,
+      1_000,
+    );
+  } catch {
+    return utf8Prefix(value.replace(/\?.*$/, ''), 1_000);
+  }
+}
+
+/** Give the researcher a payload-free map of every recorded call. The target's
+ * own requests come first, followed by mechanically nearby calls. Only one
+ * bounded page is sent at a time; exact details still require inspection. */
+function apiResearchRequestCatalog(
+  session: Session,
+  tool: EditableTeachingTool,
+): ApiResearchRequestCatalogEntry[] {
+  const selected = new Set([...tool.candidate.requestSeqs, ...tool.candidate.dependencySeqs]);
+  const anchor =
+    tool.candidate.representativeSeqs[0] ??
+    tool.candidate.requestSeqs[0] ??
+    tool.candidate.dependencySeqs[0] ??
+    0;
+  const distance = (seq: number): number => Math.abs(anchor - seq);
+  const ordered = [...session.requests].sort((left, right) => {
+    const leftSelected = selected.has(left.seq) ? 0 : 1;
+    const rightSelected = selected.has(right.seq) ? 0 : 1;
+    return (
+      leftSelected - rightSelected ||
+      distance(left.seq) - distance(right.seq) ||
+      left.seq - right.seq
+    );
+  });
+  return ordered.map((request) => ({
+    recordingRequestSeq: request.seq,
+    method: request.method,
+    urlShape: apiResearchUrlShape(request.url),
+    resourceType: request.resourceType,
+    responseStatus: request.response?.status ?? null,
+    responseMimeType: request.response?.mimeType ?? null,
+    requestBodyBytes: Buffer.byteLength(request.body ?? '', 'utf8'),
+    responseBodyBytes: Buffer.byteLength(request.response?.body ?? '', 'utf8'),
+  }));
+}
+
+function apiResearchRequestCatalogPage(
+  catalog: readonly ApiResearchRequestCatalogEntry[],
+  offset: number,
+): {
+  entries: ApiResearchRequestCatalogEntry[];
+  page: { offset: number; totalEntries: number; hasMore: boolean };
+} {
+  const entries = catalog.slice(offset, offset + API_RESEARCH_REQUEST_CATALOG_LIMIT);
+  return {
+    entries,
+    page: {
+      offset,
+      totalEntries: catalog.length,
+      hasMore: offset + entries.length < catalog.length,
+    },
+  };
+}
+
+function expandedResearchEvidence(input: {
+  tool: EditableTeachingTool;
+  additionalRequestSeqs: readonly number[];
+  triagedSession: Session;
+  independent: IndependentExecutionObservation;
+  seeds: Map<string, FreshTeachBootstrapObject>;
+}): PromptEvidenceProjection {
+  const owned = new Set(input.tool.candidate.requestSeqs);
+  const supportSeqs = new Set([
+    ...input.tool.candidate.dependencySeqs,
+    ...input.additionalRequestSeqs,
+  ]);
+  for (const seq of owned) supportSeqs.delete(seq);
+  return buildPromptEvidenceProjection(
+    focusedEvidenceDocuments({
+      session: input.triagedSession,
+      scope: {
+        toolName: input.tool.candidate.toolName,
+        requestSeqs: [...owned],
+        representativeSeqs: [
+          ...new Set([...input.tool.candidate.representativeSeqs, ...input.additionalRequestSeqs]),
+        ],
+        dependencySeqs: [...supportSeqs],
+        eventSeqs: input.tool.candidate.eventSeqs,
+      },
+      independent: input.independent,
+    }),
+    input.seeds,
+    FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    new Set(['focused_recording_scope', 'focused_request_summaries', 'focused_event_summaries']),
+  );
+}
+
+/** Expand one researcher's evidence only with the exact requests the master
+ * selected. Sibling summaries travel separately, so naming a sibling does not
+ * dump all of its recording evidence. */
+function followUpResearchEvidence(input: {
+  tool: EditableTeachingTool;
+  followUp: ApiResearchFollowUpDirective;
+  triagedSession: Session;
+  independent: IndependentExecutionObservation;
+  seeds: Map<string, FreshTeachBootstrapObject>;
+}): PromptEvidenceProjection {
+  return expandedResearchEvidence({
+    tool: input.tool,
+    additionalRequestSeqs: input.followUp.relevantRequestSeqs,
+    triagedSession: input.triagedSession,
+    independent: input.independent,
+    seeds: input.seeds,
+  });
+}
+
 async function researchSelectedOperations(input: {
   plan: EditableTeachingPlan;
   run: ToolSelectionAdvisorInput['run'];
@@ -2258,6 +2424,8 @@ async function researchSelectedOperations(input: {
   signal?: AbortSignal;
   report?: (message: string) => void;
   toolIds?: ReadonlySet<string>;
+  followUps?: readonly ApiResearchFollowUpDirective[];
+  previousHandoffs?: readonly ApiResearchHandoff[];
 }): Promise<PrePlanApiResearch> {
   const evidenceByTool = focusedEvidenceForPlan({
     plan: input.plan,
@@ -2266,6 +2434,12 @@ async function researchSelectedOperations(input: {
     seeds: input.seeds,
   });
   const resultsByToolId = new Map<string, ApiResearchResult>();
+  const followUpByToolName = new Map(
+    (input.followUps ?? []).map((followUp) => [followUp.toolName, followUp] as const),
+  );
+  const previousByToolName = new Map(
+    (input.previousHandoffs ?? []).map((handoff) => [handoff.toolName, handoff] as const),
+  );
   const targetTools = input.toolIds
     ? input.plan.tools.filter(({ id }) => input.toolIds?.has(id))
     : input.plan.tools;
@@ -2274,16 +2448,65 @@ async function researchSelectedOperations(input: {
     {
       concurrency: FOCUSED_COMPILE_CONCURRENCY,
       compileTool: async (sourceTool) => {
-        const evidence = evidenceByTool.get(sourceTool.id);
+        const followUp = followUpByToolName.get(sourceTool.candidate.toolName);
+        let evidence = followUp
+          ? followUpResearchEvidence({
+              tool: sourceTool,
+              followUp,
+              triagedSession: input.triagedSession,
+              independent: input.independent,
+              seeds: input.seeds,
+            })
+          : evidenceByTool.get(sourceTool.id);
         if (!evidence) throw new Error(`API research evidence is missing for "${sourceTool.id}"`);
+        evidenceByTool.set(sourceTool.id, evidence);
         const { implementationPlan: _implementationPlan, ...tool } = sourceTool;
-        input.report?.(`${tool.candidate.toolName}: researching the minimum viable API call`);
+        const requiredLinks = apiResearchRequiredLinks(input.plan, sourceTool);
+        const requestCatalog = apiResearchRequestCatalog(input.triagedSession, sourceTool);
+        const firstRequestCatalogPage = apiResearchRequestCatalogPage(requestCatalog, 0);
+        const inspectedRequestSeqs = new Set(followUp?.relevantRequestSeqs ?? []);
+        input.report?.(
+          followUp
+            ? `${tool.candidate.toolName}: continuing API research for the master's missing proof`
+            : `${tool.candidate.toolName}: researching the minimum viable API call`,
+        );
         try {
-          const result = await researchApiMvpCall({
+          const outcome = await researchApiMvpCall({
             run: input.run,
             recordingIndex: input.recordingIndex,
             tool,
             evidence,
+            ...(followUp
+              ? {
+                  followUp: {
+                    masterDirection: followUp.instruction,
+                    missingProof: followUp.missingProof,
+                    relevantRequestSeqs: followUp.relevantRequestSeqs,
+                    siblingResearch: (input.previousHandoffs ?? []).filter(({ toolName }) =>
+                      followUp.relevantToolNames.includes(toolName),
+                    ),
+                  },
+                  previousProgress: previousByToolName.get(tool.candidate.toolName),
+                }
+              : {}),
+            requestCatalog: firstRequestCatalogPage.entries,
+            requestCatalogTruncated: firstRequestCatalogPage.page.hasMore,
+            requestCatalogPage: firstRequestCatalogPage.page,
+            loadNextRequestCatalogPage: (offset) =>
+              apiResearchRequestCatalogPage(requestCatalog, offset),
+            requiredLinks,
+            inspectRequests: (requestSeqs) => {
+              for (const seq of requestSeqs) inspectedRequestSeqs.add(seq);
+              evidence = expandedResearchEvidence({
+                tool: sourceTool,
+                additionalRequestSeqs: [...inspectedRequestSeqs],
+                triagedSession: input.triagedSession,
+                independent: input.independent,
+                seeds: input.seeds,
+              });
+              evidenceByTool.set(sourceTool.id, evidence);
+              return evidence;
+            },
             toolDir: pathJoin(input.stagingRoot, 'api-research', tool.id),
             agent: input.agent,
             runDeadline: input.runDeadline,
@@ -2294,24 +2517,39 @@ async function researchSelectedOperations(input: {
               runApiTool: input.deps.runApiResearchTool,
             },
           });
-          resultsByToolId.set(tool.id, result);
+          if (isPartialApiResearch(outcome)) {
+            input.report?.(`${tool.candidate.toolName}: API research is partial`);
+            return ApiResearchHandoffSchema.parse({
+              toolName: tool.candidate.toolName,
+              researchInputsSha256: outcome.researchInputsSha256,
+              status: 'partial',
+              summary: outcome.summary,
+              candidate: outcome.candidate,
+              observation: outcome.observation,
+              missingProof: outcome.missingProof,
+            });
+          }
+          resultsByToolId.set(tool.id, outcome);
+          input.report?.(`${tool.candidate.toolName}: API research is proven`);
           return ApiResearchHandoffSchema.parse({
-            toolId: tool.id,
             toolName: tool.candidate.toolName,
-            researchInputsSha256: result.researchInputsSha256,
+            researchInputsSha256: outcome.researchInputsSha256,
             status: 'proven',
-            summary: result.summary,
-            candidate: result.candidate,
-            observation: result.observation,
+            summary: outcome.summary,
+            candidate: outcome.candidate,
+            observation: outcome.observation,
           });
         } catch (error) {
           if (!(error instanceof ApiResearchBlockedError)) throw error;
+          input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
           return ApiResearchHandoffSchema.parse({
-            toolId: tool.id,
             toolName: tool.candidate.toolName,
-            researchInputsSha256: apiResearchInputsSha256(tool),
+            researchInputsSha256: apiResearchInputsSha256(tool, requiredLinks),
             status: 'blocked',
             summary: error.message,
+            ...(error.observations.length > 0
+              ? { observations: error.observations.slice(-64) }
+              : {}),
           });
         }
       },
@@ -2328,6 +2566,362 @@ async function researchSelectedOperations(input: {
     evidenceByTool,
     handoffs: researched.completed.map(({ value }) => value),
     resultsByToolId,
+  };
+}
+
+interface ReviewedPrePlanApiResearch extends PrePlanApiResearch {
+  plan: EditableTeachingPlan;
+  reviewRefs: ContentAddressedRef[];
+}
+
+function researchByPublicName(
+  plan: EditableTeachingPlan,
+  research: PrePlanApiResearch,
+): {
+  handoffs: Map<string, ApiResearchHandoff>;
+  results: Map<string, ApiResearchResult>;
+  evidence: Map<string, PromptEvidenceProjection>;
+} {
+  const nameById = new Map(plan.tools.map((tool) => [tool.id, tool.candidate.toolName] as const));
+  return {
+    handoffs: new Map(research.handoffs.map((handoff) => [handoff.toolName, handoff] as const)),
+    results: new Map(
+      [...research.resultsByToolId].flatMap(([toolId, result]) => {
+        const toolName = nameById.get(toolId);
+        return toolName ? [[toolName, result] as const] : [];
+      }),
+    ),
+    evidence: new Map(
+      [...research.evidenceByTool].flatMap(([toolId, value]) => {
+        const toolName = nameById.get(toolId);
+        return toolName ? [[toolName, value] as const] : [];
+      }),
+    ),
+  };
+}
+
+/** Let the retained master inspect the complete first-pass handoffs before any
+ * focused planner runs. A partial result is sent back to the same retained
+ * researcher with only the extra sibling/request facts the master selected. */
+async function reviewApiResearchBeforePlanning(input: {
+  initialPlan: EditableTeachingPlan;
+  initialResearch: PrePlanApiResearch;
+  discoveryInput: ToolSelectionAdvisorInput;
+  discoveryEvidence: PromptEvidenceProjection;
+  toolAdvice: ToolAdvice;
+  userGuidance?: string;
+  triagedSession: Session;
+  independent: IndependentExecutionObservation;
+  seeds: Map<string, FreshTeachBootstrapObject>;
+  stagingRoot: string;
+  agent: MasterTeachAgentOptions;
+  deps: FreshTeachControllerDependencies;
+  runDeadline: RunDeadlineRef;
+  signal?: AbortSignal;
+  report?: (message: string) => void;
+  now: Date;
+  selfContainedFirstReview?: boolean;
+  researchScope?: 'all' | 'api_only';
+  currentSnapshot?: () => CurrentExecutionSnapshot;
+  applyDecision?: (input: {
+    currentPlan: EditableTeachingPlan;
+    decision: MasterDecision;
+    decisionRef: ContentAddressedRef;
+  }) => EditableTeachingPlan;
+}): Promise<ReviewedPrePlanApiResearch> {
+  let plan = input.initialPlan;
+  if (plan.tools.length === 0) {
+    return { ...input.initialResearch, plan, reviewRefs: [] };
+  }
+  const byName = researchByPublicName(plan, input.initialResearch);
+  const handoffs = byName.handoffs;
+  const results = byName.results;
+  const evidence = byName.evidence;
+  const reviewRefs: ContentAddressedRef[] = [];
+  const attemptedFollowUpStates = new Set<string>();
+  let researchNoProgress: ApiResearchNoProgress[] = [];
+  let firstReview = true;
+  const researchableTools = (): EditableTeachingTool[] =>
+    plan.tools.filter(
+      (tool) => input.researchScope !== 'api_only' || tool.strategy?.kind === 'api',
+    );
+
+  const mergeResearch = (researchedPlan: EditableTeachingPlan, update: PrePlanApiResearch) => {
+    const names = researchByPublicName(researchedPlan, update);
+    for (const [toolName, handoff] of names.handoffs) handoffs.set(toolName, handoff);
+    for (const toolName of names.handoffs.keys()) results.delete(toolName);
+    for (const [toolName, result] of names.results) results.set(toolName, result);
+    for (const [toolName, projection] of names.evidence) evidence.set(toolName, projection);
+  };
+
+  for (;;) {
+    if (input.signal?.aborted) throw abortSignalError(input.signal);
+    if (Date.now() >= input.runDeadline.deadlineMs)
+      throw new Error('pre-planning API research review reached the run deadline');
+
+    const scopedTools = researchableTools();
+    if (scopedTools.length === 0) break;
+
+    const currentNames = new Set(plan.tools.map(({ candidate }) => candidate.toolName));
+    for (const toolName of [...handoffs.keys()]) {
+      if (!currentNames.has(toolName)) {
+        handoffs.delete(toolName);
+        results.delete(toolName);
+        evidence.delete(toolName);
+      }
+    }
+    const missingTools = scopedTools.filter((tool) => {
+      const handoff = handoffs.get(tool.candidate.toolName);
+      return (
+        !handoff ||
+        handoff.researchInputsSha256 !==
+          apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
+      );
+    });
+    if (missingTools.length > 0) {
+      const fresh = await researchSelectedOperations({
+        plan,
+        run: input.discoveryInput.run,
+        recordingIndex: input.discoveryInput.recordingIndex,
+        triagedSession: input.triagedSession,
+        independent: input.independent,
+        seeds: input.seeds,
+        stagingRoot: input.stagingRoot,
+        agent: input.agent,
+        deps: input.deps,
+        runDeadline: input.runDeadline,
+        signal: input.signal,
+        report: input.report,
+        toolIds: new Set(missingTools.map(({ id }) => id)),
+      });
+      mergeResearch(plan, fresh);
+    }
+
+    researchNoProgress = researchNoProgress.filter((notice) => {
+      const handoff = handoffs.get(notice.toolName);
+      return (
+        handoff?.status === 'partial' &&
+        teachingPlanContentSha256(handoff) === notice.partialHandoffSha256
+      );
+    });
+
+    const currentPlanObject = jsonRef(plan);
+    addBootstrap(input.seeds, currentPlanObject);
+    const currentHandoffs = scopedTools.flatMap((tool) => {
+      const handoff = handoffs.get(tool.candidate.toolName);
+      return handoff ? [handoff] : [];
+    });
+    const decisionInput: MasterDecisionInput = {
+      phase: 'revision',
+      decisionPurpose: 'research_review',
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
+      discovery: input.discoveryInput,
+      current: {
+        run: {
+          runId: input.discoveryInput.run.runId,
+          site: input.discoveryInput.run.site,
+          recordingSha256: input.discoveryInput.run.recordingSha256,
+          planRevision: plan.revision,
+          planSha256: currentPlanObject.ref.sha256,
+        },
+        plan: CurrentPlanProjectionSchema.parse({ ref: currentPlanObject.ref, payload: plan }),
+        ...(input.currentSnapshot ? { snapshot: input.currentSnapshot() } : {}),
+      },
+      toolSelectionAdvice: input.toolAdvice,
+      plannerProposals: [],
+      apiResearch: currentHandoffs,
+      ...(researchNoProgress.length > 0 ? { researchNoProgress } : {}),
+    };
+    input.report?.('master: reviewing first-pass API research before planning');
+    const decision = await input.deps.requestMasterDecision(
+      decisionInput,
+      input.agent,
+      firstReview && input.selfContainedFirstReview ? { selfContained: true } : undefined,
+    );
+    firstReview = false;
+    const decisionRef = addBootstrap(input.seeds, jsonRef(decision));
+    reviewRefs.push(decisionRef);
+    if (input.applyDecision) {
+      plan = input.applyDecision({ currentPlan: plan, decision, decisionRef });
+    } else {
+      const revision = reviseEditableTeachingPlan(
+        plan,
+        decision.desiredPlan,
+        {
+          expectedRevision: plan.revision,
+          decision: planDecision(
+            input.now,
+            decision.outcome,
+            decision.reason,
+            [decisionRef],
+            [input.discoveryEvidence.ref],
+          ),
+        },
+        {
+          site: input.discoveryInput.run.site,
+          recordingSha256: input.discoveryInput.run.recordingSha256,
+          requestSeqs: new Set(input.discoveryInput.recordingIndex.requestSeqs),
+          eventSeqs: new Set(input.discoveryInput.recordingIndex.eventSeqs),
+          discoveryCandidateNames: input.discoveryInput.discoveryCandidates.map(
+            ({ toolName }) => toolName,
+          ),
+        },
+      );
+      plan = revision.plan;
+    }
+
+    const followUps = decision.researchFollowUps ?? [];
+    if (followUps.length === 0) {
+      const needsFreshFirstPass = researchableTools().some((tool) => {
+        const handoff = handoffs.get(tool.candidate.toolName);
+        return (
+          !handoff ||
+          handoff.researchInputsSha256 !==
+            apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
+        );
+      });
+      if (needsFreshFirstPass) continue;
+      const selectedPartial = researchableTools().some(
+        (tool) =>
+          handoffs.get(tool.candidate.toolName)?.status === 'partial' &&
+          !(
+            tool.strategy?.kind === 'playbook_fallback' &&
+            researchNoProgress.some(({ toolName }) => toolName === tool.candidate.toolName)
+          ),
+      );
+      const unresolvedBlocked = researchableTools().some((tool) => {
+        const handoff = handoffs.get(tool.candidate.toolName);
+        return handoff?.status === 'blocked' && tool.strategy?.kind !== 'playbook_fallback';
+      });
+      if (!selectedPartial && !unresolvedBlocked) break;
+      // Output validation normally prevents this. Keep the controller honest
+      // for injected test doubles and future providers that bypass parsing.
+      throw new Error(
+        selectedPartial
+          ? 'master left partial API research without a follow-up direction'
+          : 'master left blocked API research unresolved before planning',
+      );
+    }
+
+    const staleSiblingIds = new Set<string>();
+    for (const followUp of followUps) {
+      for (const siblingName of followUp.relevantToolNames) {
+        const sibling = plan.tools.find(({ candidate }) => candidate.toolName === siblingName);
+        if (!sibling) {
+          throw new Error(
+            `master API research follow-up references removed sibling "${siblingName}"`,
+          );
+        }
+        const handoff = handoffs.get(siblingName);
+        if (
+          !handoff ||
+          handoff.researchInputsSha256 !==
+            apiResearchInputsSha256(sibling, apiResearchRequiredLinks(plan, sibling))
+        ) {
+          staleSiblingIds.add(sibling.id);
+        }
+      }
+    }
+    if (staleSiblingIds.size > 0) {
+      const refreshedSiblings = await researchSelectedOperations({
+        plan,
+        run: input.discoveryInput.run,
+        recordingIndex: input.discoveryInput.recordingIndex,
+        triagedSession: input.triagedSession,
+        independent: input.independent,
+        seeds: input.seeds,
+        stagingRoot: input.stagingRoot,
+        agent: input.agent,
+        deps: input.deps,
+        runDeadline: input.runDeadline,
+        signal: input.signal,
+        report: input.report,
+        toolIds: staleSiblingIds,
+      });
+      mergeResearch(plan, refreshedSiblings);
+    }
+
+    const latestHandoffs = plan.tools.flatMap((tool) => {
+      const handoff = handoffs.get(tool.candidate.toolName);
+      return handoff ? [handoff] : [];
+    });
+    const repeatedStates = followUps.flatMap((followUp) => {
+      const handoff = handoffs.get(followUp.toolName);
+      if (handoff?.status !== 'partial') return [];
+      const followUpStateSha256 = apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp);
+      return attemptedFollowUpStates.has(followUpStateSha256)
+        ? [
+            {
+              toolName: followUp.toolName,
+              partialHandoffSha256: teachingPlanContentSha256(handoff),
+              followUpStateSha256,
+              reason:
+                'The same partial handoff, public boundary, relevant sibling research, and master direction already completed without progress.',
+            } satisfies ApiResearchNoProgress,
+          ]
+        : [];
+    });
+    if (repeatedStates.length > 0) {
+      researchNoProgress = repeatedStates;
+      input.report?.('master: reviewing an exact no-progress API research cycle');
+      continue;
+    }
+    researchNoProgress = [];
+    for (const followUp of followUps) {
+      const handoff = handoffs.get(followUp.toolName);
+      if (handoff?.status !== 'partial') continue;
+      attemptedFollowUpStates.add(apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp));
+    }
+
+    const targetIds = new Set(
+      followUps.flatMap((followUp) => {
+        const tool = plan.tools.find(({ candidate }) => candidate.toolName === followUp.toolName);
+        return tool ? [tool.id] : [];
+      }),
+    );
+    const continued = await researchSelectedOperations({
+      plan,
+      run: input.discoveryInput.run,
+      recordingIndex: input.discoveryInput.recordingIndex,
+      triagedSession: input.triagedSession,
+      independent: input.independent,
+      seeds: input.seeds,
+      stagingRoot: input.stagingRoot,
+      agent: input.agent,
+      deps: input.deps,
+      runDeadline: input.runDeadline,
+      signal: input.signal,
+      report: input.report,
+      toolIds: targetIds,
+      followUps,
+      previousHandoffs: latestHandoffs,
+    });
+    mergeResearch(plan, continued);
+  }
+
+  return {
+    plan,
+    // Keep factual handoffs for retained non-API/fallback tools as context for
+    // their focused planner. `researchableTools` controls which tools enter
+    // this loop; it must not erase the blocker facts that justified a strategy
+    // change during the review.
+    handoffs: plan.tools.flatMap((tool) => {
+      const handoff = handoffs.get(tool.candidate.toolName);
+      return handoff ? [handoff] : [];
+    }),
+    resultsByToolId: new Map(
+      plan.tools.flatMap((tool) => {
+        const result = results.get(tool.candidate.toolName);
+        return result ? [[tool.id, result] as const] : [];
+      }),
+    ),
+    evidenceByTool: new Map(
+      plan.tools.flatMap((tool) => {
+        const projection = evidence.get(tool.candidate.toolName);
+        return projection ? [[tool.id, projection] as const] : [];
+      }),
+    ),
+    reviewRefs,
   };
 }
 
@@ -2416,7 +3010,6 @@ async function discoverAndPlan(input: {
       toolSelectionAdvice: advice,
       plannerProposals: [],
       apiResearch: [],
-      parameterAdvice: [],
     };
     discoveryDecision = await input.deps.requestMasterDecision(discoveryDecisionInput, input.agent);
   }
@@ -2450,7 +3043,7 @@ async function discoverAndPlan(input: {
   const initialPlanObject = jsonRef(initialPlan);
   addBootstrap(input.seeds, initialPlanObject);
 
-  const research = await researchSelectedOperations({
+  const firstPassResearch = await researchSelectedOperations({
     plan: initialPlan,
     run,
     recordingIndex,
@@ -2464,12 +3057,31 @@ async function discoverAndPlan(input: {
     signal: input.signal,
     report: input.report,
   });
+  const research = await reviewApiResearchBeforePlanning({
+    initialPlan,
+    initialResearch: firstPassResearch,
+    discoveryInput,
+    discoveryEvidence,
+    toolAdvice: advice,
+    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
+    triagedSession: input.triage.session,
+    independent: input.independent,
+    seeds: input.seeds,
+    stagingRoot: input.stagingRoot,
+    agent: input.agent,
+    deps: input.deps,
+    runDeadline: input.runDeadline,
+    signal: input.signal,
+    report: input.report,
+    now: input.now,
+    selfContainedFirstReview: Boolean(input.selected),
+  });
   const researchRefs = research.handoffs.map((handoff) =>
     addBootstrap(input.seeds, jsonRef(handoff)),
   );
 
   const plannerBundles = await requestFocusedPlannerBundles({
-    plan: initialPlan,
+    plan: research.plan,
     discoveryRun: run,
     recordingIndex,
     triagedSession: input.triage.session,
@@ -2481,6 +3093,8 @@ async function discoverAndPlan(input: {
     evidenceByTool: research.evidenceByTool,
   });
   const evidenceRefs = allEvidenceRefs(discoveryEvidence, plannerBundles);
+  const prePlanObject = jsonRef(research.plan);
+  addBootstrap(input.seeds, prePlanObject);
   const revisionInput: MasterDecisionInput = {
     phase: 'revision',
     ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
@@ -2490,18 +3104,17 @@ async function discoverAndPlan(input: {
         runId: input.runId,
         site: input.site,
         recordingSha256: input.recordingSha256,
-        planRevision: initialPlan.revision,
-        planSha256: initialPlanObject.ref.sha256,
+        planRevision: research.plan.revision,
+        planSha256: prePlanObject.ref.sha256,
       },
       plan: CurrentPlanProjectionSchema.parse({
-        ref: initialPlanObject.ref,
-        payload: initialPlan,
+        ref: prePlanObject.ref,
+        payload: research.plan,
       }),
     },
     toolSelectionAdvice: advice,
     plannerProposals: plannerBundles.map(({ proposal }) => proposal),
     apiResearch: research.handoffs,
-    parameterAdvice: [],
   };
   const finalDecision = await input.deps.requestMasterDecision(
     revisionInput,
@@ -2517,7 +3130,14 @@ async function discoverAndPlan(input: {
         input.now,
         'initial',
         finalDecision.reason,
-        [adviceRef, discoveryDecisionRef, ...researchRefs, ...proposalRefs, finalDecisionRef],
+        [
+          adviceRef,
+          discoveryDecisionRef,
+          ...research.reviewRefs,
+          ...researchRefs,
+          ...proposalRefs,
+          finalDecisionRef,
+        ],
         evidenceRefs,
       ),
     },
@@ -2538,7 +3158,12 @@ async function discoverAndPlan(input: {
     if (
       !implementation?.success ||
       !result ||
-      !apiResearchMatchesPlan(tool, implementation.data, result)
+      !apiResearchMatchesPlan(
+        tool,
+        implementation.data,
+        result,
+        apiResearchRequiredLinks(plan, tool),
+      )
     ) {
       tool.implementationPlan = undefined;
     }
@@ -2550,7 +3175,13 @@ async function discoverAndPlan(input: {
     focusedEvidence: new Map(
       plannerBundles.map(({ output, evidence }) => [output.tool.id, evidence]),
     ),
-    advisorRefs: [adviceRef, discoveryDecisionRef, ...proposalRefs, finalDecisionRef],
+    advisorRefs: [
+      adviceRef,
+      discoveryDecisionRef,
+      ...research.reviewRefs,
+      ...proposalRefs,
+      finalDecisionRef,
+    ],
     toolAdvice: advice,
     apiResearch: research.handoffs,
     apiResearchResults: research.resultsByToolId,
@@ -2958,7 +3589,15 @@ async function compileAndCheckCurrentPlan(input: {
     let apiResearch: ApiResearchResult | undefined;
     if (tool.strategy.kind === 'api') {
       apiResearch = input.apiResearchByToolId?.get(tool.id);
-      if (!apiResearch || !apiResearchMatchesPlan(tool, implementation, apiResearch)) {
+      if (
+        !apiResearch ||
+        !apiResearchMatchesPlan(
+          tool,
+          implementation,
+          apiResearch,
+          apiResearchRequiredLinks(plan, tool),
+        )
+      ) {
         throw new Error(
           `API plan for "${tool.candidate.toolName}" does not match a proven pre-plan request; revise the plan from the research handoff before compiling`,
         );
@@ -3913,7 +4552,6 @@ async function requestRepairRevision(
     toolSelectionAdvice: context.toolAdvice,
     plannerProposals: [],
     apiResearch: [...context.apiResearch],
-    parameterAdvice: [],
     verificationFindings: findings,
   };
   const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
@@ -3950,18 +4588,80 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
     const missingToolIds = implementationPlanRepairToolIds(current.plan);
     if (missingToolIds.length === 0 || current.plan.tools.length === 0) return;
 
-    const researchToolIds = missingToolIds.filter((toolId) => {
+    const researchReviewToolIds = missingToolIds.filter((toolId) => {
       const tool = current.plan.tools.find(({ id }) => id === toolId);
       if (!tool || tool.strategy?.kind !== 'api') return false;
       const result = context.apiResearchResults.get(toolId);
-      return !result || !apiResearchCoversToolBoundary(tool, result);
+      if (
+        result &&
+        apiResearchCoversToolBoundary(tool, result, apiResearchRequiredLinks(current.plan, tool))
+      )
+        return false;
+      return true;
     });
-    if (researchToolIds.length > 0) {
+    if (researchReviewToolIds.length > 0) {
+      const freshResearchToolIds = researchReviewToolIds.filter((toolId) => {
+        const tool = current.plan.tools.find(({ id }) => id === toolId);
+        if (!tool) return false;
+        const handoff = context.apiResearch.find(
+          ({ toolName }) => toolName === tool.candidate.toolName,
+        );
+        return (
+          !handoff ||
+          handoff.status === 'proven' ||
+          handoff.researchInputsSha256 !==
+            apiResearchInputsSha256(tool, apiResearchRequiredLinks(current.plan, tool))
+        );
+      });
       const researchSeeds = new Map<string, FreshTeachBootstrapObject>();
-      const research = await researchSelectedOperations({
-        plan: current.plan,
-        run: context.discoveryInput.run,
-        recordingIndex: context.discoveryInput.recordingIndex,
+      const firstPass =
+        freshResearchToolIds.length > 0
+          ? await researchSelectedOperations({
+              plan: current.plan,
+              run: context.discoveryInput.run,
+              recordingIndex: context.discoveryInput.recordingIndex,
+              triagedSession: context.triagedSession,
+              independent: context.independent,
+              seeds: researchSeeds,
+              stagingRoot: context.stagingRoot,
+              agent: context.agent,
+              deps: context.deps,
+              runDeadline: context.runDeadline,
+              signal: context.signal,
+              report: context.report,
+              toolIds: new Set(freshResearchToolIds),
+            })
+          : {
+              evidenceByTool: new Map<string, PromptEvidenceProjection>(),
+              handoffs: [],
+              resultsByToolId: new Map<string, ApiResearchResult>(),
+            };
+      const replacedNames = new Set(firstPass.handoffs.map(({ toolName }) => toolName));
+      const combinedHandoffs = [
+        ...context.apiResearch.filter(({ toolName }) => !replacedNames.has(toolName)),
+        ...firstPass.handoffs,
+      ];
+      const combinedResults = new Map(context.apiResearchResults);
+      for (const toolId of researchReviewToolIds) {
+        combinedResults.delete(toolId);
+      }
+      for (const [toolId, result] of firstPass.resultsByToolId) {
+        combinedResults.set(toolId, result);
+      }
+      const combinedEvidence = new Map(context.focusedEvidence);
+      for (const [toolId, evidence] of firstPass.evidenceByTool) {
+        combinedEvidence.set(toolId, evidence);
+      }
+      const reviewed = await reviewApiResearchBeforePlanning({
+        initialPlan: current.plan,
+        initialResearch: {
+          evidenceByTool: combinedEvidence,
+          handoffs: combinedHandoffs,
+          resultsByToolId: combinedResults,
+        },
+        discoveryInput: context.discoveryInput,
+        discoveryEvidence: context.discoveryEvidence,
+        toolAdvice: context.toolAdvice,
         triagedSession: context.triagedSession,
         independent: context.independent,
         seeds: researchSeeds,
@@ -3971,24 +4671,39 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
         runDeadline: context.runDeadline,
         signal: context.signal,
         report: context.report,
-        toolIds: new Set(researchToolIds),
+        now: context.deps.now(),
+        researchScope: 'api_only',
+        currentSnapshot: () => context.journal.currentExecutionSnapshot(),
+        applyDecision: ({ currentPlan, decision, decisionRef }) => {
+          persistSeeds(context.journal, researchSeeds);
+          return context.journal.revisePlan(decision.desiredPlan, {
+            expectedRevision: currentPlan.revision,
+            decision: planDecision(
+              context.deps.now(),
+              decision.outcome,
+              decision.reason,
+              [decisionRef],
+              [context.discoveryEvidence.ref],
+            ),
+          }).plan;
+        },
       });
       persistSeeds(context.journal, researchSeeds);
-      for (const toolId of researchToolIds) {
-        const evidence = research.evidenceByTool.get(toolId);
-        if (evidence) context.focusedEvidence.set(toolId, evidence);
-        context.apiResearchResults.delete(toolId);
+      const reviewedToolIds = new Set(reviewed.plan.tools.map(({ id }) => id));
+      for (const toolId of context.focusedEvidence.keys()) {
+        if (!reviewedToolIds.has(toolId)) context.focusedEvidence.delete(toolId);
       }
-      for (const [toolId, result] of research.resultsByToolId) {
+      for (const [toolId, evidence] of reviewed.evidenceByTool) {
+        context.focusedEvidence.set(toolId, evidence);
+      }
+      context.apiResearchResults.clear();
+      for (const [toolId, result] of reviewed.resultsByToolId) {
         context.apiResearchResults.set(toolId, result);
       }
-      const replaced = new Set(research.handoffs.map(({ toolId }) => toolId));
-      context.apiResearch.splice(
-        0,
-        context.apiResearch.length,
-        ...context.apiResearch.filter(({ toolId }) => !replaced.has(toolId)),
-        ...research.handoffs,
-      );
+      context.apiResearch.splice(0, context.apiResearch.length, ...reviewed.handoffs);
+      // Research review may revise the boundary or dependency graph. Reload
+      // the journal before selecting the planners affected by that decision.
+      continue;
     }
 
     const seeds = new Map<string, FreshTeachBootstrapObject>();
@@ -4035,7 +4750,6 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
       toolSelectionAdvice: context.toolAdvice,
       plannerProposals: planners.map(({ proposal }) => proposal),
       apiResearch: [...context.apiResearch],
-      parameterAdvice: [],
     };
     const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
     const decisionRef = context.journal.storeJson(decision);
@@ -4154,8 +4868,9 @@ export function sameFinesseTarget(
 
 /**
  * Parameter breadth is intentionally outside the authoritative teach state.
- * Each suggestion is bound to one exact MVP build and can be considered by a
- * later finesse pass, but it cannot revise, delay, or invalidate that MVP.
+ * Each suggestion is bound to one exact MVP build and saved for a later,
+ * explicit finesse pass. It cannot enter this teach run's plan, repairs,
+ * publication, or terminal decision.
  */
 function createParameterFinesseLane(input: {
   runRoot: string;
@@ -4201,6 +4916,19 @@ function createParameterFinesseLane(input: {
     for (const record of records.values()) result[record.status] += 1;
     return result;
   };
+  const expireStaleSuggestions = (): void => {
+    const snapshot = input.journal.currentExecutionSnapshot().payload;
+    for (const [key, record] of records) {
+      if (record.status !== 'suggested') continue;
+      const proof = snapshot.tools.find(({ toolId }) => toolId === record.toolId);
+      if (sameFinesseTarget(record, proof)) continue;
+      persist(key, {
+        ...record,
+        status: 'stale',
+        message: 'The MVP build or dependency changed after this optional advice was saved.',
+      });
+    }
+  };
 
   return {
     start: (toolId) => {
@@ -4225,7 +4953,7 @@ function createParameterFinesseLane(input: {
           startedAt: new Date().toISOString(),
         };
         persist(key, record);
-        input.report?.(`finessing parameter breadth for ${record.toolName} in the background`);
+        input.report?.(`saving optional parameter advice for ${record.toolName} in the background`);
 
         const controller = new AbortController();
         const abortFromParent = (): void =>
@@ -4304,7 +5032,7 @@ function createParameterFinesseLane(input: {
               : !remainsCurrent
                 ? 'The plan or MVP build changed before this suggestion returned.'
                 : hasAdvice
-                  ? 'Parameter-selection advice is available. Live breadth testing is deferred to a later finesse run.'
+                  ? 'Parameter-selection advice is saved for a later explicit finesse pass.'
                   : `parameter advisor: ${boundedTerminalMessage(adviceAttempt.error)}`,
             ...(adviceAttempt.ok ? { advice: adviceAttempt.value } : {}),
           });
@@ -4350,6 +5078,10 @@ function createParameterFinesseLane(input: {
           new Promise<void>((resolve) => setTimeout(resolve, 250)),
         ]);
       }
+      // A required revision can land after an advisor saves its result. Count
+      // only advice for the final exact MVP build; optional work must never
+      // advertise stale breadth.
+      expireStaleSuggestions();
       return counts();
     },
   };
@@ -5125,7 +5857,7 @@ export async function runFreshMasterTeach(
       const finesseCounts = await finesse.stop(
         'The MVP was promoted before this optional finesse pass finished; its state is saved as deferred.',
       );
-      const availableFinesse = finesseCounts.suggested;
+      const savedFinesse = finesseCounts.suggested;
       const unresolvedTools = unresolvedCandidateCoverage(finalPlan).length;
       return writeTerminalResult({
         status: terminalIntent,
@@ -5134,8 +5866,8 @@ export async function runFreshMasterTeach(
         runRoot,
         message:
           terminalIntent === 'completed'
-            ? `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}; unfinished work is recorded there as deferred and did not delay the MVP.`
-            : `${readyTools} usable MVP tool(s) were reviewed and promoted; ${unresolvedTools} discovered operation(s) remain explicitly unresolved. ${availableFinesse} optional finesse suggestion(s) are saved under ${pathJoin(runRoot, 'finesse')}.`,
+            ? `Every one of ${readyTools} planned tool(s) reached a usable MVP and was promoted. ${savedFinesse} optional parameter suggestion(s) for a later explicit finesse pass are saved under ${pathJoin(runRoot, 'finesse')}; they did not change or delay this MVP, and unfinished advice is recorded there as deferred.`
+            : `${readyTools} usable MVP tool(s) were reviewed and promoted; ${unresolvedTools} discovered operation(s) remain explicitly unresolved. ${savedFinesse} optional parameter suggestion(s) for a later explicit finesse pass are saved under ${pathJoin(runRoot, 'finesse')}; they did not change this MVP.`,
       });
     }
   } catch (error) {

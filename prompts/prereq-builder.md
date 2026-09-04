@@ -44,6 +44,8 @@ You receive `{ site, url, module, availableDependencies, sources, implementation
       };
   ```
 - Derive any URL, body, header, navigation, or conditional-request change from `sources`. A string replaces only the URL. Object fields patch only the fields present; `headers` are merged, `navigation` is merged, and `skip: true` omits that request.
+- A request transform cannot return or change `navigation.networkResponse`.
+  Its complete matcher and recorded-response provenance live in `workflow.json`.
 - The host checks the declared runtime export, runs the authored test, and typechecks the module. It does not infer which recorded value is a signature or independently re-run a guessed signing algorithm. Focused planning/review agents judge whether the authored test proves the intended behavior.
 
 ### `parser-helper`

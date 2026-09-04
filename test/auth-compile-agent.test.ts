@@ -29,6 +29,21 @@ const originalTeachCredentials = process.env.IMPRINT_TEACH_CREDENTIALS;
 type VerifierRunner = NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>;
 type VerifierRunnerArgs = Parameters<VerifierRunner>[0];
 
+describe('auth compile prompt response provenance', () => {
+  it('distinguishes the outgoing navigation from its selected background response', () => {
+    const prompt = readFileSync(
+      pathJoin(import.meta.dir, '..', 'prompts', 'auth-compile-agent.md'),
+      'utf8',
+    );
+    expect(prompt).toMatch(
+      /For `navigation\.networkResponse`, the capture evidence is\s+instead the response cited by `recordingResponseRequestSeq`\./,
+    );
+    expect(prompt).toMatch(
+      /locate `navigation\.networkResponse\.recordingResponseRequestSeq` when the\s+capture reads a selected page-generated response/,
+    );
+  });
+});
+
 describe('recorded auth request grounding', () => {
   it('treats only a zero-length redaction marker as the recorded empty value', () => {
     const workflowRequest = {

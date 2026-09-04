@@ -251,11 +251,11 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
-const WorkflowRequestSchema = z.object({
+const WorkflowRequestBaseSchema = z.object({
   method: z.string(),
-  /** Sequence number of the captured request that grounds this workflow request.
-   *  Auth login uses this to resolve persisted captures only against their
-   *  producing recorded response. */
+  /** Sequence number of the captured request that grounds this outgoing
+   *  workflow request. A navigation-selected background response records its
+   *  distinct capture provenance in navigation.networkResponse. */
   recordingRequestSeq: z.number().int().nonnegative().optional(),
   /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
    *  earlier extracted value. */
@@ -304,6 +304,29 @@ const WorkflowRequestSchema = z.object({
       /** After navigation actions run, wait for this rendered selector before
        * snapshotting the final document. */
       resultSelector: z.string().min(1).optional(),
+      /** Return one page-generated network response instead of the rendered
+       * document. This is an explicit, agent-selected browser operation for a
+       * request that the page must construct itself. Matching is mechanical and
+       * site-neutral; the runtime does not infer which response is meaningful. */
+      networkResponse: z
+        .object({
+          /** Required URL substring observed in the target response. */
+          urlIncludes: z.string().min(1),
+          /** Exact recorded request whose response body/status/headers represent
+           * the page-generated result returned by this workflow request. */
+          recordingResponseRequestSeq: z.number().int().nonnegative(),
+          /** Optional exact HTTP method (matched case-insensitively). */
+          method: z.string().min(1).optional(),
+          /** Optional exact CDP resource type, such as XHR or Fetch (matched
+           * case-insensitively). */
+          resourceType: z.string().min(1).optional(),
+          /** Select the Nth matching response, ordered by its request start
+           * within this navigation scope. Starts that never receive a response
+           * do not consume an occurrence. */
+          occurrence: z.number().int().positive().optional(),
+        })
+        .strict()
+        .optional(),
       cookie: z
         .object({
           name: z.string().min(1),
@@ -325,7 +348,19 @@ const WorkflowRequestSchema = z.object({
    *  a telemetry beacon. The flow continues to the next (terminal) request. */
   optional: z.boolean().optional(),
 });
+const WorkflowRequestSchema = WorkflowRequestBaseSchema.superRefine((request, ctx) => {
+  if (request.navigation?.networkResponse && request.mode !== 'navigate') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['mode'],
+      message: 'navigation.networkResponse requires mode "navigate"',
+    });
+  }
+});
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
+export type NavigationNetworkResponseMatcher = NonNullable<
+  NonNullable<WorkflowRequest['navigation']>['networkResponse']
+>;
 
 const AuthConfigSchema = z
   .object({

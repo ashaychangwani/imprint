@@ -289,10 +289,10 @@ export async function probeResolvedTool(
             : null;
         const tooSlow = durationMs > preferredMaxMs;
         const rankingDurationMs = warm?.ok ? warm.durationMs : durationMs;
-        const detailParts: string[] = [];
+        const detailParts = ['request completed; semantic verification is separate'];
         if (tooSlow)
           detailParts.push(`cold start exceeded preferred backend threshold ${preferredMaxMs}ms`);
-        if (warm?.ok) detailParts.push(`warm cdp-replay succeeded in ${warm.durationMs}ms`);
+        if (warm?.ok) detailParts.push(`warm cdp-replay request completed in ${warm.durationMs}ms`);
         else if (warm) detailParts.push(`warm cdp-replay failed: ${warm.detail}`);
         results[backend] = {
           outcome: 'ok',
@@ -319,7 +319,7 @@ export async function probeResolvedTool(
         // reprobe and leave the suite with no prepared backend.
         persistCurrentCache();
         log(
-          `  ${backend}: OK in ${durationMs}ms${warm?.ok ? ` (warm ${warm.durationMs}ms)` : ''}${tooSlow ? ' (cold slow)' : ''}`,
+          `  ${backend}: REQUEST COMPLETED in ${durationMs}ms (transport only; semantic verification is separate${warm?.ok ? `; warm request completed in ${warm.durationMs}ms` : ''}${tooSlow ? '; cold slow' : ''})`,
         );
         continue;
       }
@@ -567,15 +567,15 @@ export function persistRuntimeBackendsCache(opts: {
   for (const attempt of opts.attempts) {
     if (attempt.outcome === 'ok') {
       const tooSlow = attempt.durationMs > preferredBackendMaxMs();
+      const detailParts = ['request completed; semantic verification is separate'];
+      if (tooSlow) {
+        detailParts.push(`exceeded preferred backend threshold ${preferredBackendMaxMs()}ms`);
+      }
       results[attempt.backend] = {
         outcome: 'ok',
         durationMs: attempt.durationMs,
-        ...(tooSlow
-          ? {
-              tooSlow: true,
-              detail: `exceeded preferred backend threshold ${preferredBackendMaxMs()}ms`,
-            }
-          : {}),
+        ...(tooSlow ? { tooSlow: true } : {}),
+        detail: detailParts.join('; '),
       };
     } else if (attempt.outcome === 'unavailable') {
       results[attempt.backend] = { outcome: 'unavailable', detail: attempt.detail };

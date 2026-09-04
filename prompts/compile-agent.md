@@ -258,10 +258,17 @@ Follow these steps to compile the session:
      keep the researched `mode: "navigate"` request and parse its rendered HTML.
      This remains a workflow artifact using CDP; it is not a DOM playbook. Do
      not choose navigation merely because a field looks opaque—the research
-     handoff must contain the successful rendered response. The artifact
-     cannot subscribe to, intercept, copy, or mutate an arbitrary XHR generated
-     by page JavaScript,
-     but it does not need to when the rendered page already contains the result.
+     handoff must contain the successful response. If the page must assemble
+     the load-bearing request itself and research proves the exact background
+     response, set `navigation.networkResponse` to an explicit URL substring,
+     its exact `recordingResponseRequestSeq`, and optional method/resource
+     type/occurrence. The completed matching body,
+     not the rendered HTML, then becomes this workflow request's raw response.
+     If that response is the only completion requirement, omit `waitUntil`;
+     add lifecycle, selector, or action waits only when the workflow actually
+     needs them after navigation.
+     This is an agent-selected API escape hatch, not automatic interception and
+     not a reason to choose browser execution before direct API constructions.
      Navigation is not an implicit pre-step: it must be declared as a workflow
      request and pass the normal contract and live checks.
 
@@ -276,6 +283,9 @@ Follow these steps to compile the session:
    **Do not erase runtime values in transforms.** The runtime substitutes the workflow request before calling `request-transform.ts`, but the transform API receives only the substituted `url`, raw prior `responses`, and resolved `params` shown in the signature above. It does **not** receive the workflow's current body or headers, and extra function arguments are ignored. Preserve available values as opaque strings unless the recorded protocol requires a documented conversion. Do NOT casually reparse them with `new URL(...).searchParams.get(...)`, `Number(...)`, `JSON.parse(...)`, date parsers, or similar coercions that can turn a valid value into `null`, `NaN`, an empty string, or the literal word `undefined`. If a transform returns `body` or `headers`, it must construct each replacement completely from those supported inputs; cover the resulting bytes with `request.test.ts` so substitution is encoded exactly once.
 
    **Request-transform patch semantics.** A string replaces only the URL. An object changes only the fields it contains: `url` and `body` replace those fields, `headers` merge into resolved headers, `navigation` merges into the request's navigation options, and `skip: true` omits the request. Supported navigation keys are exactly those in `TransformNavigation` above; click actions are `{ action: 'click', selector }`. Do not invent additional return fields.
+   A transform cannot return or change `navigation.networkResponse`. The
+   complete matcher and its recorded provenance live in `workflow.json`, so
+   offline proof and live execution always select the same response.
 
    **Dry-run the public adapter before `done`.** When a request transform is present—especially one reused from a shared-module proposal—invoke it locally with the exact baseline object allowed by `workflow.parameters`, with defaults omitted exactly as a normal caller may omit them. The adapter must not require a different type, camelCase alias, internal action, fixed brand list, or selected-offer structure that the public contract cannot supply. Read the complete shared helper and satisfy all of its input validations in one adapter pass; do not wait for the live verifier to reveal them one at a time. Never make `integration.test.ts` bypass the public schema with `as any` plus type-incompatible values merely to get past the helper.
 
@@ -1044,16 +1054,16 @@ the runtime to group or rank them:
   "chainEdges": [
     {
       "id": "catalog-item-to-detail",
-      "producerToolId": "catalog_search",
+      "producerToolId": "search_catalog",
       "producerResultPath": "items[0].id",
-      "consumerToolId": "catalog_detail",
+      "consumerToolId": "get_catalog_detail",
       "consumerParameter": "item_id"
     },
     {
       "id": "catalog-variant-to-detail",
-      "producerToolId": "catalog_search",
+      "producerToolId": "search_catalog",
       "producerResultPath": "items[0].variant_id",
-      "consumerToolId": "catalog_detail",
+      "consumerToolId": "get_catalog_detail",
       "consumerParameter": "variant_id"
     }
   ]
@@ -1120,6 +1130,13 @@ WorkflowRequest = {
     selector?: string;
     actions?: Array<{ action: 'click'; selector: string }>;
     resultSelector?: string;
+    networkResponse?: {
+      urlIncludes: string;
+      recordingResponseRequestSeq: number;
+      method?: string;
+      resourceType?: string;
+      occurrence?: number;
+    };
     cookie?: { name: string; domain?: string; path?: string };
   };
   extract?: Record<string, string>;   // name → jsonpath; later requests use ${response[N].name}
@@ -1154,11 +1171,21 @@ Workflow = {
 
 `mode` chooses transport. Omitted or `"fetch"` means ordinary HTTP;
 `"navigate"` means top-level browser navigation and returns the rendered
-document. Returning `navigation` options from `request-transform.ts` only
+document by default. With `navigation.networkResponse`, it instead returns the
+completed page-generated response selected by the declared URL substring and
+optional method/resource type/occurrence. Returning `navigation` options from
+`request-transform.ts` only
 refines a request already declared with `"mode":"navigate"`; it cannot switch a
 fetch request into browser mode. Use navigation only when recorded evidence
-shows rendered-page behavior or browser interaction is required, and require
-the live rendered HTML to contain the operation's core data.
+shows browser-owned execution is required. Require the exact returned document
+or selected response body to contain the operation's core data.
+
+These two recorded origins stay separate. The workflow request's top-level
+`recordingRequestSeq` grounds the document navigation actually sent. A
+`networkResponse.recordingResponseRequestSeq` grounds the background request
+whose recorded response body/status/headers stand in for that live result
+during offline rendering. Copy both exact sequences from evidence; never use
+the background request sequence as the navigation request's provenance.
 
 `capability` declares the minimum mechanism that can produce a required missing
 capture, so it affects which existing runtime transports are eligible. It does

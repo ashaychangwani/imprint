@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. The master accounts for every credible operation in the recording, chooses dependency-aware build waves, and gives each tool to a focused planner and compiler before independent verification.',
+    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Focused researchers first prove a small working call for every operation; the master sends partial proof back to the same conversation before choosing dependency-aware plans and builds.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
@@ -415,7 +415,7 @@ export default function App() {
             <div className="proof-copy">
               <span className="kicker">Product proof</span>
               <h2 id="proof-title">Two replays are better than one brittle script.</h2>
-              <p>Every taught workflow compiles into both a network-level workflow and a DOM-level playbook under the generated tool directory. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When Chromium is needed only to initialize state, fetch-bootstrap harvests it and returns to API replay.</p>
+              <p>Each taught tool compiles to a network workflow whenever the recorded operation supports one; a DOM playbook is only the final fallback. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When a page must construct the data request itself, an API workflow can explicitly collect its matching background response through CDP.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>

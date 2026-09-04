@@ -127,10 +127,33 @@ failure should identify the request or comparison that failed, including what
 was not checked afterward. Replay for a browser playbook is not applicable and
 does not count as a failure.
 
+`REQUEST COMPLETED` means only that a backend returned a transport response; it
+does not mean the response contained the promised records. The researcher or
+verifier performs that semantic check separately. During pre-planning research,
+`PARTIAL` means the researcher preserved a tested working subset but named a
+gap still required by the selected MVP or a producer-consumer edge. Optional
+parameter breadth waits for the later best-effort pass. After all tools finish
+their first pass, the master can return the required gap to the same researcher
+with selected sibling results and other relevant requests.
+
 The master receives those facts and can change the affected tool plan, artifact,
 parameters, dependencies, or replay strategy. Only that tool and its consumers
 become stale. The run cannot complete until every planned tool has current
 passing checks and the independent completion reviewer approves the evidence.
+
+When a normal API replay cannot reproduce a request assembled inside the page,
+the agent can keep the operation in `workflow.json` by using an explicit
+`mode: "navigate"` request with `navigation.networkResponse`. The matcher
+selects a URL substring observed in the recording and can narrow by method,
+resource type, and occurrence. Occurrence follows request-start order within
+that navigation. It returns the matching live background response
+body to the parser. Keep the request origins separate: top-level
+`recordingRequestSeq` identifies the outgoing document navigation, while
+`networkResponse.recordingResponseRequestSeq` identifies the recorded
+background response used for offline parsing and chaining. A request transform
+cannot return or change the matcher;
+it does not make the runtime decide which response is meaningful. If no match
+arrives, the error reports the exact matcher and timeout.
 
 ## Auth compile: an expected user action never arrives
 

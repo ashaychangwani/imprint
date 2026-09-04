@@ -607,6 +607,9 @@ describe('runtime backend learning', () => {
     expect(loadBackendsCache('learn', root, dir)?.preferredOrder).toEqual(['stealth-fetch']);
     expect(cache?.results.fetch?.outcome).toBe('forbidden');
     expect(cache?.results['fetch-bootstrap']?.outcome).toBe('failed');
+    expect(cache?.results['stealth-fetch']?.detail).toBe(
+      'request completed; semantic verification is separate',
+    );
   });
 
   it('does not preserve playbook as a structural fallback when learning from runtime', () => {
@@ -742,6 +745,8 @@ describe('runtime backend learning', () => {
       outcome: 'ok',
       durationMs: 140_000,
       tooSlow: true,
+      detail:
+        'request completed; semantic verification is separate; exceeded preferred backend threshold 90000ms',
     });
   });
 });

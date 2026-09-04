@@ -50,13 +50,14 @@ export interface CredentialStore {
 }
 
 type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
+type NavigationOverride = Omit<Partial<NavigationOptions>, 'networkResponse'>;
 type RequestTransformResult =
   | string
   | {
       url?: string;
       body?: string;
       headers?: Record<string, string>;
-      navigation?: Partial<NavigationOptions>;
+      navigation?: NavigationOverride;
       skip?: boolean;
     };
 
@@ -69,7 +70,7 @@ type RequestTransform = (
 
 function mergeNavigationOptions(
   base: WorkflowRequest['navigation'],
-  override: Partial<NavigationOptions>,
+  override: NavigationOverride,
 ): NavigationOptions {
   if (
     override.actions !== undefined &&
@@ -91,7 +92,39 @@ function mergeNavigationOptions(
   ) {
     throw new Error('request transform returned an invalid navigation result selector');
   }
-  return { ...base, ...override } as NavigationOptions;
+  // The workflow matcher is both the live selector and the offline proof. Letting
+  // a transform change any part would make those two executions select different
+  // responses, so the whole matcher is immutable.
+  if (
+    Object.prototype.hasOwnProperty.call(override as Record<string, unknown>, 'networkResponse')
+  ) {
+    throw new Error(
+      'request transform cannot override navigation.networkResponse; declare the complete immutable matcher in workflow.json',
+    );
+  }
+
+  return {
+    ...base,
+    ...override,
+  } as NavigationOptions;
+}
+
+/** URL that actually produced the body being captured. A page-network
+ * navigation returns a background response rather than its outer document, so
+ * response cookies and cookie captures must use that selected response URL. */
+function responseProvenanceUrl(
+  outgoingUrl: string,
+  navigation: WorkflowRequest['navigation'],
+  response: Response,
+): string {
+  if (!navigation?.networkResponse) return outgoingUrl;
+  const selectedUrl = response.headers.get('x-imprint-network-response-url');
+  if (!selectedUrl) return outgoingUrl;
+  try {
+    return new URL(selectedUrl).toString();
+  } catch {
+    return outgoingUrl;
+  }
 }
 
 /** Browser-only workflow operations supplied by cdp-replay. Keeping this
@@ -111,6 +144,7 @@ export interface BrowserNavigationTransport {
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationOptions['networkResponse'];
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -609,9 +643,10 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     // Capture Set-Cookie response headers into the in-flight cookie jar before
     // evaluating captures. Set-Cookie is not exposed as a normal header capture.
+    const capturedResponseUrl = responseProvenanceUrl(subbed.url, navigation, resp);
     try {
       for (const sc of extractSetCookieHeaders(resp.headers))
-        cookieJar.setCookieFromHeader(sc, subbed.url);
+        cookieJar.setCookieFromHeader(sc, capturedResponseUrl);
       liveCredentials.cookies = cookieJar.toJSON();
     } catch {
       // Non-fatal; cookies stay as they were.
@@ -624,7 +659,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       parsed,
       text,
       headers: resp.headers,
-      requestUrl: subbed.url,
+      requestUrl: capturedResponseUrl,
       cookieJar,
     });
     if (!captureResult.ok) return withRequestStageFacts(captureResult.result, requestStageFacts);
@@ -949,8 +984,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       };
     }
 
+    const capturedResponseUrl = responseProvenanceUrl(request.url, navigation, response);
     for (const header of extractSetCookieHeaders(response.headers)) {
-      cookieJar.setCookieFromHeader(header, request.url);
+      cookieJar.setCookieFromHeader(header, capturedResponseUrl);
     }
     liveCredentials.cookies = cookieJar.toJSON();
 
@@ -960,7 +996,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     } catch {
       // Keep the raw body for text captures.
     }
-    const context = { parsed, text, headers: response.headers, requestUrl: request.url };
+    const context = { parsed, text, headers: response.headers, requestUrl: capturedResponseUrl };
     responseSlots.push({ raw: parsed, aliases: evaluateLegacyExtract(req, parsed) });
     const captures = evaluateRequestCaptures(req.captures ?? [], {
       ...context,

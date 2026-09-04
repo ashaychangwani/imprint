@@ -220,9 +220,24 @@ const ArtifactRequestProvenanceSchema = z
   .object({
     artifactRequestIndex: z.number().int().nonnegative(),
     recordingRequestSeq: z.number().int().nonnegative(),
+    /** When browser navigation returns a selected page-generated response,
+     * this is the recorded request whose response becomes the artifact result. */
+    recordingResponseRequestSeq: z.number().int().nonnegative().optional(),
   })
   .strict();
 type ArtifactRequestProvenance = z.infer<typeof ArtifactRequestProvenanceSchema>;
+
+function recordingSeqsForRequestProvenance(
+  requests: readonly ArtifactRequestProvenance[],
+): number[] {
+  return requests.flatMap(({ recordingRequestSeq, recordingResponseRequestSeq }) => [
+    recordingRequestSeq,
+    ...(recordingResponseRequestSeq === undefined ||
+    recordingResponseRequestSeq === recordingRequestSeq
+      ? []
+      : [recordingResponseRequestSeq]),
+  ]);
+}
 
 export const ArtifactRequestProvenanceListSchema = z
   .array(ArtifactRequestProvenanceSchema)
@@ -450,7 +465,7 @@ export const ImplementationPlanPayloadSchema = z
     const verificationChecks = new Set<'replay' | 'live'>();
     let replayCaseCount = 0;
     const exactReplayProvenance = canonicalTeachingPlanJson(
-      plan.requestProvenance.map(({ recordingRequestSeq }) => recordingRequestSeq),
+      recordingSeqsForRequestProvenance(plan.requestProvenance),
     );
     plan.verificationCases.forEach((verificationCase, index) => {
       if (verificationCaseIds.has(verificationCase.id)) {
@@ -1025,6 +1040,14 @@ export function validateImplementationPlanForTool(
         `implementation plan references unknown recording seq ${request.recordingRequestSeq}`,
       );
     }
+    if (
+      request.recordingResponseRequestSeq !== undefined &&
+      !knownRecordingRequestSeqs.has(request.recordingResponseRequestSeq)
+    ) {
+      throw new TeachingPlanValidationError(
+        `implementation plan references unknown recorded response request seq ${request.recordingResponseRequestSeq}`,
+      );
+    }
   }
   const expectedParameters = tool.candidate.likelyParams.map(({ name }) => name).sort();
   const actualParameters = plan.parameterMappings.map(({ parameterName }) => parameterName).sort();
@@ -1113,6 +1136,21 @@ export function validateBuildWorkflowProvenance(
     if (request.recordingRequestSeq !== provenance.recordingRequestSeq) {
       throw new TeachingPlanValidationError(
         `workflow request ${artifactRequestIndex} records seq ${request.recordingRequestSeq} but accepted provenance requires ${provenance.recordingRequestSeq}`,
+      );
+    }
+    const responseRequestSeq = request.navigation?.networkResponse?.recordingResponseRequestSeq;
+    if (responseRequestSeq !== provenance.recordingResponseRequestSeq) {
+      throw new TeachingPlanValidationError(
+        responseRequestSeq === undefined
+          ? `workflow request ${artifactRequestIndex} is missing accepted recordingResponseRequestSeq ${provenance.recordingResponseRequestSeq}`
+          : provenance.recordingResponseRequestSeq === undefined
+            ? `workflow request ${artifactRequestIndex} declares unaccepted recordingResponseRequestSeq ${responseRequestSeq}`
+            : `workflow request ${artifactRequestIndex} records response request seq ${responseRequestSeq} but accepted provenance requires ${provenance.recordingResponseRequestSeq}`,
+      );
+    }
+    if (provenance.recordingResponseRequestSeq !== undefined && request.mode !== 'navigate') {
+      throw new TeachingPlanValidationError(
+        `workflow request ${artifactRequestIndex} declares recordingResponseRequestSeq without mode "navigate"`,
       );
     }
   }

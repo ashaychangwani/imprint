@@ -36,8 +36,13 @@ blocker only when the supplied evidence also shows that necessity is grounded
 or that the bounded omission and any evidence-backed generation construction
 were actually tried and failed. The artifact's inability to intercept the
 browser's original XHR is not sufficient when a declared request could still
-test omission or an exact supported generator. Do not demand exhaustive
-permutations or invent a generator.
+test omission, an exact supported generator, or an explicit
+`navigation.networkResponse` match for a recorded page-generated response. The
+last option remains an agent-selected API workflow route, not an automatic
+runtime fallback. When it is used, verify that the outer
+`recordingRequestSeq` cites the document navigation and
+`recordingResponseRequestSeq` cites the selected background response. Do not
+demand exhaustive permutations or invent a generator.
 
 The artifact can supply `${generated.uuid}`, `${generated.epoch_ms}`,
 `${generated.epoch_s}`, `${generated.iso8601}`, and `${generated.nonce}`, and a
@@ -108,18 +113,18 @@ Exact output schema (all objects reject extra fields):
   "findings": [{
     "severity": "warning",
     "message": "Review coverage is limited to supplied evidence.",
-    "toolId": "catalog_search",
+    "toolId": "search_catalog",
     "evidenceRefs": [{
       "path": "runs/run-fixture-1/evidence.json",
       "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
     }]
   }],
   "toolResultReviews": [{
-    "toolId": "catalog_search",
+    "toolId": "search_catalog",
     "status": "credible",
     "reason": "The current result contains the promised catalog records.",
     "evidenceRefs": [{
-      "path": "runs/run-fixture-1/result-evidence/catalog_search.json",
+      "path": "runs/run-fixture-1/result-evidence/search_catalog.json",
       "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }]
   }],

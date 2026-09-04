@@ -209,11 +209,36 @@ describe('runWithLadder — single-rung explicit', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
+    const originalStderrWrite = process.stderr.write;
+    let stderr = '';
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    const r = await (async () => {
+      try {
+        return await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
+      } finally {
+        process.stderr.write = originalStderrWrite;
+      }
+    })();
     expect(r.usedBackend).toBe('fetch');
     expect(r.result.ok).toBe(true);
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(0);
+    expect(r.attempts).toEqual([
+      expect.objectContaining({
+        backend: 'fetch',
+        outcome: 'ok',
+        detail: expect.stringMatching(
+          /^request completed in \d+ms; semantic verification is separate$/,
+        ),
+      }),
+    ]);
+    expect(stderr).toMatch(
+      /\[imprint backend\] fetch: REQUEST COMPLETED in \d+ms \(transport only; semantic verification is separate\)/,
+    );
+    expect(stderr).not.toContain('fetch: OK');
   });
 
   it('does NOT escalate on FORBIDDEN when ladder has only one rung', async () => {
@@ -1154,6 +1179,23 @@ describe('runWorkflowWithLadder', () => {
         validated: false,
       } as MintedJar;
     });
+    // This test is only about the fetch-bootstrap skip memo. Stop the ladder at
+    // a deterministic, non-escalatable CDP result instead of letting the
+    // unrelated stealth rung launch a real browser after the parser rejects
+    // the synthetic response.
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 401 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => ({
+        cookies: [],
+        ua: 'FixtureUA/148',
+        html: '',
+        bootstrapEpoch: Date.now(),
+        abckFlag: '0',
+        validated: true,
+      }),
+      close: async () => {},
+    }));
     const server = Bun.serve({
       port: 0,
       fetch: () => new Response('{}', { status: 200 }),
@@ -1469,6 +1511,105 @@ describe('renderWorkflowRequests — offline param verification', () => {
       },
     ]);
     expect(requests[1]?.headers['x-first']).toBe('from-seq-71');
+  });
+
+  it('uses separate navigation-request and background-response provenance offline', async () => {
+    const wf: Workflow = {
+      toolName: 'navigation_response_provenance_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          recordingRequestSeq: 10,
+          mode: 'navigate',
+          url: 'https://example.com/results',
+          headers: {},
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 20,
+            },
+          },
+          captures: [
+            {
+              name: 'token',
+              required: true,
+              capability: 'browser_bootstrap',
+              source: 'json',
+              path: 'token',
+            },
+            {
+              name: 'trace',
+              required: true,
+              capability: 'browser_bootstrap',
+              source: 'response_header',
+              header: 'x-page-trace',
+              mode: 'last',
+            },
+          ],
+        },
+        {
+          method: 'POST',
+          recordingRequestSeq: 30,
+          url: 'https://api.example.com/api/details',
+          headers: {
+            'x-result-token': '${state.token}',
+            'x-response-trace': '${state.trace}',
+          },
+        },
+      ],
+    };
+    const lookups: Array<{
+      requestSeq?: number;
+      responseRequestSeq?: number;
+    }> = [];
+
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      params: {},
+      requestProvenance: [
+        {
+          artifactRequestIndex: 0,
+          recordingRequestSeq: 10,
+          recordingResponseRequestSeq: 20,
+        },
+        { artifactRequestIndex: 1, recordingRequestSeq: 30 },
+      ],
+      recordedResponseFor: (_method, _url, lookup) => {
+        lookups.push({
+          requestSeq: lookup.provenance?.recordingRequestSeq,
+          responseRequestSeq: lookup.provenance?.recordingResponseRequestSeq,
+        });
+        const responseSeq =
+          lookup.provenance?.recordingResponseRequestSeq ?? lookup.provenance?.recordingRequestSeq;
+        return responseSeq === 20
+          ? {
+              status: 201,
+              body: '{"token":"page-created-token"}',
+              headers: {
+                'x-page-trace': 'selected-response-header',
+                'set-cookie': 'page_session=selected; Path=/api',
+              },
+              url: 'https://api.example.com/api/results',
+            }
+          : { status: 200, body: '{"done":true}' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://example.com/results',
+    });
+    expect(requests[1]?.headers['x-result-token']).toBe('page-created-token');
+    expect(requests[1]?.headers['x-response-trace']).toBe('selected-response-header');
+    expect(requests[1]?.headers.cookie).toContain('page_session=selected');
+    expect(lookups).toEqual([
+      { requestSeq: 10, responseRequestSeq: 20 },
+      { requestSeq: 30, responseRequestSeq: undefined },
+    ]);
   });
 
   it('seeds captured state for an isolated downstream request test', async () => {

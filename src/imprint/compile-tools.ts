@@ -1249,15 +1249,38 @@ function buildCompareRenderedRequestsTool(
       )
         return { result: 'artifactRequestIndex is outside workflow.requests', isError: true };
 
+      const responseProvenanceFailures = networkResponseRecordingFailures(workflow, session);
+      if (responseProvenanceFailures.length > 0) {
+        return {
+          result: JSON.stringify({
+            state: 'invalid_recording_response_provenance',
+            failures: responseProvenanceFailures,
+          }),
+          isError: true,
+        };
+      }
+
       const requestProvenance = workflow.requests.flatMap((request, index) =>
         request.recordingRequestSeq === undefined
           ? []
-          : [{ artifactRequestIndex: index, recordingRequestSeq: request.recordingRequestSeq }],
+          : [
+              {
+                artifactRequestIndex: index,
+                recordingRequestSeq: request.recordingRequestSeq,
+                ...(request.navigation?.networkResponse
+                  ? {
+                      recordingResponseRequestSeq:
+                        request.navigation.networkResponse.recordingResponseRequestSeq,
+                    }
+                  : {}),
+              },
+            ],
       );
       const lookups: Array<{
         requestOrdinal: number;
         artifactRequestIndex?: number;
         recordingRequestSeq?: number;
+        recordingResponseRequestSeq?: number;
       }> = [];
       let rendered: Awaited<ReturnType<typeof renderWorkflowRequests>>;
       const siteDir = dirname(toolDir);
@@ -1295,12 +1318,21 @@ function buildCompareRenderedRequestsTool(
                 ? {
                     artifactRequestIndex: lookup.provenance.artifactRequestIndex,
                     recordingRequestSeq: lookup.provenance.recordingRequestSeq,
+                    ...(lookup.provenance.recordingResponseRequestSeq === undefined
+                      ? {}
+                      : {
+                          recordingResponseRequestSeq:
+                            lookup.provenance.recordingResponseRequestSeq,
+                        }),
                   }
                 : {}),
             });
             const recorded = lookup.provenance
               ? session.requests.find(
-                  (request) => request.seq === lookup.provenance?.recordingRequestSeq,
+                  (request) =>
+                    request.seq ===
+                    (lookup.provenance?.recordingResponseRequestSeq ??
+                      lookup.provenance?.recordingRequestSeq),
                 )
               : undefined;
             return recorded?.response
@@ -1308,6 +1340,7 @@ function buildCompareRenderedRequestsTool(
                   status: recorded.response.status,
                   body: recorded.response.body ?? '',
                   headers: recorded.response.headers,
+                  url: recorded.url,
                 }
               : undefined;
           },
@@ -1341,6 +1374,7 @@ function buildCompareRenderedRequestsTool(
               requestOrdinal: lookup.requestOrdinal,
               artifactRequestIndex: lookup.artifactRequestIndex,
               recordingRequestSeq: lookup.recordingRequestSeq,
+              recordingResponseRequestSeq: lookup.recordingResponseRequestSeq,
               state: 'not_checked',
               reason: prepared ? 'recording request was unavailable' : 'request was not prepared',
             },
@@ -1409,6 +1443,9 @@ function buildCompareRenderedRequestsTool(
             requestOrdinal: lookup.requestOrdinal,
             artifactRequestIndex: lookup.artifactRequestIndex,
             recordingRequestSeq: lookup.recordingRequestSeq,
+            ...(lookup.recordingResponseRequestSeq === undefined
+              ? {}
+              : { recordingResponseRequestSeq: lookup.recordingResponseRequestSeq }),
             transformDeclared: workflow.requestTransformModule !== undefined,
             method: {
               recorded: recorded.method.toUpperCase(),
@@ -2529,6 +2566,113 @@ function findRecordedMatches(
   });
 }
 
+interface RecordedNetworkResponseSelection {
+  recorded?: CapturedRequest;
+  failure?: string;
+}
+
+/** Resolve a navigation's selected response with the same narrow mechanical
+ * matcher used live. Occurrence counts matching responses by request-start
+ * order inside this navigation's recording segment; a start without a response,
+ * later navigation, or combined recording cannot supply the evidence. */
+function resolveRecordedNetworkResponse(
+  request: Workflow['requests'][number],
+  requestIndex: number,
+  session: Session,
+): RecordedNetworkResponseSelection {
+  const matcher = request.navigation?.networkResponse;
+  if (!matcher) return {};
+  if (request.recordingRequestSeq === undefined) {
+    return {
+      failure: `workflow request index ${requestIndex} uses navigation.networkResponse but is missing its outer recordingRequestSeq`,
+    };
+  }
+  const outerRequestSeq = request.recordingRequestSeq;
+  const outerIndex = session.requests.findIndex((recorded) => recorded.seq === outerRequestSeq);
+  if (outerIndex < 0) {
+    return {
+      failure: `workflow request index ${requestIndex} selects recorded background response seq ${matcher.recordingResponseRequestSeq}, but its outer recordingRequestSeq ${request.recordingRequestSeq} does not exist`,
+    };
+  }
+  const declared = session.requests.find(
+    (recorded) => recorded.seq === matcher.recordingResponseRequestSeq,
+  );
+  if (!declared?.response) {
+    return {
+      failure: `workflow request index ${requestIndex} navigation.networkResponse references recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq}, but that recorded response does not exist`,
+    };
+  }
+  const nextRecordingBoundary = session.narration
+    .filter((entry) => entry.seq > outerRequestSeq && entry.text.startsWith('[Recording from '))
+    .sort((a, b) => a.seq - b.seq)[0]?.seq;
+  const navigationEvents = session.events
+    .filter(
+      (event) =>
+        event.type === 'navigation' &&
+        event.seq > outerRequestSeq &&
+        (nextRecordingBoundary === undefined || event.seq < nextRecordingBoundary),
+    )
+    .sort((a, b) => a.seq - b.seq);
+  const nextNavigationSeq = navigationEvents[1]?.seq;
+  const scopeEndSeq = Math.min(
+    nextRecordingBoundary ?? Number.POSITIVE_INFINITY,
+    nextNavigationSeq ?? Number.POSITIVE_INFINITY,
+  );
+  if (
+    matcher.recordingResponseRequestSeq < outerRequestSeq ||
+    matcher.recordingResponseRequestSeq >= scopeEndSeq
+  ) {
+    return {
+      failure: `workflow request index ${requestIndex} navigation.networkResponse recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq} falls outside the recorded navigation scope that starts at recordingRequestSeq ${outerRequestSeq}`,
+    };
+  }
+  const matches = session.requests
+    .slice(outerIndex)
+    .filter((recorded) => {
+      if (recorded.seq >= scopeEndSeq) return false;
+      if (!recorded.response || !recorded.url.includes(matcher.urlIncludes)) return false;
+      if (matcher.method && recorded.method.toLowerCase() !== matcher.method.toLowerCase()) {
+        return false;
+      }
+      if (
+        matcher.resourceType &&
+        recorded.resourceType.toLowerCase() !== matcher.resourceType.toLowerCase()
+      ) {
+        return false;
+      }
+      return true;
+    })
+    .sort((left, right) => left.seq - right.seq);
+  if (matches.length === 0) {
+    return {
+      failure: `workflow request index ${requestIndex} navigation.networkResponse has no matching recorded response in the navigation scope that starts at recordingRequestSeq ${outerRequestSeq}`,
+    };
+  }
+  const occurrence = matcher.occurrence ?? 1;
+  const selected = matches[occurrence - 1];
+  if (!selected) {
+    return {
+      failure: `workflow request index ${requestIndex} navigation.networkResponse occurrence ${occurrence} has no matching recorded response in its navigation scope (found ${matches.length})`,
+    };
+  }
+  if (selected.seq !== matcher.recordingResponseRequestSeq) {
+    return {
+      failure: `workflow request index ${requestIndex} navigation.networkResponse occurrence ${occurrence} selects recorded response seq ${selected.seq}, not declared recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq}`,
+    };
+  }
+  return { recorded: selected };
+}
+
+/** Factual, site-neutral validation that offline response evidence obeys the
+ * same scoped matcher and occurrence declared for live CDP navigation. */
+export function networkResponseRecordingFailures(workflow: Workflow, session: Session): string[] {
+  return workflow.requests.flatMap((request, index) => {
+    if (!request.navigation?.networkResponse) return [];
+    const failure = resolveRecordedNetworkResponse(request, index, session).failure;
+    return failure ? [failure] : [];
+  });
+}
+
 export function irreversibleProvenanceFailures(
   session: Session,
   workflow: ReturnType<typeof WorkflowSchema.parse>,
@@ -2610,7 +2754,7 @@ function setCookieDefines(headers: Record<string, string>, cookieName: string): 
  *  actually carry the value, so the agent can no longer ship a workflow whose
  *  capture recipe will silently fail at runtime. General — not specific to
  *  any one capture source or site. */
-function crossReferenceCaptures(
+export function crossReferenceCaptures(
   workflow: ReturnType<typeof WorkflowSchema.parse>,
   session: Session,
   candidateRequestSeqs?: number[],
@@ -2642,10 +2786,17 @@ function crossReferenceCaptures(
   // Per-request captures
   for (const [i, req] of workflow.requests.entries()) {
     if (!req.captures) continue;
+    const selectedNetworkResponse = req.navigation?.networkResponse
+      ? resolveRecordedNetworkResponse(req, i, session).recorded
+      : undefined;
     for (const cap of req.captures) {
       if (cap.required === false) continue;
-      const matches = findRecordedMatches(session, req.method, req.url, restrictSet);
-      const recorded = matches[0] ?? findRecordedMatches(session, req.method, req.url)[0];
+      const matches = req.navigation?.networkResponse
+        ? []
+        : findRecordedMatches(session, req.method, req.url, restrictSet);
+      const recorded = req.navigation?.networkResponse
+        ? selectedNetworkResponse
+        : (matches[0] ?? findRecordedMatches(session, req.method, req.url)[0]);
       if (!recorded) continue;
       const fail = validateCaptureAgainstRecording(
         cap,
@@ -2703,10 +2854,17 @@ export function crossReferenceReferencedStateCaptures(
   if (referenced.size === 0) return { failures, failedCaptureNames };
 
   // 2) Index captures by name (bootstrap + per-request).
-  const capByName = new Map<string, BootstrapCapture | RequestCapture>();
-  for (const cap of workflow.bootstrap?.captures ?? []) capByName.set(cap.name, cap);
-  for (const req of workflow.requests) {
-    for (const cap of req.captures ?? []) capByName.set(cap.name, cap);
+  const capByName = new Map<
+    string,
+    { capture: BootstrapCapture | RequestCapture; requestIndex?: number }
+  >();
+  for (const cap of workflow.bootstrap?.captures ?? []) {
+    capByName.set(cap.name, { capture: cap });
+  }
+  for (const [requestIndex, req] of workflow.requests.entries()) {
+    for (const cap of req.captures ?? []) {
+      capByName.set(cap.name, { capture: cap, requestIndex });
+    }
   }
 
   const htmlBodies = recordedHtmlBodiesForWorkflow(workflow, session);
@@ -2714,16 +2872,38 @@ export function crossReferenceReferencedStateCaptures(
   // 4) For each referenced state name produced by an html_regex/text_regex
   //    capture, assert the pattern matches at least one recorded HTML body.
   for (const name of referenced) {
-    const cap = capByName.get(name);
-    if (!cap) {
+    const captureOwner = capByName.get(name);
+    if (!captureOwner) {
       failures.push(
         `request references \${state.${name}}, but workflow.json declares no capture named "${name}". At runtime \${state.${name}} resolves to nothing → the request fails with STATE_MISSING. Add a bootstrap/request capture that produces "${name}", or remove the placeholder if the value is not actually needed.`,
       );
       failedCaptureNames.add(name);
       continue;
     }
+    const cap = captureOwner.capture;
     if (cap.source !== 'html_regex' && cap.source !== 'text_regex') continue;
     if (failedCaptureNames.has(name)) continue;
+    if (captureOwner.requestIndex !== undefined) {
+      const ownerRequest = workflow.requests[captureOwner.requestIndex];
+      if (ownerRequest?.navigation?.networkResponse) {
+        const selected = resolveRecordedNetworkResponse(
+          ownerRequest,
+          captureOwner.requestIndex,
+          session,
+        ).recorded;
+        if (!selected) continue;
+        const failure = validateCaptureAgainstRecording(
+          cap,
+          selected,
+          `request[${captureOwner.requestIndex}] ${ownerRequest.method} ${ownerRequest.url} selected network response`,
+        );
+        if (failure) {
+          failures.push(failure);
+          failedCaptureNames.add(name);
+        }
+        continue;
+      }
+    }
     let re: RegExp;
     try {
       re = new RegExp(cap.pattern);
@@ -2926,6 +3106,7 @@ export async function externalVerification(
           `workflow.json contains \${env.X} placeholders (${envMatches.join(', ')}). These require undeclared environment setup and break the artifact contract. Choose a declared parameter, credential, capture, response, generation step, transform, or evidence-backed literal as appropriate.`,
         );
       }
+      failures.push(...networkResponseRecordingFailures(parsedWorkflow, session));
       // Cross-reference every required capture against exact recording facts.
       // A capture that declares `response_header` but reads from a recorded
       // response with no such header (or `html_regex` whose pattern doesn't

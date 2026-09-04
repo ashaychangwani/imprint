@@ -101,10 +101,24 @@ producer runs before its consumers. Failed checks return factual evidence to
 the master, which can revise the affected tool and its dependants without
 rebuilding unrelated tools.
 
+Before planning, one retained researcher conversation per tool first proves the
+smallest useful API call. If part of the selected MVP contract or a required
+downstream value is still unproven, the researcher returns that working partial
+result instead of pretending it is complete or discarding it. Optional breadth
+waits for the later best-effort pass. Once all first passes finish, the master
+can send the exact missing question back to that same conversation with only
+the relevant sibling results and recorded requests.
+
 Every teach is fresh and stays in the foreground until it reaches a terminal
 result. There are no resume, phase-window, primary-tool, or partial-selection
 modes. A run succeeds only when every planned tool is verified; otherwise the
 terminal reports the failure honestly and exits non-zero.
+
+For an API operation that only the page can construct, a workflow navigation
+may explicitly select one matching live background response and return its body
+to the parser. The teaching agent derives that matcher from recording evidence;
+the runtime does not guess which request matters or turn the capability into a
+site rule. Playbooks remain the final fallback.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.

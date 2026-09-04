@@ -68,6 +68,8 @@ type UsedBackend = ConcreteBackend;
 
 export interface BackendAttemptFact {
   backend: UsedBackend;
+  /** `ok` means this runtime path completed. Independent semantic review may
+   * still reject the returned data. */
   outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
   detail: string;
   durationMs: number;
@@ -520,8 +522,15 @@ export async function runWithLadder(
     lastResultBackend = backend;
 
     if (result.ok) {
-      attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
-      log(`${backend}: OK in ${durationMs}ms`);
+      attempts.push({
+        backend,
+        outcome: 'ok',
+        detail: `request completed in ${durationMs}ms; semantic verification is separate`,
+        durationMs,
+      });
+      log(
+        `${backend}: REQUEST COMPLETED in ${durationMs}ms (transport only; semantic verification is separate)`,
+      );
       options?.winnerCache?.set(memoKey, backend);
       return { result, usedBackend: backend, attempts };
     }
@@ -1785,7 +1794,7 @@ export async function runWorkflowWithLadder(opts: {
     const idx = ladder.indexOf(memoWinner);
     const memoLadder = idx > 0 ? [...ladder.slice(idx), ...ladder.slice(0, idx)] : ladder;
     log(
-      `compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`,
+      `compile memo: ${memoKey} previously reached the site via ${memoWinner} (transport only); ladder: ${memoLadder.join(' → ')}`,
     );
     const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
       skipBootstrapSplice: true,
@@ -1876,6 +1885,9 @@ export interface RenderedRequestLookup {
   provenance?: {
     artifactRequestIndex: number;
     recordingRequestSeq: number;
+    /** Recorded request whose response is returned for an explicit page-network
+     * capture. The outgoing request is still compared with recordingRequestSeq. */
+    recordingResponseRequestSeq?: number;
   };
 }
 
@@ -1911,12 +1923,13 @@ export async function renderWorkflowRequests(opts: {
   requestProvenance?: readonly {
     artifactRequestIndex: number;
     recordingRequestSeq: number;
+    recordingResponseRequestSeq?: number;
   }[];
   recordedResponseFor?: (
     method: string,
     url: string,
     lookup: RenderedRequestLookup,
-  ) => { status: number; body: string; headers?: Record<string, string> } | undefined;
+  ) => { status: number; body: string; headers?: Record<string, string>; url?: string } | undefined;
 }): Promise<{ requests: RenderedRequest[]; result: ToolResult }> {
   const captured: RenderedRequest[] = [];
   let preparedArtifactRequestIndex: number | undefined;
@@ -1958,6 +1971,7 @@ export async function renderWorkflowRequests(opts: {
         // Ignore only the unrepresentable response field.
       }
     }
+    if (rec?.url) recordedHeaders.set('x-imprint-network-response-url', rec.url);
     return new Response(rec?.body ?? '{}', {
       status: rec?.status ?? 200,
       headers: recordedHeaders,

@@ -1056,7 +1056,14 @@ describe('requestTransformModule', () => {
           url: 'https://example.com/start',
           headers: {},
           mode: 'navigate',
-          navigation: { selector: '#ready' },
+          navigation: {
+            selector: '#ready',
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
+          },
         },
       ],
       site: 'test',
@@ -1103,11 +1110,90 @@ describe('requestTransformModule', () => {
             headers: {},
             body: undefined,
             selector: '#ready',
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
             actions: [{ action: 'click', selector: '[data-id="S1"]' }],
             resultSelector: '#done',
           },
         },
       ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects any request-transform override of a network response matcher', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-undefined-network-response-'));
+    const navigations: unknown[] = [];
+    const workflow: Workflow = {
+      toolName: 'test_undefined_network_response_patch',
+      intent: { description: 'test' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+              resourceType: 'Fetch',
+            },
+          },
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return {
+            navigation: {
+              networkResponse: {
+                urlIncludes: undefined,
+                method: undefined,
+              resourceType: 'XHR',
+              },
+            },
+          };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate(_url, options) {
+            navigations.push(options);
+            return new Response('{}', {
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
+      });
+      expect(navigations).toEqual([]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -1160,6 +1246,94 @@ describe('requestTransformModule', () => {
         ok: false,
         error: 'BAD_RESPONSE',
         message: expect.stringContaining('invalid navigation click actions'),
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects request transforms that change or introduce a network response matcher', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-response-provenance-'));
+    const workflow: Workflow = {
+      toolName: 'test_response_provenance_transform',
+      intent: { description: 'test' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+            },
+          },
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return { navigation: { networkResponse: { recordingResponseRequestSeq: 43 } } };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate() {
+            throw new Error('navigation should not run');
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
+      });
+
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return { navigation: { networkResponse: { urlIncludes: '/api/dynamic' } } };
+        }`,
+      );
+      const noMatcherWorkflow: Workflow = {
+        ...workflow,
+        requests: workflow.requests.map((request) => ({ ...request, navigation: undefined })),
+      };
+      const introduced = await executeWorkflow({
+        workflow: noMatcherWorkflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate() {
+            throw new Error('navigation should not run');
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+      expect(introduced).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
       });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

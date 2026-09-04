@@ -150,46 +150,197 @@ export const ApiResearchObservationSchema = strictObject({
   }),
 });
 export type ApiResearchObservation = z.infer<typeof ApiResearchObservationSchema>;
+export const ApiResearchRequestCatalogEntrySchema = strictObject({
+  recordingRequestSeq: z.number().int().nonnegative(),
+  method: utf8Text(1, 32),
+  urlShape: utf8Text(1, 1_000),
+  resourceType: utf8Text(0, 128),
+  responseStatus: z.number().int().nullable(),
+  responseMimeType: utf8Text(0, 256).nullable(),
+  requestBodyBytes: z.number().int().nonnegative(),
+  responseBodyBytes: z.number().int().nonnegative(),
+});
+export type ApiResearchRequestCatalogEntry = z.infer<typeof ApiResearchRequestCatalogEntrySchema>;
+export const ApiResearchRequiredLinkSchema = z.discriminatedUnion('role', [
+  strictObject({
+    role: z.literal('producer'),
+    toolName: SemanticToolCandidateSchema.shape.toolName,
+    resultPath: utf8Text(1, 512),
+  }),
+  strictObject({
+    role: z.literal('consumer'),
+    toolName: SemanticToolCandidateSchema.shape.toolName,
+    parameter: utf8Text(1, 128),
+  }),
+]);
+export type ApiResearchRequiredLink = z.infer<typeof ApiResearchRequiredLinkSchema>;
+const ApiResearchMissingProofSchema = z.array(Short).min(1).max(32);
+const ApiResearchRequestedSeqsSchema = z
+  .array(z.number().int().nonnegative())
+  .min(1)
+  .max(32)
+  .refine((seqs) => new Set(seqs).size === seqs.length, 'request sequences must be unique');
 export const ApiResearchInputSchema = strictObject({
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
   tool: PlannableTeachingToolSchema,
   evidence: PromptEvidenceProjectionSchema,
-  observations: z.array(ApiResearchObservationSchema).max(64),
+  /** Research iteration is bounded by the shared run deadline/cancellation,
+   * not an arbitrary attempt count. Retained Codex turns receive only the
+   * newest observation while other providers receive the factual history. */
+  observations: z.array(ApiResearchObservationSchema),
+  /** A payload-free discovery index. Exact URL/body/response evidence remains
+   * absent until the researcher explicitly asks to inspect a listed seq. */
+  requestCatalog: z
+    .array(ApiResearchRequestCatalogEntrySchema)
+    .max(256)
+    .refine(
+      (entries) =>
+        new Set(entries.map(({ recordingRequestSeq }) => recordingRequestSeq)).size ===
+        entries.length,
+      'request catalog sequences must be unique',
+    )
+    .optional(),
+  requestCatalogTruncated: z.boolean().optional(),
+  /** Position of the current bounded catalog page. Bodies are never included;
+   * `hasMore` lets the retained researcher walk every compact entry. */
+  requestCatalogPage: strictObject({
+    offset: z.number().int().nonnegative(),
+    totalEntries: z.number().int().nonnegative(),
+    hasMore: z.boolean(),
+  }).optional(),
+  /** Only this public tool's side of each required producer-consumer promise.
+   * Counterpart wiring and edge ids do not invalidate independent proof. */
+  requiredLinks: z.array(ApiResearchRequiredLinkSchema).max(128).optional(),
+  inspectedRequestSeqs: z
+    .array(z.number().int().nonnegative())
+    .max(256)
+    .refine((seqs) => new Set(seqs).size === seqs.length, 'request sequences must be unique')
+    .optional(),
+  researchPhase: z.enum(['mvp', 'follow_up']).optional(),
+  /** A bounded master-authored follow-up. The named sibling handoffs and
+   * request sequences are selected facts, not a dump of the whole recording. */
+  followUp: strictObject({
+    masterDirection: Reason,
+    missingProof: ApiResearchMissingProofSchema,
+    relevantRequestSeqs: z
+      .array(z.number().int().nonnegative())
+      .max(256)
+      .refine((seqs) => new Set(seqs).size === seqs.length, 'request sequences must be unique'),
+    siblingResearch: z.array(z.lazy(() => ApiResearchHandoffSchema)).max(64),
+  }).optional(),
+  /** The exact preceding handoff keeps follow-ups factual even when a provider
+   * cannot retain the live conversation. It may be hash-stale after an
+   * intentional same-name boundary revision, so the current tool remains the
+   * authority for the next candidate. */
+  previousProgress: z.lazy(() => ApiResearchHandoffSchema).optional(),
   blockReview: strictObject({ proposedReason: Reason }).optional(),
 });
 export type ApiResearchInput = z.infer<typeof ApiResearchInputSchema>;
 const ApiResearchBindingSchema = strictObject({
   runId: PromptIdSchema,
   recordingSha256: PromptShaSchema,
-  toolId: PromptToolIdSchema,
+  toolName: SemanticToolCandidateSchema.shape.toolName,
   compileInputsSha256: PromptShaSchema,
 });
 export const ApiResearchOutputSchema = strictObject({
   binding: ApiResearchBindingSchema,
-  action: z.enum(['test', 'proven', 'blocked']),
+  action: z.enum(['catalog', 'inspect', 'test', 'proven', 'partial', 'blocked']),
   candidate: ApiResearchCandidateSchema.optional(),
   basedOnObservationId: PromptIdSchema.optional(),
+  missingProof: ApiResearchMissingProofSchema.optional(),
+  requestedRequestSeqs: ApiResearchRequestedSeqsSchema.optional(),
   reason: Reason,
 });
-export type ApiResearchOutput = z.infer<typeof ApiResearchOutputSchema>;
 export const ApiResearchHandoffSchema = strictObject({
-  toolId: PromptToolIdSchema,
   toolName: SemanticToolCandidateSchema.shape.toolName,
   researchInputsSha256: PromptShaSchema,
-  status: z.enum(['proven', 'blocked']),
+  status: z.enum(['proven', 'partial', 'blocked']),
   summary: Reason,
   candidate: ApiResearchCandidateSchema.optional(),
   observation: ApiResearchObservationSchema.optional(),
+  /** Failed tests are retained for a blocker so the master sees facts rather
+   * than only the researcher's conclusion. Oldest-to-newest, bounded by host. */
+  observations: z.array(ApiResearchObservationSchema).max(64).optional(),
+  missingProof: ApiResearchMissingProofSchema.optional(),
 }).superRefine((handoff, ctx) => {
   if (handoff.status === 'proven' && (!handoff.candidate || !handoff.observation)) {
     schemaIssue(ctx, [], 'proven API research requires the exact candidate and observation');
   }
-  if (handoff.status === 'blocked' && (handoff.candidate || handoff.observation)) {
+  if (handoff.status === 'proven' && handoff.observation && !handoff.observation.result.ok) {
+    schemaIssue(
+      ctx,
+      ['observation', 'result', 'ok'],
+      'proven API research requires a successful candidate',
+    );
+  }
+  if (
+    handoff.status === 'partial' &&
+    (!handoff.candidate || !handoff.observation || !handoff.missingProof)
+  ) {
+    schemaIssue(
+      ctx,
+      [],
+      'partial API research requires its best tested candidate, observation, and missing proof',
+    );
+  }
+  if (handoff.status === 'partial' && handoff.observation && !handoff.observation.result.ok) {
+    schemaIssue(
+      ctx,
+      ['observation', 'result', 'ok'],
+      'partial API research must preserve a working candidate',
+    );
+  }
+  if (
+    handoff.status === 'blocked' &&
+    (handoff.candidate || handoff.observation || handoff.missingProof)
+  ) {
     schemaIssue(ctx, [], 'blocked API research cannot claim a proven candidate');
+  }
+  if (handoff.status === 'proven' && handoff.missingProof) {
+    schemaIssue(ctx, ['missingProof'], 'proven API research cannot have missing proof');
+  }
+  if (handoff.status !== 'blocked' && handoff.observations?.length) {
+    schemaIssue(
+      ctx,
+      ['observations'],
+      'failed observation history belongs only to blocked research',
+    );
+  }
+  if (
+    handoff.candidate &&
+    handoff.observation &&
+    digest(handoff.candidate) !== handoff.observation.candidateSha256
+  ) {
+    schemaIssue(ctx, ['candidate'], 'research handoff candidate differs from its observation');
   }
 });
 export type ApiResearchHandoff = z.infer<typeof ApiResearchHandoffSchema>;
+
+export const ApiResearchFollowUpDirectiveSchema = strictObject({
+  /** Agent-facing coordination uses the public name, never a journal identity. */
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  instruction: Reason,
+  missingProof: ApiResearchMissingProofSchema,
+  relevantToolNames: z
+    .array(SemanticToolCandidateSchema.shape.toolName)
+    .max(64)
+    .refine((names) => new Set(names).size === names.length, 'tool names must be unique'),
+  relevantRequestSeqs: z
+    .array(z.number().int().nonnegative())
+    .max(256)
+    .refine((seqs) => new Set(seqs).size === seqs.length, 'request sequences must be unique'),
+});
+export type ApiResearchFollowUpDirective = z.infer<typeof ApiResearchFollowUpDirectiveSchema>;
+export const ApiResearchNoProgressSchema = strictObject({
+  toolName: SemanticToolCandidateSchema.shape.toolName,
+  /** Digest of the exact partial handoff that was reviewed. */
+  partialHandoffSha256: PromptShaSchema,
+  /** Digest of tool boundary, partial handoff, directive, and relevant sibling identities. */
+  followUpStateSha256: PromptShaSchema,
+  reason: Reason,
+});
+export type ApiResearchNoProgress = z.infer<typeof ApiResearchNoProgressSchema>;
 const HostedImplementationPlanSchema = strictObject({
   ref: ImplementationPlanRefSchema,
   payload: ImplementationPlanPayloadSchema,
@@ -278,13 +429,10 @@ const MasterCurrentSchema = strictObject({
   plan: CurrentPlanProjectionSchema,
   snapshot: CurrentExecutionSnapshotSchema.optional(),
 });
-const ParameterAdviceSubmissionSchema = strictObject({
-  toolId: PromptToolIdSchema,
-  evidence: PromptEvidenceProjectionSchema,
-  advice: z.lazy(() => ParameterSelectionAdvisorOutputSchema),
-});
 export const MasterDecisionInputSchema = strictObject({
   phase: z.enum(['discovery', 'revision']),
+  /** `research_review` is the pre-planning two-way research checkpoint. */
+  decisionPurpose: z.enum(['research_review']).optional(),
   /** Explicit user scope or priorities. This guides semantic decisions but is not recording evidence. */
   userGuidance: utf8Text(1, 4_000).optional(),
   discovery: ToolSelectionAdvisorInputSchema,
@@ -292,13 +440,12 @@ export const MasterDecisionInputSchema = strictObject({
   toolSelectionAdvice: ToolSelectionAdvisorOutputSchema.optional(),
   plannerProposals: z.array(FocusedPlannerProposalSchema),
   apiResearch: z.array(ApiResearchHandoffSchema).default([]),
-  parameterAdvice: z.array(ParameterAdviceSubmissionSchema),
+  /** Exact factual no-op found after a completed master -> researcher cycle. */
+  researchNoProgress: z.array(ApiResearchNoProgressSchema).max(64).optional(),
   verificationFindings: PromptEvidenceProjectionSchema.optional(),
 }).superRefine((value, ctx) => {
   if ((value.phase === 'revision') !== Boolean(value.current))
     schemaIssue(ctx, ['current'], 'revision alone requires current-plan state');
-  if (value.phase === 'discovery' && value.parameterAdvice.length)
-    schemaIssue(ctx, ['parameterAdvice'], 'pre-plan decisions cannot carry parameter advice');
 });
 export type MasterDecisionInput = z.input<typeof MasterDecisionInputSchema>;
 const MasterDecisionBindingSchema = z.union([RunIdentitySchema, CurrentPlanBindingSchema]);
@@ -308,6 +455,8 @@ export const MasterDecisionOutputSchema = strictObject({
   reason: Reason,
   /** Public tool names whose retained planner/compiler conversations need work. */
   recallToolNames: z.array(SemanticToolCandidateSchema.shape.toolName),
+  /** Precise requests back to retained per-tool API researchers. */
+  researchFollowUps: z.array(ApiResearchFollowUpDirectiveSchema).optional(),
   desiredPlan: DesiredTeachingPlanSchema,
 });
 export const ParameterSelectionAdvisorInputSchema = strictObject({

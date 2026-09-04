@@ -845,6 +845,56 @@ describe('editable master teaching plan', () => {
     ).toThrow('playbook implementation plans cannot declare replay verification cases');
   });
 
+  it('keeps navigation and selected-response recording provenance distinct', () => {
+    const withResponseOrigin = structuredClone(implementationPayload('api', [1]));
+    const requestProvenance = withResponseOrigin.requestProvenance[0];
+    if (!requestProvenance) throw new Error('test implementation has no request provenance');
+    requestProvenance.recordingResponseRequestSeq = 2;
+    const replayCase = withResponseOrigin.verificationCases.find(({ check }) => check === 'replay');
+    if (!replayCase) throw new Error('test implementation has no replay case');
+    replayCase.provenance.recordingRequestSeqs = [1, 2];
+    const accepted = ImplementationPlanPayloadSchema.parse(withResponseOrigin);
+    const planned = tool('search-id', 'search', { params: [] });
+
+    expect(validateImplementationPlanForTool(accepted, planned, new Set([1, 2]))).toEqual(accepted);
+    expect(() => validateImplementationPlanForTool(accepted, planned, new Set([1]))).toThrow(
+      'unknown recorded response request seq 2',
+    );
+
+    const workflowBase = workflowRequestProvenance([1]);
+    const workflow = {
+      ...workflowBase,
+      requests: [
+        {
+          ...workflowBase.requests[0],
+          mode: 'navigate',
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 2,
+            },
+          },
+        },
+      ],
+    };
+    expect(
+      validateBuildWorkflowProvenance(workflow, accepted).requests[0]?.navigation?.networkResponse,
+    ).toMatchObject({ recordingResponseRequestSeq: 2 });
+
+    const wrongResponseOrigin = structuredClone(workflow);
+    const wrongMatcher = wrongResponseOrigin.requests[0]?.navigation?.networkResponse;
+    if (!wrongMatcher) throw new Error('test workflow has no response matcher');
+    wrongMatcher.recordingResponseRequestSeq = 3;
+    expect(() => validateBuildWorkflowProvenance(wrongResponseOrigin, accepted)).toThrow(
+      'accepted provenance requires 2',
+    );
+
+    const missingResponseOrigin = workflowRequestProvenance([1]);
+    expect(() => validateBuildWorkflowProvenance(missingResponseOrigin, accepted)).toThrow(
+      'missing accepted recordingResponseRequestSeq 2',
+    );
+  });
+
   it('binds implementation plans to the stable tool id', () => {
     const source = tool('source-id', 'search');
     const target = { ...structuredClone(source), id: 'target-id' };

@@ -38,6 +38,7 @@ import {
   proxyUrl,
 } from './chromium.ts';
 import { createLog } from './log.ts';
+import type { NavigationNetworkResponseMatcher } from './types.ts';
 
 const log = createLog('cdp-browser');
 
@@ -133,6 +134,7 @@ export interface CdpBrowserFetch {
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationNetworkResponseMatcher;
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -509,6 +511,293 @@ export function normalizeCdpResponseHeaders(
   return headers;
 }
 
+interface ObservedCdpNetworkResponse {
+  requestId: string;
+  url: string;
+  method?: string;
+  resourceType?: string;
+  /** Monotonic requestWillBeSent order within this browser session. */
+  requestSequence?: number;
+  loaderId?: string;
+  frameId?: string;
+  status: number;
+  headers: Record<string, string>;
+}
+
+type ObservedCdpNetworkRequest = Omit<ObservedCdpNetworkResponse, 'status' | 'headers'>;
+
+interface CapturedCdpNetworkResponse extends ObservedCdpNetworkResponse {
+  body: string | Uint8Array;
+}
+
+type CdpNetworkResponseCaptureOutcome =
+  | { ok: true; response: CapturedCdpNetworkResponse }
+  | { ok: false; message: string };
+
+interface CdpNetworkResponseCaptureBoundary {
+  /** Ignore requests that started before this navigation acquired the page. */
+  afterRequestSequence?: number;
+  /** Buffer matching events until the new navigation's loader/frame is known. */
+  deferUntilNavigationScope?: boolean;
+  /** Expected method of the top-level document that establishes the scope. */
+  navigationMethod?: string;
+}
+
+interface CdpNavigationScope {
+  loaderId?: string;
+  frameId?: string;
+}
+
+/** A one-navigation response selector. The caller feeds it factual CDP events;
+ * it deliberately performs no semantic classification of URLs or bodies. */
+export class CdpNetworkResponseCapture {
+  readonly outcome: Promise<CdpNetworkResponseCaptureOutcome>;
+
+  private readonly occurrence: number;
+  private readonly afterRequestSequence: number | undefined;
+  private readonly navigationMethod: string | undefined;
+  private navigationScopeReady: boolean;
+  private navigationScope: CdpNavigationScope = {};
+  private pendingRequests: ObservedCdpNetworkRequest[] = [];
+  private readonly matchingRequestOrder: ObservedCdpNetworkRequest[] = [];
+  private readonly responses = new Map<string, ObservedCdpNetworkResponse>();
+  private readonly failedRequestIds = new Set<string>();
+  private selectedRequestId: string | undefined;
+  private selected: ObservedCdpNetworkResponse | undefined;
+  private readingBody = false;
+  private bodyReadTask: Promise<void> | undefined;
+  private deadlineMs = Number.POSITIVE_INFINITY;
+  private settled = false;
+  private resolveOutcome!: (outcome: CdpNetworkResponseCaptureOutcome) => void;
+  private resolveStop!: () => void;
+  private readonly stop: Promise<void>;
+
+  constructor(
+    readonly matcher: NavigationNetworkResponseMatcher,
+    boundary: CdpNetworkResponseCaptureBoundary = {},
+  ) {
+    this.occurrence = matcher.occurrence ?? 1;
+    this.afterRequestSequence = boundary.afterRequestSequence;
+    this.navigationMethod = boundary.navigationMethod?.toLowerCase();
+    this.navigationScopeReady = boundary.deferUntilNavigationScope !== true;
+    this.outcome = new Promise((resolve) => {
+      this.resolveOutcome = resolve;
+    });
+    this.stop = new Promise((resolve) => {
+      this.resolveStop = resolve;
+    });
+  }
+
+  setDeadline(deadlineMs: number): void {
+    this.deadlineMs = deadlineMs;
+  }
+
+  /** Bind buffered responses to the loader/frame created by this navigation. */
+  setNavigationScope(scope: CdpNavigationScope): string | undefined {
+    if (this.navigationScopeReady) return this.selectedRequestId;
+    this.navigationScope = scope;
+    this.navigationScopeReady = true;
+    const pending = this.pendingRequests.sort(
+      (left, right) => (left.requestSequence ?? 0) - (right.requestSequence ?? 0),
+    );
+    this.pendingRequests = [];
+    for (const request of pending) {
+      if (this.considerRequest(request)) break;
+    }
+    return this.selectedRequestId;
+  }
+
+  /** Bind a form navigation only from a new main-document request. GET uses
+   * Page.navigate's returned loader instead, which is more precise. */
+  setNavigationScopeFromDocument(response: ObservedCdpNetworkResponse): string | undefined {
+    if (
+      (this.afterRequestSequence !== undefined &&
+        (response.requestSequence === undefined ||
+          response.requestSequence <= this.afterRequestSequence)) ||
+      (this.navigationMethod && response.method?.toLowerCase() !== this.navigationMethod)
+    ) {
+      return undefined;
+    }
+    return this.setNavigationScope({
+      ...(response.loaderId ? { loaderId: response.loaderId } : {}),
+      ...(response.frameId ? { frameId: response.frameId } : {}),
+    });
+  }
+
+  observeRequest(request: ObservedCdpNetworkRequest): boolean {
+    if (this.selectedRequestId || this.settled || !this.matchesMatcher(request)) return false;
+    if (
+      this.afterRequestSequence !== undefined &&
+      (request.requestSequence === undefined ||
+        request.requestSequence <= this.afterRequestSequence)
+    ) {
+      return false;
+    }
+    if (!this.navigationScopeReady) {
+      this.pendingRequests.push(request);
+      return false;
+    }
+    return this.considerRequest(request);
+  }
+
+  private considerRequest(request: ObservedCdpNetworkRequest): boolean {
+    if (!this.matchesNavigationScope(request)) return false;
+    this.matchingRequestOrder.push(request);
+    return this.selectEligibleResponse();
+  }
+
+  observeResponse(response: ObservedCdpNetworkResponse): boolean {
+    if (this.settled) return false;
+    this.responses.set(response.requestId, response);
+    return this.selectEligibleResponse();
+  }
+
+  selectedRequestIs(requestId: string): boolean {
+    return !this.settled && this.selectedRequestId === requestId;
+  }
+
+  async finish(
+    requestId: string,
+    readBody: (timeoutMs: number) => Promise<{ body: string; base64Encoded?: boolean }>,
+  ): Promise<void> {
+    const selected = this.selected;
+    if (!selected || !this.selectedRequestIs(requestId) || this.readingBody) return;
+    this.readingBody = true;
+    const task = this.readCompletedBody(selected, readBody);
+    this.bodyReadTask = task;
+    await task;
+  }
+
+  private async readCompletedBody(
+    selected: ObservedCdpNetworkResponse,
+    readBody: (timeoutMs: number) => Promise<{ body: string; base64Encoded?: boolean }>,
+  ): Promise<void> {
+    let lastError: unknown;
+    for (const delayMs of [0, 25, 75]) {
+      const remainingBeforeDelay = this.deadlineMs - Date.now();
+      if (remainingBeforeDelay <= 0) break;
+      if (delayMs > 0) {
+        await Promise.race([sleep(Math.min(delayMs, remainingBeforeDelay)), this.stop]);
+      }
+      if (this.settled) return;
+      try {
+        const remainingMs = Math.max(1, this.deadlineMs - Date.now());
+        const result = await Promise.race([readBody(remainingMs), this.stop.then(() => undefined)]);
+        if (!result || this.settled) return;
+        const body = result.base64Encoded
+          ? Uint8Array.from(Buffer.from(result.body, 'base64'))
+          : result.body;
+        this.settle({ ok: true, response: { ...selected, body } });
+        return;
+      } catch (error) {
+        lastError = error;
+        // A rejected early body read can be a CDP event-order race, so retry it.
+        // A timed-out CDP command is still running underneath the timeout and
+        // must not be duplicated; the navigation wrapper will close the page.
+        if (error instanceof Error && /timed out after \d+ms/.test(error.message)) break;
+      }
+    }
+    this.settle({
+      ok: false,
+      message: `matched network response ${JSON.stringify(selected.url)} but could not read its completed body before the navigation deadline${lastError === undefined ? '' : `: ${lastError instanceof Error ? lastError.message : String(lastError)}`}`,
+    });
+  }
+
+  async waitForBodyRead(): Promise<void> {
+    await this.bodyReadTask;
+  }
+
+  cancel(message = 'browser navigation response capture was cancelled'): void {
+    this.settle({ ok: false, message });
+  }
+
+  fail(requestId: string, errorText?: string): boolean {
+    if (this.selectedRequestIs(requestId)) {
+      this.settle({
+        ok: false,
+        message: `matched network response ${JSON.stringify(this.selected?.url)} failed before its body completed${errorText ? `: ${errorText}` : ''}`,
+      });
+      return false;
+    }
+    this.failedRequestIds.add(requestId);
+    return this.selectEligibleResponse();
+  }
+
+  timeoutMessage(timeoutMs: number): string {
+    if (this.selected) {
+      return `browser navigation timed out after ${timeoutMs}ms after receiving ${JSON.stringify(this.selected.url)} but before its response body completed`;
+    }
+    return `browser navigation timed out after ${timeoutMs}ms waiting for ${describeNetworkResponseMatcher(this.matcher)}`;
+  }
+
+  private matchesMatcher(response: ObservedCdpNetworkRequest): boolean {
+    if (!response.url.includes(this.matcher.urlIncludes)) return false;
+    if (
+      this.matcher.method &&
+      response.method?.toLowerCase() !== this.matcher.method.toLowerCase()
+    ) {
+      return false;
+    }
+    if (
+      this.matcher.resourceType &&
+      response.resourceType?.toLowerCase() !== this.matcher.resourceType.toLowerCase()
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private matchesNavigationScope(response: ObservedCdpNetworkRequest): boolean {
+    if (this.navigationScope.loaderId) {
+      return response.loaderId === this.navigationScope.loaderId;
+    }
+    if (this.navigationScope.frameId) {
+      return response.frameId === this.navigationScope.frameId;
+    }
+    return true;
+  }
+
+  /** Select the Nth matching request that actually produced a response. Keep
+   * request-start order among those responses so this matches recorded request
+   * provenance, while failed/cancelled starts do not consume an occurrence. */
+  private selectEligibleResponse(): boolean {
+    if (this.selectedRequestId || this.settled) return false;
+    let responseOccurrence = 0;
+    const ordered = [...this.matchingRequestOrder].sort(
+      (left, right) => (left.requestSequence ?? 0) - (right.requestSequence ?? 0),
+    );
+    for (const request of ordered) {
+      const response = this.responses.get(request.requestId);
+      if (response) {
+        responseOccurrence++;
+        if (responseOccurrence !== this.occurrence) continue;
+        this.selectedRequestId = request.requestId;
+        this.selected = response;
+        return true;
+      }
+      // A still-pending earlier match may yet become an earlier recorded
+      // response, so do not choose a later response until it resolves.
+      if (!this.failedRequestIds.has(request.requestId)) return false;
+    }
+    return false;
+  }
+
+  private settle(outcome: CdpNetworkResponseCaptureOutcome): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.resolveStop();
+    this.resolveOutcome(outcome);
+  }
+}
+
+function describeNetworkResponseMatcher(matcher: NavigationNetworkResponseMatcher): string {
+  const criteria = [`network response with URL containing ${JSON.stringify(matcher.urlIncludes)}`];
+  if (matcher.method) criteria.push(`method ${matcher.method.toUpperCase()}`);
+  if (matcher.resourceType) criteria.push(`resource type ${matcher.resourceType}`);
+  if ((matcher.occurrence ?? 1) > 1) criteria.push(`occurrence ${matcher.occurrence}`);
+  return criteria.join(', ');
+}
+
 /** The registrable domain (eTLD+1) of a host. Private suffixes are enabled so
  *  independent tenants such as `foo.github.io` never share browser credentials.
  *  Used to decide whether a cross-origin request is a SIBLING
@@ -711,6 +1000,17 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     status: number;
     headers: Record<string, string>;
   } | null = null;
+  let activeNetworkResponseCapture: CdpNetworkResponseCapture | null = null;
+  let documentScopedNetworkCapture: CdpNetworkResponseCapture | null = null;
+  let requestSequence = 0;
+  const requestFacts = new Map<
+    string,
+    { method: string; requestSequence: number; loaderId?: string; frameId?: string }
+  >();
+  const completedRequestIds = new Set<string>();
+  const activeNetworkBodyReads = new Set<Promise<void>>();
+  let finishActiveNetworkResponse: ((requestId: string) => void) | undefined;
+  let navigationInProgress = false;
 
   async function close(): Promise<void> {
     const c = client;
@@ -724,6 +1024,13 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     currentPageUrl = navUrl;
     mainFrameId = undefined;
     lastDocumentResponse = null;
+    activeNetworkResponseCapture = null;
+    documentScopedNetworkCapture = null;
+    requestSequence = 0;
+    requestFacts.clear();
+    completedRequestIds.clear();
+    activeNetworkBodyReads.clear();
+    finishActiveNetworkResponse = undefined;
     try {
       await withTimeout(Promise.resolve(c?.close()), 'CDP client close', 2_000);
     } catch {
@@ -736,6 +1043,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     } catch {
       /* ignore — PID stays registered; exit handler will kill it */
     }
+    navigationInProgress = false;
   }
 
   async function ensure(): Promise<CdpClient> {
@@ -781,17 +1089,108 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
       bootstrapResponseHeaders = {};
       let navDocumentResponseUrl = '';
+      finishActiveNetworkResponse = (requestId: string): void => {
+        const capture = activeNetworkResponseCapture;
+        if (!capture?.selectedRequestIs(requestId)) return;
+        void capture.finish(requestId, async (remainingMs) => {
+          const rawRead = Network.getResponseBody({ requestId });
+          const trackedRead = rawRead.then(
+            () => undefined,
+            () => undefined,
+          );
+          activeNetworkBodyReads.add(trackedRead);
+          void trackedRead.finally(() => {
+            activeNetworkBodyReads.delete(trackedRead);
+          });
+          return await withTimeout(
+            rawRead,
+            'CDP Network.getResponseBody(navigation response)',
+            Math.max(1, Math.min(cdpCommandTimeoutMs, remainingMs)),
+          );
+        });
+      };
+      Network.requestWillBeSent(
+        (event: {
+          requestId?: string;
+          loaderId?: string;
+          frameId?: string;
+          type?: string;
+          request?: { method?: string; url?: string };
+        }) => {
+          if (!event.requestId) return;
+          requestSequence++;
+          requestFacts.set(event.requestId, {
+            method: event.request?.method ?? '',
+            requestSequence,
+            ...(event.loaderId ? { loaderId: event.loaderId } : {}),
+            ...(event.frameId ? { frameId: event.frameId } : {}),
+          });
+          if (event.request?.url) {
+            activeNetworkResponseCapture?.observeRequest({
+              requestId: event.requestId,
+              url: event.request.url,
+              method: event.request.method,
+              resourceType: event.type,
+              requestSequence,
+              loaderId: event.loaderId,
+              frameId: event.frameId,
+            });
+          }
+        },
+      );
       const onResponseReceived = (event: {
+        requestId?: string;
+        loaderId?: string;
         type?: string;
         frameId?: string;
-        response?: { url?: string; status?: number; headers?: Record<string, unknown> };
+        response?: {
+          url?: string;
+          status?: number;
+          headers?: Record<string, unknown>;
+        };
       }) => {
-        if (event.type !== 'Document') return;
-        if (mainFrameId && event.frameId && event.frameId !== mainFrameId) return;
         const url = event.response?.url;
         if (!url) return;
-        currentPageUrl = url;
         const headers = normalizeCdpResponseHeaders(event.response?.headers ?? {});
+        if (event.requestId) {
+          const facts = requestFacts.get(event.requestId);
+          const observed = {
+            requestId: event.requestId,
+            url,
+            method: facts?.method,
+            resourceType: event.type,
+            requestSequence: facts?.requestSequence,
+            loaderId: facts?.loaderId ?? event.loaderId,
+            frameId: facts?.frameId ?? event.frameId,
+            status: Number(event.response?.status ?? 200),
+            headers,
+          };
+          if (
+            event.type === 'Document' &&
+            (!mainFrameId || !event.frameId || event.frameId === mainFrameId)
+          ) {
+            const selectedRequestId =
+              documentScopedNetworkCapture?.setNavigationScopeFromDocument(observed);
+            if (selectedRequestId && completedRequestIds.has(selectedRequestId)) {
+              finishActiveNetworkResponse?.(selectedRequestId);
+            }
+          }
+          const selected = activeNetworkResponseCapture?.observeResponse({
+            ...observed,
+          });
+          if (selected) {
+            for (const completedRequestId of completedRequestIds) {
+              if (activeNetworkResponseCapture?.selectedRequestIs(completedRequestId)) {
+                finishActiveNetworkResponse?.(completedRequestId);
+                break;
+              }
+            }
+          }
+          requestFacts.delete(event.requestId);
+        }
+        if (event.type !== 'Document') return;
+        if (mainFrameId && event.frameId && event.frameId !== mainFrameId) return;
+        currentPageUrl = url;
         lastDocumentResponse = {
           url,
           status: Number(event.response?.status ?? 200),
@@ -808,6 +1207,24 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         bootstrapResponseHeaders = headers;
       };
       Network.responseReceived(onResponseReceived);
+      Network.loadingFinished((event: { requestId?: string }) => {
+        if (!event.requestId) return;
+        if (activeNetworkResponseCapture) completedRequestIds.add(event.requestId);
+        finishActiveNetworkResponse?.(event.requestId);
+      });
+      Network.loadingFailed((event: { requestId?: string; errorText?: string }) => {
+        if (!event.requestId) return;
+        const selected = activeNetworkResponseCapture?.fail(event.requestId, event.errorText);
+        if (selected) {
+          for (const completedRequestId of completedRequestIds) {
+            if (activeNetworkResponseCapture?.selectedRequestIs(completedRequestId)) {
+              finishActiveNetworkResponse?.(completedRequestId);
+              break;
+            }
+          }
+        }
+        requestFacts.delete(event.requestId);
+      });
       // Plant the high-trust seed cookies (the recording's validated Akamai jar)
       // BEFORE navigating, so the first request to the protected origin carries the
       // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
@@ -1320,7 +1737,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     );
   };
 
-  const navigate = async (
+  const navigateOnce = async (
+    c: CdpClient,
     rawUrl: string,
     options: {
       method?: string;
@@ -1333,10 +1751,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationNetworkResponseMatcher;
       cookie?: { name: string; domain?: string; path?: string };
-    } = {},
+    },
+    networkCapture: CdpNetworkResponseCapture | null,
   ): Promise<Response> => {
-    const c = await ensure();
     const startUrl = await readCurrentPageUrl(c);
     const targetUrl = new URL(rawUrl, startUrl).toString();
     const method = (options.method ?? 'GET').toUpperCase();
@@ -1348,6 +1767,17 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     }
     const timeoutMs = options.timeoutMs ?? 60_000;
     const pollIntervalMs = options.pollIntervalMs ?? 250;
+    const deadline = Date.now() + timeoutMs;
+    networkCapture?.setDeadline(deadline);
+    const captureDefinesCompletion = Boolean(
+      networkCapture &&
+        options.waitUntil === undefined &&
+        options.urlIncludes === undefined &&
+        options.selector === undefined &&
+        options.cookie === undefined &&
+        (options.actions?.length ?? 0) === 0 &&
+        options.resultSelector === undefined,
+    );
     const lifecyclePromise = (
       options.waitUntil === 'domcontentloaded'
         ? c.Page.domContentEventFired()
@@ -1359,12 +1789,21 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     lastDocumentResponse = null;
     if (method === 'GET') {
-      await withTimeout(
+      const navigation = await withTimeout(
         c.Page.navigate({ url: targetUrl }),
         `CDP Page.navigate(${new URL(targetUrl).origin})`,
         Math.min(timeoutMs, cdpCommandTimeoutMs),
       );
+      const selectedRequestId = networkCapture?.setNavigationScope({
+        ...(navigation.loaderId ? { loaderId: navigation.loaderId } : {}),
+        ...(navigation.frameId ? { frameId: navigation.frameId } : {}),
+      });
+      if (selectedRequestId && completedRequestIds.has(selectedRequestId)) {
+        // The response can complete before Page.navigate returns its loader.
+        finishActiveNetworkResponse?.(selectedRequestId);
+      }
     } else {
+      documentScopedNetworkCapture = networkCapture;
       const evaluation = await withTimeout(
         c.Runtime.evaluate({
           expression: buildFormPostNavigationExpr(targetUrl, options.body ?? ''),
@@ -1537,10 +1976,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       return evaluated.result.value === true;
     };
     const hasPredicate = Boolean(options.urlIncludes || options.selector || options.cookie);
-    const deadline = Date.now() + timeoutMs;
-    if (!hasPredicate) {
+    if (!captureDefinesCompletion && !hasPredicate) {
       await withTimeout(lifecyclePromise, `CDP Page.${options.waitUntil ?? 'load'}`, timeoutMs);
-    } else {
+    } else if (!captureDefinesCompletion) {
       let lastUrl = targetUrl;
       while (Date.now() < deadline) {
         lastUrl = await readCurrentPageUrl(c);
@@ -1648,6 +2086,39 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
     }
 
+    if (networkCapture) {
+      let captured: CdpNetworkResponseCaptureOutcome;
+      try {
+        captured = await withTimeout(
+          networkCapture.outcome,
+          describeNetworkResponseMatcher(networkCapture.matcher),
+          Math.max(1, deadline - Date.now()),
+        );
+      } catch {
+        throw new Error(networkCapture.timeoutMessage(timeoutMs));
+      }
+      if (!captured.ok) throw new Error(captured.message);
+
+      const response = captured.response;
+      if (!captureDefinesCompletion) currentPageUrl = await readCurrentPageUrl(c);
+      const headers = new Headers(response.headers);
+      // CDP returns the decoded body, so wire-encoding/length headers would be
+      // inaccurate on the synthetic Response consumed by the workflow.
+      headers.delete('content-encoding');
+      headers.delete('content-length');
+      headers.delete('transfer-encoding');
+      headers.set('x-imprint-final-url', currentPageUrl);
+      headers.set('x-imprint-network-response-url', response.url);
+      headers.set('x-imprint-response-source', 'page-network');
+      if (response.method) headers.set('x-imprint-network-request-method', response.method);
+      if (response.resourceType) {
+        headers.set('x-imprint-network-resource-type', response.resourceType);
+      }
+      const status = response.status >= 200 && response.status <= 599 ? response.status : 200;
+      const responseBody = [204, 205, 304].includes(status) ? null : response.body;
+      return new Response(responseBody, { status, headers });
+    }
+
     currentPageUrl = await readCurrentPageUrl(c);
     let html = '';
     try {
@@ -1676,6 +2147,48 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         'x-imprint-final-url': currentPageUrl,
       }),
     });
+  };
+
+  const navigate: NonNullable<CdpBrowserFetch['navigate']> = async (rawUrl, options = {}) => {
+    if (navigationInProgress) {
+      throw new Error('another browser navigation is already active in this workflow session');
+    }
+    navigationInProgress = true;
+    let networkCapture: CdpNetworkResponseCapture | null = null;
+    try {
+      const c = await ensure();
+      networkCapture = options.networkResponse
+        ? new CdpNetworkResponseCapture(options.networkResponse, {
+            afterRequestSequence: requestSequence,
+            deferUntilNavigationScope: true,
+            navigationMethod: options.method ?? 'GET',
+          })
+        : null;
+      if (networkCapture) {
+        completedRequestIds.clear();
+        activeNetworkResponseCapture = networkCapture;
+      }
+      return await navigateOnce(c, rawUrl, options, networkCapture);
+    } finally {
+      networkCapture?.cancel();
+      await networkCapture?.waitForBodyRead();
+      // Let a just-completed raw CDP read remove itself from the tracked set.
+      await Promise.resolve();
+      const hasDetachedBodyRead = activeNetworkBodyReads.size > 0;
+      if (activeNetworkResponseCapture === networkCapture) {
+        activeNetworkResponseCapture = null;
+        completedRequestIds.clear();
+      }
+      if (documentScopedNetworkCapture === networkCapture) {
+        documentScopedNetworkCapture = null;
+      }
+      // CDP body reads cannot be cancelled individually. If one ignored the
+      // navigation deadline, close this browser so it cannot overlap a later
+      // navigation from the pool; the same transport object can bootstrap a
+      // fresh browser on its next call.
+      if (hasDetachedBodyRead) await close();
+      else navigationInProgress = false;
+    }
   };
 
   return {

@@ -824,7 +824,12 @@ describe('auth action runtime', () => {
     const browser: BrowserNavigationTransport = {
       async navigate(url, options) {
         navigations.push({ url, options });
-        return new Response('{"arrived":true}');
+        return new Response('{"arrived":true}', {
+          headers: {
+            'x-imprint-network-response-url': 'https://api.fixture.test/api/complete',
+            'set-cookie': 'page_session=selected; Domain=api.fixture.test; Path=/api',
+          },
+        });
       },
       async snapshotCookies() {
         return [];
@@ -837,8 +842,24 @@ describe('auth action runtime', () => {
           url: 'https://fixture.test/document',
           headers: {},
           mode: 'navigate',
-          navigation: { urlIncludes: '/complete' },
-          captures: [{ source: 'json', name: 'arrived', path: 'arrived', equals: true }],
+          navigation: {
+            urlIncludes: '/complete',
+            networkResponse: {
+              urlIncludes: '/api/complete',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
+          },
+          captures: [
+            { source: 'json', name: 'arrived', path: 'arrived', equals: true },
+            {
+              source: 'cookie',
+              name: 'selected_session',
+              cookie: 'page_session',
+              domain: 'api.fixture.test',
+              path: '/api',
+            },
+          ],
         },
       ],
       authConfig: {
@@ -846,7 +867,7 @@ describe('auth action runtime', () => {
         actions: {
           navigate_document: {
             steps: [{ request: 0 }],
-            outcome: { type: 'success', evidence: ['arrived'] },
+            outcome: { type: 'success', evidence: ['arrived', 'selected_session'] },
           },
         },
         persist: [],
@@ -872,6 +893,11 @@ describe('auth action runtime', () => {
           headers: {},
           body: undefined,
           urlIncludes: '/complete',
+          networkResponse: {
+            urlIncludes: '/api/complete',
+            recordingResponseRequestSeq: 42,
+            method: 'POST',
+          },
         },
       },
     ]);

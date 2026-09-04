@@ -21,11 +21,13 @@ import {
   type MasterDecisionInput,
   MasterDecisionOutputSchema,
   type ParameterSelectionAdvisorInput,
+  ParameterSelectionAdvisorOutputSchema,
   type ToolSelectionAdvisorInput,
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
   apiResearchInputsSha256,
+  apiResearchRequiredLinks,
   requestMasterDecision as requestValidatedMasterDecision,
 } from '../src/imprint/master-teach-agents.ts';
 import {
@@ -45,12 +47,12 @@ import {
 import { type Session, SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 const SITE = 'foreground-e2e-fixture';
-const PRODUCER_ID = 'search_items_tool';
-const CONSUMER_ID = 'get_item_tool';
-const LEAF_ID = 'render_item_tool';
 const PRODUCER_NAME = 'search_items';
 const CONSUMER_NAME = 'get_item';
 const LEAF_NAME = 'render_item';
+const PRODUCER_ID = PRODUCER_NAME;
+const CONSUMER_ID = CONSUMER_NAME;
+const LEAF_ID = LEAF_NAME;
 const EDGE_ID = 'search-item-id';
 const LEAF_EDGE_ID = 'get-rendered-item-id';
 const FIXED_NOW = new Date('2026-08-29T12:00:00.000Z');
@@ -244,6 +246,32 @@ function threeToolSyntheticSessionPath(root: string): string {
   return path;
 }
 
+function largeCatalogSyntheticSessionPath(root: string): { path: string; lastRequestSeq: number } {
+  const path = syntheticSessionPath(root);
+  const session = SessionSchema.parse(readJson(path));
+  const extraRequests = Array.from({ length: 300 }, (_, index) => {
+    const seq = index + 10;
+    return {
+      seq,
+      timestamp: 300 + index,
+      method: 'POST' as const,
+      url: `https://fixture.invalid/api/neighbor/${seq}`,
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ seq }),
+      resourceType: 'Fetch' as const,
+      response: {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+        mimeType: 'application/json',
+        body: JSON.stringify({ seq, usable: seq === 309 }),
+      },
+    };
+  });
+  session.requests.push(...extraRequests);
+  writeFileSync(path, `${JSON.stringify(SessionSchema.parse(session))}\n`);
+  return { path, lastRequestSeq: 309 };
+}
+
 function preparedSession(
   session: Session,
   selectedSeqs = session.requests.map(({ seq }) => seq),
@@ -390,8 +418,8 @@ async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
     binding: {
       runId: researchInput.run.runId,
       recordingSha256: researchInput.run.recordingSha256,
-      toolId: tool.id,
-      compileInputsSha256: apiResearchInputsSha256(tool),
+      toolName: tool.candidate.toolName,
+      compileInputsSha256: apiResearchInputsSha256(tool, researchInput.requiredLinks),
     },
     action: observation ? ('proven' as const) : ('test' as const),
     candidate,
@@ -837,6 +865,646 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(plannerCalls).toBe(2);
       expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('lets a retained researcher page to an omitted request and inspect an earlier page', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recording = largeCatalogSyntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-research-catalog-pagination',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      if (!baseResearch) throw new Error('fixture API researcher is missing');
+      let catalogTurns = 0;
+      let inspectedAcrossPages = false;
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recording.path,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (
+              input.tool.candidate.toolName === PRODUCER_NAME &&
+              input.observations.length === 0 &&
+              !input.inspectedRequestSeqs?.includes(recording.lastRequestSeq)
+            ) {
+              if (
+                !input.requestCatalog?.some(
+                  ({ recordingRequestSeq }) => recordingRequestSeq === recording.lastRequestSeq,
+                )
+              ) {
+                expect(input.requestCatalogPage?.hasMore).toBeTrue();
+                catalogTurns += 1;
+                return {
+                  binding: decision.binding,
+                  action: 'catalog' as const,
+                  reason: 'Read the next compact page to find the relevant neighboring call.',
+                };
+              }
+              expect(input.requestCatalogPage?.offset).toBeGreaterThan(0);
+              expect(
+                input.requestCatalog?.some(({ recordingRequestSeq }) => recordingRequestSeq === 2),
+              ).toBeFalse();
+              return {
+                binding: decision.binding,
+                action: 'inspect' as const,
+                requestedRequestSeqs: [2, recording.lastRequestSeq],
+                reason: 'Inspect the newly found call and the relevant call from an earlier page.',
+              };
+            }
+            if (
+              input.tool.candidate.toolName === PRODUCER_NAME &&
+              input.inspectedRequestSeqs?.includes(recording.lastRequestSeq)
+            ) {
+              expect(input.inspectedRequestSeqs).toContain(2);
+              expect(JSON.stringify(input.evidence)).toContain(
+                `/api/neighbor/${recording.lastRequestSeq}`,
+              );
+              inspectedAcrossPages = true;
+            }
+            return decision;
+          },
+        },
+      );
+
+      expect(catalogTurns).toBeGreaterThan(0);
+      expect(inspectedAcrossPages).toBeTrue();
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('returns a partial MVP to the same researcher with master-selected sibling evidence', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-partial-research-follow-up',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner)
+        throw new Error('fixture research roles are missing');
+
+      let returnedPartial = false;
+      let sawFollowUp = false;
+      let requestedNeighborInspection = false;
+      let sawNeighborInspection = false;
+      let expectedRefreshedProducerHash: string | undefined;
+      let sawRefreshedProducer = false;
+      let plannerCalls = 0;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (
+              input.tool.candidate.toolName === PRODUCER_NAME &&
+              expectedRefreshedProducerHash &&
+              decision.binding.compileInputsSha256 === expectedRefreshedProducerHash
+            ) {
+              sawRefreshedProducer = true;
+            }
+            if (
+              input.tool.candidate.toolName === CONSUMER_NAME &&
+              !input.followUp &&
+              input.observations.length === 0
+            ) {
+              if (!requestedNeighborInspection) {
+                requestedNeighborInspection = true;
+                expect(
+                  input.requestCatalog?.some(
+                    ({ recordingRequestSeq }) => recordingRequestSeq === 1,
+                  ),
+                ).toBeTrue();
+                return {
+                  binding: decision.binding,
+                  action: 'inspect' as const,
+                  requestedRequestSeqs: [1],
+                  reason: 'Inspect the neighboring producer request before testing the consumer.',
+                };
+              }
+              expect(input.inspectedRequestSeqs).toContain(1);
+              expect(JSON.stringify(input.evidence)).toContain('https://fixture.invalid/api/items');
+              sawNeighborInspection = true;
+            }
+            if (
+              input.tool.candidate.toolName === CONSUMER_NAME &&
+              decision.action === 'proven' &&
+              !input.followUp &&
+              !returnedPartial
+            ) {
+              returnedPartial = true;
+              return {
+                ...decision,
+                action: 'partial' as const,
+                missingProof: ['Confirm the producer identifier feeds the consumer request.'],
+                reason: 'The consumer MVP works, but its producer link still needs proof.',
+              };
+            }
+            if (input.tool.candidate.toolName === CONSUMER_NAME && input.followUp) {
+              sawFollowUp = true;
+              expect(input.researchPhase).toBe('follow_up');
+              expect(input.followUp.masterDirection).toContain('producer');
+              expect(input.followUp.siblingResearch.map(({ toolName }) => toolName)).toEqual([
+                PRODUCER_NAME,
+              ]);
+              expect(input.followUp.siblingResearch[0]?.researchInputsSha256).toBe(
+                expectedRefreshedProducerHash,
+              );
+              expect(input.followUp.relevantRequestSeqs).toEqual([1]);
+              expect(input.evidence.payload.entries.length).toBeGreaterThan(1);
+            }
+            return decision;
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            const partial = (input.apiResearch ?? []).find(
+              ({ toolName, status }) => toolName === CONSUMER_NAME && status === 'partial',
+            );
+            if (input.decisionPurpose === 'research_review' && partial) {
+              const desiredPlan = desiredFromCurrent(input);
+              const producer = desiredPlan.tools.find(
+                ({ candidate }) => candidate.toolName === PRODUCER_NAME,
+              );
+              if (!producer) throw new Error('fixture plan lost its producer');
+              producer.candidate.expectedOutput =
+                'Fixture items with identifiers required by the selected consumer.';
+              expectedRefreshedProducerHash = apiResearchInputsSha256(
+                producer,
+                apiResearchRequiredLinks(desiredPlan, producer),
+              );
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'accepted',
+                reason: 'Return the working consumer MVP for one focused chain follow-up.',
+                recallToolNames: [],
+                researchFollowUps: [
+                  {
+                    toolName: CONSUMER_NAME,
+                    instruction:
+                      'Use the producer handoff and request 1 to prove the identifier flow.',
+                    missingProof: partial.missingProof,
+                    relevantToolNames: [PRODUCER_NAME],
+                    relevantRequestSeqs: [1],
+                  },
+                ],
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannerCalls += 1;
+            expect(sawFollowUp).toBeTrue();
+            expect((input.apiResearch ?? []).every(({ status }) => status === 'proven')).toBeTrue();
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(returnedPartial).toBeTrue();
+      expect(sawFollowUp).toBeTrue();
+      expect(requestedNeighborInspection).toBeTrue();
+      expect(sawNeighborInspection).toBeTrue();
+      expect(sawRefreshedProducer).toBeTrue();
+      expect(plannerCalls).toBe(2);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('does not refresh producer research when only the consumer input mapping changes', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-side-local-research-obligations',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      if (!baseResearch || !baseMaster) throw new Error('fixture research roles are missing');
+      let producerTurns = 0;
+      let returnedPartial = false;
+      let sawRemappedConsumer = false;
+      let initialProducerResearchSha256: string | undefined;
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName === PRODUCER_NAME) {
+              producerTurns += 1;
+              initialProducerResearchSha256 ??= decision.binding.compileInputsSha256;
+            }
+            if (
+              input.tool.candidate.toolName === CONSUMER_NAME &&
+              decision.action === 'proven' &&
+              !input.followUp &&
+              !returnedPartial
+            ) {
+              returnedPartial = true;
+              return {
+                ...decision,
+                action: 'partial' as const,
+                missingProof: ['Confirm which public consumer input populates the request.'],
+                reason: 'The MVP works while its selected consumer input mapping needs review.',
+              };
+            }
+            if (input.tool.candidate.toolName === CONSUMER_NAME && input.followUp) {
+              expect(input.requiredLinks).toContainEqual({
+                role: 'consumer',
+                toolName: CONSUMER_NAME,
+                parameter: 'alternate_item_id',
+              });
+              expect(input.followUp.siblingResearch[0]?.researchInputsSha256).toBe(
+                initialProducerResearchSha256,
+              );
+              sawRemappedConsumer = true;
+            }
+            return decision;
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.phase === 'discovery') {
+              const output = await baseMaster(input, agent, options);
+              const consumer = output.desiredPlan.tools.find(
+                ({ candidate }) => candidate.toolName === CONSUMER_NAME,
+              );
+              if (!consumer) throw new Error('fixture plan lost its consumer');
+              consumer.candidate.likelyParams.push({
+                name: 'alternate_item_id',
+                type: 'string',
+                description: 'Alternate public identifier input.',
+              });
+              return output;
+            }
+            const partial = (input.apiResearch ?? []).find(
+              ({ toolName, status }) => toolName === CONSUMER_NAME && status === 'partial',
+            );
+            if (input.decisionPurpose === 'research_review' && partial) {
+              const desiredPlan = desiredFromCurrent(input);
+              const edge = desiredPlan.chainEdges.find(({ id }) => id === EDGE_ID);
+              if (!edge) throw new Error('fixture plan lost its chain edge');
+              edge.consumerParameter = 'alternate_item_id';
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'accepted',
+                reason: 'Revise only the consumer-side public input mapping and verify it.',
+                recallToolNames: [],
+                researchFollowUps: [
+                  {
+                    toolName: CONSUMER_NAME,
+                    instruction: 'Prove the revised consumer input mapping.',
+                    missingProof: partial.missingProof,
+                    relevantToolNames: [PRODUCER_NAME],
+                    relevantRequestSeqs: [2],
+                  },
+                ],
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+        },
+      );
+
+      expect(returnedPartial).toBeTrue();
+      expect(sawRemappedConsumer).toBeTrue();
+      expect(producerTurns).toBe(2);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('shows structured failed attempts to the master before a blocked API tool can leave research', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-blocked-research-review',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const baseResearchTool = base.runApiResearchTool;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !baseResearchTool || !basePlanner) {
+        throw new Error('fixture research roles are missing');
+      }
+
+      let masterSawFailedFacts = false;
+      const plannedNames: string[] = [];
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName === PRODUCER_NAME && input.observations.length > 0) {
+              return {
+                binding: decision.binding,
+                action: 'blocked' as const,
+                reason: input.blockReview
+                  ? 'Self-review found no distinct evidence-backed request construction.'
+                  : 'The recorded producer request was rejected.',
+              };
+            }
+            return decision;
+          },
+          runApiResearchTool: async (input) =>
+            input.workflowPath.includes(`/${PRODUCER_ID}/`)
+              ? {
+                  result: {
+                    ok: false as const,
+                    error: 'FORBIDDEN',
+                    message: 'HTTP 403 from the recorded producer request',
+                  },
+                  executionMechanism: 'fixture-fetch',
+                }
+              : await baseResearchTool(input),
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.decisionPurpose === 'research_review') {
+              const blocked = (input.apiResearch ?? []).find(
+                ({ toolName, status }) => toolName === PRODUCER_NAME && status === 'blocked',
+              );
+              if (blocked) {
+                expect(blocked.observations).toHaveLength(1);
+                expect(blocked.observations?.[0]?.result.message).toContain('HTTP 403');
+                masterSawFailedFacts = true;
+                const desiredPlan = desiredFromCurrent(input);
+                desiredPlan.tools = desiredPlan.tools.filter(
+                  ({ candidate }) => candidate.toolName !== PRODUCER_NAME,
+                );
+                const consumer = desiredPlan.tools.find(
+                  ({ candidate }) => candidate.toolName === CONSUMER_NAME,
+                );
+                if (!consumer) throw new Error('fixture plan lost the consumer');
+                consumer.candidate.dependsOnTools = [];
+                consumer.candidate.dependencySeqs = [];
+                desiredPlan.chainEdges = [];
+                desiredPlan.buildWaves = [[consumer.id]];
+                const coverage = desiredPlan.candidateCoverage.find(
+                  ({ discoveryCandidateName }) => discoveryCandidateName === PRODUCER_NAME,
+                );
+                if (!coverage) throw new Error('fixture plan lost producer coverage');
+                coverage.plannedToolIds = [];
+                coverage.unresolvedReason = null;
+                coverage.excludedReason =
+                  'Structured request attempts showed no supported producer implementation.';
+                const output = MasterDecisionOutputSchema.parse({
+                  binding: input.current?.run ?? input.discovery.run,
+                  outcome: 'revised',
+                  reason: 'Remove only the factually blocked producer and unlink its consumer.',
+                  recallToolNames: [],
+                  researchFollowUps: [],
+                  desiredPlan,
+                });
+                return await requestValidatedMasterDecision(input, {
+                  ...(agent?.provider ? { provider: agent.provider } : {}),
+                  analyzer: {
+                    async analyze() {
+                      return { text: JSON.stringify(output) };
+                    },
+                  },
+                });
+              }
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannedNames.push(input.tool.candidate.toolName);
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(masterSawFailedFacts).toBeTrue();
+      expect(plannedNames).not.toContain(PRODUCER_NAME);
+      expect(plannedNames).toContain(CONSUMER_NAME);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('returns an exact repeated partial cycle to the master without another researcher call', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-partial-no-progress-review',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      if (!baseResearch || !baseMaster) throw new Error('fixture research roles are missing');
+
+      const missingProof = ['Prove the required consumer identifier is present.'];
+      const repeatedInstruction =
+        'Inspect the current response again for the required consumer identifier.';
+      let followUpResearchTurns = 0;
+      let allowProven = false;
+      let sawNoProgressReview = false;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName !== CONSUMER_NAME) return decision;
+            if (input.followUp) followUpResearchTurns += 1;
+            if (allowProven) return decision;
+            if (decision.action !== 'proven') return decision;
+            return {
+              ...decision,
+              action: 'partial' as const,
+              missingProof,
+              reason: 'The same core call works, but the selected identifier proof is unchanged.',
+            };
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.decisionPurpose === 'research_review') {
+              const partial = (input.apiResearch ?? []).find(
+                ({ toolName, status }) => toolName === CONSUMER_NAME && status === 'partial',
+              );
+              if (partial) {
+                const noProgress = input.researchNoProgress?.find(
+                  ({ toolName }) => toolName === CONSUMER_NAME,
+                );
+                if (noProgress) {
+                  sawNoProgressReview = true;
+                  expect(noProgress.reason).toContain('same partial handoff');
+                  allowProven = true;
+                }
+                const output = MasterDecisionOutputSchema.parse({
+                  binding: input.current?.run ?? input.discovery.run,
+                  outcome: 'accepted',
+                  reason: noProgress
+                    ? 'Use one materially different request construction after the exact no-op.'
+                    : 'Return the partial consumer to its retained researcher.',
+                  recallToolNames: [],
+                  researchFollowUps: [
+                    {
+                      toolName: CONSUMER_NAME,
+                      instruction: noProgress
+                        ? 'Test the minimal consumer request without the optional wrapper.'
+                        : repeatedInstruction,
+                      missingProof: partial.missingProof ?? missingProof,
+                      relevantToolNames: [],
+                      relevantRequestSeqs: [2],
+                    },
+                  ],
+                  desiredPlan: desiredFromCurrent(input),
+                });
+                return await requestValidatedMasterDecision(input, {
+                  ...(agent?.provider ? { provider: agent.provider } : {}),
+                  analyzer: {
+                    async analyze() {
+                      return { text: JSON.stringify(output) };
+                    },
+                  },
+                });
+              }
+            }
+            return await baseMaster(input, agent, options);
+          },
+        },
+      );
+
+      expect(sawNoProgressReview).toBeTrue();
+      expect(followUpResearchTurns).toBe(2);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('runs a fresh first research pass after the master renames a tool before planning', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-research-review-rename',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner)
+        throw new Error('fixture research roles are missing');
+
+      const renamed = 'find_items';
+      let researchReviews = 0;
+      let renamedResearchTurns = 0;
+      let renamedWasProven = false;
+      let plannerCalls = 0;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName === renamed) {
+              renamedResearchTurns += 1;
+              if (decision.action === 'proven') renamedWasProven = true;
+            }
+            return decision;
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.decisionPurpose === 'research_review') {
+              researchReviews += 1;
+              if (researchReviews === 1) {
+                const desiredPlan = desiredFromCurrent(input);
+                const producer = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+                const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+                if (!producer || !consumer) throw new Error('fixture plan lost a tool');
+                producer.id = renamed;
+                producer.candidate.toolName = renamed;
+                consumer.candidate.dependsOnTools = [renamed];
+                desiredPlan.buildWaves = desiredPlan.buildWaves.map((wave) =>
+                  wave.map((toolId) => (toolId === PRODUCER_ID ? renamed : toolId)),
+                );
+                desiredPlan.chainEdges = desiredPlan.chainEdges.map((edge) => ({
+                  ...edge,
+                  producerToolId:
+                    edge.producerToolId === PRODUCER_ID ? renamed : edge.producerToolId,
+                }));
+                desiredPlan.candidateCoverage = desiredPlan.candidateCoverage.map((coverage) => ({
+                  ...coverage,
+                  plannedToolIds: coverage.plannedToolIds.map((toolId) =>
+                    toolId === PRODUCER_ID ? renamed : toolId,
+                  ),
+                }));
+                return MasterDecisionOutputSchema.parse({
+                  binding: input.current?.run ?? input.discovery.run,
+                  outcome: 'revised',
+                  reason: 'Use one clearer public name before planning.',
+                  recallToolNames: [],
+                  researchFollowUps: [],
+                  desiredPlan,
+                });
+              }
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannerCalls += 1;
+            expect(researchReviews).toBeGreaterThanOrEqual(2);
+            expect(renamedWasProven).toBeTrue();
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(researchReviews).toBeGreaterThanOrEqual(2);
+      expect(renamedResearchTurns).toBe(2);
+      expect(renamedWasProven).toBeTrue();
+      expect(plannerCalls).toBe(2);
+      expect(terminal.status).toBe('provider_unavailable');
     });
   });
 
@@ -1413,7 +2081,8 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.readyTools).toBe(2);
       expect(terminal.nonReadyTools).toBe(0);
       expect(terminal.message).toContain('usable MVP');
-      expect(terminal.message).toContain('unfinished work is recorded there as deferred');
+      expect(terminal.message).toContain('did not change or delay this MVP');
+      expect(terminal.message).toContain('unfinished advice is recorded there as deferred');
       expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
 
       const state = FreshTeachJournalStateSchema.parse(
@@ -1691,8 +2360,8 @@ describe('fresh foreground master controller end to end', () => {
       const routeAIdEdge = {
         ...chainEdge,
       };
-      const kindProducerId = 'lookup_item_kind_tool';
       const kindProducerName = 'lookup_item_kind';
+      const kindProducerId = kindProducerName;
       const kindProducerCandidate = {
         ...producerCandidate,
         toolName: kindProducerName,
@@ -1912,7 +2581,6 @@ describe('fresh foreground master controller end to end', () => {
       });
       const baseMasterDecision = base.requestMasterDecision;
       if (!baseMasterDecision) throw new Error('fixture master decision is missing');
-
       const terminal = await runFreshMasterTeach(
         {
           site: SITE,
@@ -2357,7 +3025,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('hands a final chain-result rejection to the master after the edge review passed', async () => {
+  it('keeps a final chain-result repair independent of saved parameter advice', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
@@ -2365,6 +3033,8 @@ describe('fresh foreground master controller end to end', () => {
       let baselineChainEvidenceRef = '';
       let completionChainEvidenceRef = '';
       let repairFacts: Array<Record<string, unknown>> = [];
+      let repairExcludedParameterAdvice = false;
+      let completionReviewCalls = 0;
       const rejection = 'The exact chained consumer result is not credible.';
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-completion-rejects-chain-result',
@@ -2392,16 +3062,61 @@ describe('fresh foreground master controller end to end', () => {
           ...base,
           requestMasterDecision: async (decisionInput) => {
             if (!decisionInput.verificationFindings) return await baseMasterDecision(decisionInput);
+            repairExcludedParameterAdvice = !('parameterAdvice' in decisionInput);
             repairFacts = decisionInput.verificationFindings.payload.entries.flatMap((entry) =>
               entry.kind === 'untrusted_redacted_quote'
                 ? [JSON.parse(entry.quote) as Record<string, unknown>]
                 : [],
             );
-            throw new ProviderUnavailableError(
-              new Error('fixture stops after the chain rejection reaches master repair'),
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run,
+              outcome: 'accepted',
+              reason: 'The core rejection does not justify changing this working build.',
+              recallToolNames: [],
+              desiredPlan: desiredFromCurrent(decisionInput),
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestParameterSelectionAdvice: async (advisorInput) => {
+            const tool = advisorInput.currentPlan.payload.tools.find(
+              ({ id }) => id === advisorInput.toolId,
             );
+            const proof = advisorInput.snapshot.payload.tools.find(
+              ({ toolId }) => toolId === advisorInput.toolId,
+            );
+            const evidenceRef = advisorInput.evidence.payload.entries[0]?.ref;
+            if (!tool || !proof || !evidenceRef) {
+              throw new Error('fixture expected current tool proof and focused evidence');
+            }
+            return ParameterSelectionAdvisorOutputSchema.parse({
+              binding: {
+                runId: advisorInput.run.runId,
+                recordingSha256: advisorInput.run.recordingSha256,
+                toolId: advisorInput.toolId,
+                compileInputsSha256: proof.executionBinding.compileInputsSha256,
+              },
+              likelyParams: tool.candidate.likelyParams,
+              evidenceRefs: [evidenceRef],
+              concerns: [],
+              reason: 'The verified MVP public parameters remain supported.',
+            });
           },
           requestCompletionReview: async (reviewInput) => {
+            completionReviewCalls += 1;
+            if (completionReviewCalls > 1) {
+              throw new ProviderUnavailableError(
+                new Error('fixture stops after the independent core repair decision'),
+              );
+            }
+            // Let the best-effort advisor save its suggestion before the core
+            // review fails. That suggestion must not enter the repair input.
+            await new Promise((resolve) => setTimeout(resolve, 0));
             const chainResult = reviewInput.toolResultEvidence?.find(
               ({ payload }) => payload.chainEdgeId === EDGE_ID,
             );
@@ -2443,6 +3158,21 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.status).toBe('provider_unavailable');
       expect(baselineChainEvidenceRef).toBeTruthy();
       expect(completionChainEvidenceRef).toBe(baselineChainEvidenceRef);
+      expect(repairExcludedParameterAdvice).toBe(true);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
+      expect(terminal.readyTools).toBe(2);
+      expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
+        `compile:${PRODUCER_ID}`,
+        `compile:${CONSUMER_ID}`,
+      ]);
+      const consumerFinesseDir = join(terminal.runRoot, 'finesse', CONSUMER_ID);
+      const consumerFinesseFile = readdirSync(consumerFinesseDir).find((name) =>
+        name.endsWith('.json'),
+      );
+      if (!consumerFinesseFile) throw new Error('missing consumer finesse record');
+      expect(readJson(join(consumerFinesseDir, consumerFinesseFile))).toEqual(
+        expect.objectContaining({ status: 'suggested' }),
+      );
       expect(repairFacts).toContainEqual(
         expect.objectContaining({
           stage: 'completion_review_finding',
@@ -2460,6 +3190,193 @@ describe('fresh foreground master controller end to end', () => {
           evidenceRefs: [expect.objectContaining({ sha256: completionChainEvidenceRef })],
         }),
       );
+    });
+  });
+
+  it('expires a saved finesse suggestion when a required revision replaces its exact MVP build', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      const recordingPath = syntheticSessionPath(root);
+      let parameterAdvisorCalls = 0;
+      let completionReviewCalls = 0;
+      let resolveInitialAdvice: (() => void) | undefined;
+      let markInitialAdviceReturned: (() => void) | undefined;
+      const initialAdviceReturned = new Promise<void>((resolve) => {
+        markInitialAdviceReturned = resolve;
+      });
+      const revisedDescription = 'Search the revised fixture item catalog.';
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-stale-finesse-at-stop',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          detectToolCandidates: async () => ({
+            ...validateToolCandidateDetection({
+              sharedContext,
+              candidates: [producerCandidate],
+            }),
+            inputTokens: 0,
+            outputTokens: 0,
+            durationMs: 0,
+          }),
+          requestMasterDecision: async (decisionInput) => {
+            if (!decisionInput.verificationFindings) {
+              const desiredPlan =
+                decisionInput.phase === 'discovery'
+                  ? initialSingleToolDesiredPlan(decisionInput)
+                  : decisionInput.plannerProposals.length > 0
+                    ? proposalDesiredPlan(decisionInput)
+                    : desiredFromCurrent(decisionInput);
+              const output = MasterDecisionOutputSchema.parse({
+                binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+                outcome: 'accepted',
+                reason: 'The single fixture operation remains supported.',
+                recallToolNames: [],
+                desiredPlan,
+              });
+              return requestValidatedMasterDecision(decisionInput, {
+                analyzer: {
+                  async analyze() {
+                    return { text: JSON.stringify(output) };
+                  },
+                },
+              });
+            }
+            // Let optional advice for Build A finish while an independent core
+            // revision is in flight. The journal still points at Build A until
+            // this decision returns, but the advice never enters the decision.
+            if (!resolveInitialAdvice) await new Promise((resolve) => setTimeout(resolve, 0));
+            if (!resolveInitialAdvice) throw new Error('fixture expected the initial advisor');
+            resolveInitialAdvice();
+            await initialAdviceReturned;
+            await new Promise((resolve) => setTimeout(resolve, 0));
+
+            const desiredPlan = desiredFromCurrent(decisionInput);
+            const tool = desiredPlan.tools.find(({ id }) => id === PRODUCER_ID);
+            if (!tool) throw new Error('fixture expected the producer plan');
+            tool.candidate.description = revisedDescription;
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run,
+              outcome: 'revised',
+              reason: 'The core result review requires a revised producer build.',
+              recallToolNames: [PRODUCER_NAME],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestParameterSelectionAdvice: async (advisorInput) => {
+            parameterAdvisorCalls += 1;
+            if (parameterAdvisorCalls > 1) {
+              throw new Error('Optional breadth for Build B remains best-effort.');
+            }
+            const tool = advisorInput.currentPlan.payload.tools.find(
+              ({ id }) => id === advisorInput.toolId,
+            );
+            const proof = advisorInput.snapshot.payload.tools.find(
+              ({ toolId }) => toolId === advisorInput.toolId,
+            );
+            const evidenceRef = advisorInput.evidence.payload.entries[0]?.ref;
+            if (!tool || !proof || !evidenceRef) {
+              throw new Error('fixture expected current tool proof and focused evidence');
+            }
+            const advice = ParameterSelectionAdvisorOutputSchema.parse({
+              binding: {
+                runId: advisorInput.run.runId,
+                recordingSha256: advisorInput.run.recordingSha256,
+                toolId: advisorInput.toolId,
+                compileInputsSha256: proof.executionBinding.compileInputsSha256,
+              },
+              likelyParams: tool.candidate.likelyParams,
+              evidenceRefs: [evidenceRef],
+              concerns: [],
+              reason: 'Build A has optional parameter breadth available for later finesse.',
+            });
+            return await new Promise<typeof advice>((resolve) => {
+              resolveInitialAdvice = () => {
+                resolve(advice);
+                markInitialAdviceReturned?.();
+              };
+            });
+          },
+          requestCompletionReview: async (reviewInput) => {
+            completionReviewCalls += 1;
+            const results = reviewInput.toolResultEvidence ?? [];
+            const result = results.find(({ payload }) => payload.toolId === PRODUCER_ID);
+            if (!result) throw new Error('fixture expected the producer result evidence');
+            const revisionRequired = completionReviewCalls === 1;
+            return CompletionReviewOutputSchema.parse({
+              binding: reviewInput.run,
+              verdict: revisionRequired ? 'failed' : 'passed',
+              summary: revisionRequired
+                ? 'The producer needs a required core revision.'
+                : 'The revised producer result is credible.',
+              findings: revisionRequired
+                ? [
+                    {
+                      severity: 'blocking',
+                      toolId: PRODUCER_ID,
+                      message: 'Revise the producer core contract.',
+                      evidenceRefs: [result.ref],
+                    },
+                  ]
+                : [],
+              toolResultReviews: results.map((candidate) => ({
+                toolId: candidate.payload.toolId,
+                ...(candidate.payload.chainEdgeId
+                  ? { chainEdgeId: candidate.payload.chainEdgeId }
+                  : {}),
+                status: revisionRequired ? 'revision_required' : 'credible',
+                reason: revisionRequired
+                  ? 'The current producer result requires a core revision.'
+                  : 'The revised producer result has the expected fixture shape.',
+                evidenceRefs: [candidate.ref],
+              })),
+              claimDispositions: reviewInput.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The supplied evidence supports this claim.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('completed');
+      expect(terminal.readyTools).toBe(1);
+      expect(terminal.message).toContain('0 optional parameter suggestion(s)');
+      expect(parameterAdvisorCalls).toBe(2);
+      expect(completionReviewCalls).toBe(2);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME], [PRODUCER_NAME]]);
+      const finesseDir = join(terminal.runRoot, 'finesse', PRODUCER_ID);
+      const statuses = readdirSync(finesseDir)
+        .filter((name) => name.endsWith('.json'))
+        .map(
+          (name) =>
+            (readJson(join(finesseDir, name)) as { status: string; toolName: string }).status,
+        )
+        .sort();
+      expect(statuses).toEqual(['failed', 'stale']);
     });
   });
 
@@ -4056,7 +4973,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('researches changed boundaries before replanning sibling bootstrap evidence', async () => {
+  it('returns changed-boundary partial research to the same researcher before replanning', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root, true);
       const session = SessionSchema.parse(readJson(recordingPath));
@@ -4088,6 +5005,9 @@ describe('fresh foreground master controller end to end', () => {
       let secondTargetSawBootstrap = false;
       let secondTargetSawRevisedPlan = false;
       let secondTargetSawSiblingBootstrap = false;
+      let revisionResearchPartial = false;
+      let revisionResearchFollowedUp = false;
+      let revisionResearchProven = false;
 
       const implementationWithRequests = (input: FocusedPlannerInput, requestSeqs: number[]) => {
         const implementation = focusedImplementation(input);
@@ -4126,6 +5046,8 @@ describe('fresh foreground master controller end to end', () => {
         promotionBatches,
         requestBaselineMvpReview: credibleBaselineMvpReview,
       });
+      const baseResearch = base.requestApiResearchStep;
+      if (!baseResearch) throw new Error('fixture API researcher is missing');
       const terminal = await runFreshMasterTeach(
         {
           site: SITE,
@@ -4136,6 +5058,33 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
+          requestApiResearchStep: async (input) => {
+            const decision = await baseResearch(input);
+            const isRevisedConsumer =
+              input.tool.id === CONSUMER_ID && input.tool.candidate.dependencySeqs.includes(4);
+            if (
+              isRevisedConsumer &&
+              !input.followUp &&
+              decision.action === 'proven' &&
+              !revisionResearchPartial
+            ) {
+              revisionResearchPartial = true;
+              return {
+                ...decision,
+                action: 'partial' as const,
+                missingProof: ['Confirm request 4 supplies the revised bootstrap obligation.'],
+                reason: 'The direct consumer call works; revised bootstrap proof is still missing.',
+              };
+            }
+            if (isRevisedConsumer && input.followUp) {
+              revisionResearchFollowedUp = true;
+              expect(input.previousProgress?.status).toBe('partial');
+              expect(input.followUp.relevantRequestSeqs).toEqual([4]);
+              expect(JSON.stringify(input.evidence)).toContain('https://fixture.invalid/bootstrap');
+              if (decision.action === 'proven') revisionResearchProven = true;
+            }
+            return decision;
+          },
           requestFocusedPlan: async (input) => {
             plannerCalls.push(input.tool.id);
             const tool = structuredClone(input.tool);
@@ -4192,7 +5141,29 @@ describe('fresh foreground master controller end to end', () => {
           requestMasterDecision: async (input) => {
             let desiredPlan: DesiredTeachingPlan;
             let outcome: 'accepted' | 'revised' = 'accepted';
-            if (input.phase === 'discovery') {
+            let researchFollowUps: NonNullable<
+              ReturnType<typeof MasterDecisionOutputSchema.parse>['researchFollowUps']
+            > = [];
+            if (input.decisionPurpose === 'research_review') {
+              desiredPlan = desiredFromCurrent(input);
+              const partial = (input.apiResearch ?? []).find(
+                ({ toolName, status }) => toolName === CONSUMER_NAME && status === 'partial',
+              );
+              if (partial) {
+                researchFollowUps = [
+                  {
+                    toolName: CONSUMER_NAME,
+                    instruction:
+                      'Inspect request 4 and prove whether it supplies the revised bootstrap obligation.',
+                    missingProof: partial.missingProof ?? [
+                      'The revised bootstrap obligation remains unproven.',
+                    ],
+                    relevantToolNames: [],
+                    relevantRequestSeqs: [4],
+                  },
+                ];
+              }
+            } else if (input.phase === 'discovery') {
               desiredPlan = initialDesiredPlan(input);
             } else if (input.plannerProposals.length === 2) {
               desiredPlan = proposalDesiredPlan(input);
@@ -4219,6 +5190,7 @@ describe('fresh foreground master controller end to end', () => {
                   ? 'Carry the sibling bootstrap into the target and replan only that tool.'
                   : 'The focused fixture plan is current.',
               recallToolNames: [],
+              ...(input.decisionPurpose === 'research_review' ? { researchFollowUps } : {}),
               desiredPlan,
             });
             recallCommands.push(output.recallToolNames);
@@ -4293,6 +5265,9 @@ describe('fresh foreground master controller end to end', () => {
       expect(secondTargetSawBootstrap).toBe(true);
       expect(secondTargetSawRevisedPlan).toBe(true);
       expect(secondTargetSawSiblingBootstrap).toBe(true);
+      expect(revisionResearchPartial).toBe(true);
+      expect(revisionResearchFollowedUp).toBe(true);
+      expect(revisionResearchProven).toBe(true);
       expect(recallCommands.every((names) => names.length === 0)).toBe(true);
       expect(targetCompilerProvenance).toEqual([[4, 2]]);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);

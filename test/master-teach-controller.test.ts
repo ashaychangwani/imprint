@@ -2,9 +2,14 @@ import { describe, expect, it } from 'bun:test';
 import type { ApiResearchResult } from '../src/imprint/api-research-agent.ts';
 import { triageRequests } from '../src/imprint/compile.ts';
 import {
+  apiResearchInputsSha256,
+  apiResearchRequiredLinks,
+} from '../src/imprint/master-teach-agents.ts';
+import {
   ParameterAdvisorLane,
   apiResearchCoversToolBoundary,
   apiResearchFailureMessage,
+  apiResearchMatchesPlan,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   failureReceiptBindingError,
@@ -25,6 +30,7 @@ import {
 import {
   type EditableTeachingPlan,
   type EditableTeachingTool,
+  type ImplementationPlanPayload,
   teachingPlanContentSha256,
   teachingToolCompileInputsSha256,
 } from '../src/imprint/master-teach-plan.ts';
@@ -304,6 +310,154 @@ describe('API research boundary reuse', () => {
     tool.candidate.likelyParams.pop();
     tool.candidate.requestSeqs = [2];
     expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+  });
+
+  it('matches both navigation and selected-response recording origins', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the proven browser-created request.' };
+    tool.candidate.requestSeqs = [1, 2];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Public search query.' },
+    ];
+    const research = researchFor(tool);
+    for (const workflow of [research.workflow, research.candidate.workflow]) {
+      const request = workflow.requests[0];
+      if (!request) throw new Error('test research has no request');
+      request.mode = 'navigate';
+      request.navigation = {
+        networkResponse: {
+          urlIncludes: '/api/results',
+          recordingResponseRequestSeq: 2,
+        },
+      };
+    }
+    const implementation = {
+      strategyKind: 'api',
+      requestProvenance: [
+        {
+          artifactRequestIndex: 0,
+          recordingRequestSeq: 1,
+          recordingResponseRequestSeq: 2,
+        },
+      ],
+    } as ImplementationPlanPayload;
+
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
+    expect(apiResearchMatchesPlan(tool, implementation, research)).toBeTrue();
+
+    const changedPlan = structuredClone(implementation);
+    const changedProvenance = changedPlan.requestProvenance[0];
+    if (!changedProvenance) throw new Error('test plan has no request provenance');
+    changedProvenance.recordingResponseRequestSeq = 3;
+    expect(apiResearchMatchesPlan(tool, changedPlan, research)).toBeFalse();
+
+    const outsideBoundary = structuredClone(research);
+    const outsideMatcher = outsideBoundary.workflow.requests[0]?.navigation?.networkResponse;
+    if (!outsideMatcher) throw new Error('test research has no network response matcher');
+    outsideMatcher.recordingResponseRequestSeq = 3;
+    expect(apiResearchCoversToolBoundary(tool, outsideBoundary)).toBeFalse();
+  });
+
+  it('re-reviews only tools whose required producer-consumer proof changed', () => {
+    const producer = focusedTool(1);
+    const consumer = focusedTool(2, [producer.candidate.toolName]);
+    consumer.candidate.requestSeqs = [1, 2];
+    consumer.candidate.representativeSeqs = [1];
+    consumer.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Primary consumer input.' },
+      { name: 'mode', type: 'string', description: 'Alternate consumer input.' },
+    ];
+    const unrelatedProducer = focusedTool(3);
+    const unrelatedConsumer = focusedTool(4, [unrelatedProducer.candidate.toolName]);
+    for (const tool of [producer, consumer, unrelatedProducer, unrelatedConsumer]) {
+      tool.strategy = { kind: 'api', reason: 'Use the recorded request.' };
+    }
+    const link = {
+      id: 'tool-1-to-tool-2',
+      producerToolId: producer.id,
+      producerResultPath: 'items[0].id',
+      consumerToolId: consumer.id,
+      consumerParameter: 'query',
+    };
+    const unrelatedLink = {
+      id: 'tool-3-to-tool-4',
+      producerToolId: unrelatedProducer.id,
+      producerResultPath: 'items[0].id',
+      consumerToolId: unrelatedConsumer.id,
+      consumerParameter: 'item_id',
+    };
+    const plan = {
+      tools: [producer, consumer, unrelatedProducer, unrelatedConsumer],
+      chainEdges: [link],
+    };
+    const requiredLinks = apiResearchRequiredLinks(plan, producer);
+    const consumerLinks = apiResearchRequiredLinks(plan, consumer);
+    const research = researchFor(producer);
+    const consumerResearch = researchFor(consumer);
+    research.researchedBoundary.dependencyToolNames = [];
+    research.researchedBoundary.requiredLinks = requiredLinks;
+    consumerResearch.researchedBoundary.dependencyToolNames = [producer.candidate.toolName];
+    consumerResearch.researchedBoundary.requiredLinks = consumerLinks;
+
+    expect(apiResearchCoversToolBoundary(producer, research, requiredLinks)).toBeTrue();
+    expect(apiResearchCoversToolBoundary(consumer, consumerResearch, consumerLinks)).toBeTrue();
+
+    const remappedPlan = structuredClone(plan);
+    const remappedLink = remappedPlan.chainEdges[0];
+    if (!remappedLink) throw new Error('test plan lost its producer-consumer link');
+    remappedLink.consumerParameter = 'mode';
+    const producerLinksAfterRemap = apiResearchRequiredLinks(remappedPlan, producer);
+    const consumerLinksAfterRemap = apiResearchRequiredLinks(remappedPlan, consumer);
+    expect(producerLinksAfterRemap).toEqual(requiredLinks);
+    expect(apiResearchInputsSha256(producer, producerLinksAfterRemap)).toBe(
+      apiResearchInputsSha256(producer, requiredLinks),
+    );
+    expect(apiResearchCoversToolBoundary(producer, research, producerLinksAfterRemap)).toBeTrue();
+    expect(apiResearchInputsSha256(consumer, consumerLinksAfterRemap)).not.toBe(
+      apiResearchInputsSha256(consumer, consumerLinks),
+    );
+    expect(
+      apiResearchCoversToolBoundary(consumer, consumerResearch, consumerLinksAfterRemap),
+    ).toBeFalse();
+
+    const changedPlan = structuredClone(plan);
+    const changedLink = changedPlan.chainEdges[0];
+    if (!changedLink) throw new Error('test plan lost its producer-consumer link');
+    changedLink.producerResultPath = 'items[0].canonical_id';
+    const changedLinks = apiResearchRequiredLinks(changedPlan, producer);
+    expect(apiResearchCoversToolBoundary(producer, research, changedLinks)).toBeFalse();
+    expect(apiResearchRequiredLinks(changedPlan, consumer)).toEqual(consumerLinks);
+    expect(
+      apiResearchCoversToolBoundary(
+        consumer,
+        consumerResearch,
+        apiResearchRequiredLinks(changedPlan, consumer),
+      ),
+    ).toBeTrue();
+
+    const planWithUnrelatedLink = {
+      ...plan,
+      chainEdges: [link, unrelatedLink],
+    };
+    expect(apiResearchRequiredLinks(planWithUnrelatedLink, producer)).toEqual(requiredLinks);
+    expect(
+      apiResearchInputsSha256(producer, apiResearchRequiredLinks(planWithUnrelatedLink, producer)),
+    ).toBe(apiResearchInputsSha256(producer, requiredLinks));
+  });
+
+  it('does not invalidate API research for journal prose changes', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the recorded request.' };
+    const initial = apiResearchInputsSha256(tool);
+    const rewritten = structuredClone(tool);
+    rewritten.candidate.description = 'Clearer public description.';
+    rewritten.candidate.rationale = 'Clearer evidence explanation.';
+    rewritten.candidate.confidence = 0.8;
+    rewritten.compileContext.sharedHelperNotes = 'Clearer planner note.';
+    expect(apiResearchInputsSha256(rewritten)).toBe(initial);
+
+    rewritten.candidate.dependsOnTools = ['new_required_producer'];
+    expect(apiResearchInputsSha256(rewritten)).not.toBe(initial);
   });
 });
 

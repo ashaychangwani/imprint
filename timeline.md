@@ -4266,3 +4266,79 @@ run was terminated at about 47 minutes. Its controller, compiler agents, Chrome
 child, screen session, and log followers were all confirmed stopped. The run
 directory and `/tmp/imprint-flights-combined-scoped.log` remain available for
 diagnosis; this run must not be resumed after any code or prompt change.
+
+## 2026-09-03 23:50 PDT — Begin fixing the research-to-chain handoff
+
+The stopped run exposed one connected design problem: a researcher could prove
+the visible part of an operation while missing the values needed by a later
+tool, yet the only available outcomes were effectively success or failure.
+That made the master either plan from incomplete proof or throw away useful
+work. It also left no clean way to send the missing question back to the same
+researcher after sibling tools had revealed more of the request chain.
+
+The implementation is split into three site-neutral changes. Research will gain
+a `partial` state that keeps its best working call and names exactly what is
+still missing. After every tool gets a small first-pass MVP attempt, the master
+can send focused follow-ups to the same retained researcher conversation with
+the relevant sibling evidence and recorded requests; partial results return to
+that loop instead of being silently accepted. A workflow may explicitly ask a
+real browser page to capture one matching background response when normal API
+replay cannot reproduce page-generated transport, without automatically
+classifying or escalating any site. Finally, terminal wording will distinguish
+"a request returned" from "the result proved the tool's promised behavior."
+
+The first pass remains deliberately narrow: prove the smallest useful operation
+and unblock compilation. Parameter breadth and optional variants are a later
+best-effort pass. Producer-consumer planning will prefer stable structured
+values and let the consumer recreate short-lived request tokens. No Flights-
+specific request rule, header rule, or semantic checker is being added.
+
+## 2026-09-04 00:00–02:50 PDT — Close the research gaps before compilation
+
+Research now has three honest outcomes: proven, partial, and blocked. A partial
+result keeps the exact call that already worked and says what is still missing.
+After every requested tool gets a small first attempt, the master sees all of
+those results together. It can then send a focused question back to the same
+researcher conversation, including current evidence from related tools. If the
+answer is still partial, it returns to the master again instead of slipping into
+planning or being discarded. There is no fixed repair-count limit; repeating
+the exact same evidence makes the master change direction rather than loop.
+
+The request catalog no longer hides later requests from large combined
+recordings. A researcher can page through every request in bounded groups and
+ask for full details of only the exact requests it wants to inspect. Planning
+starts only after all first-pass research finishes, so dependencies can use the
+best evidence found across tools. Producer and consumer proof is kept separate:
+changing a consumer parameter does not throw away a working producer, while a
+changed producer result path rechecks only that producer and the links that use
+it. Agents use public tool names everywhere; private journal identity remains a
+host detail.
+
+The smallest working tool remains the goal of the active teach. Optional
+parameter advice runs only after that exact tool is verified and published, is
+saved for a later explicit finesse pass, and cannot delay, rewrite, or unpublish
+the current MVP. This removed 359 lines from the earlier advice lifecycle.
+
+Browser workflows gained one general mechanism for a case the recordings had
+already exposed: navigate a real page and capture one explicitly selected
+background network response. The workflow declares the URL fragment, optional
+method/type, occurrence, and the exact recorded response it is grounded in.
+Offline and live execution now select the same response, stay inside the new
+navigation, preserve the selected response URL for cookies, and stop safely on
+deadlines. A final independent review found that live selection counted failed
+request starts while recordings count responses; this was corrected so failed
+or cancelled starts cannot shift the selected occurrence. Nothing identifies or
+special-cases a website, endpoint, header, or response meaning.
+
+Runtime messages now say that `REQUEST COMPLETED` proves transport only. Result
+meaning is checked separately, so a 200 response cannot be presented as a
+working tool without the promised data. Two independent reviews also confirmed
+that request paging, side-local dependency proof, and later-only finesse are
+now wired as intended and found no site-specific policy.
+
+Validation passed before this checkpoint: 1,920 repository tests, TypeScript,
+Biome, dead-code and circular-dependency checks, the web build, and the diff
+check. The source and prompts contain no Google-, Flights-, Hotels-, calendar-,
+or endpoint-specific rule. The next validation is a fresh, unsteered Flights
+teach from the exact two-recording combined file; no failed pre-change run will
+be resumed.

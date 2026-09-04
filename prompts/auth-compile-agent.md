@@ -124,10 +124,15 @@ semantics.
 Use the standard workflow request schema: `method`, `url`, `headers`,
 `recordingRequestSeq`, optional string `body`, optional `captures`, optional
 `mode: "navigate"` with bounded navigation criteria, and optional `effect`.
+Navigation can explicitly select a completed page-generated response with
+`networkResponse: { urlIncludes, recordingResponseRequestSeq, method?, resourceType?, occurrence? }`; use
+that only when the recording proves the browser must create the request and
+the selected body supplies this action's needed data.
 Set `recordingRequestSeq` to the exact `seq` from `read_request` that grounds
-the request. It is required on requests whose captures appear in
-`authConfig.persist`, so `imprint login` extracts each value only from its
-producing recorded response.
+the outgoing request. It is required on requests whose captures appear in
+`authConfig.persist`. For an ordinary request, that request's response is the
+capture evidence. For `navigation.networkResponse`, the capture evidence is
+instead the response cited by `recordingResponseRequestSeq`.
 
 For a response field that contains another JSON document as a string, use a
 JSON capture with `path` for the outer field and `decodeJsonPath` for the value
@@ -137,8 +142,10 @@ with a regular expression; response escaping can change or truncate the value.
 For every durable interface in `authConfig.persist`, exercise its capture in
 `request.test.ts`. Load the redacted recording through
 `process.env.IMPRINT_SESSION_PATH`, locate the declared `recordingRequestSeq`,
-independently decode the intended response field, and assert that evaluating
-the compiled capture produces that exact value. A nonempty assertion or
+or locate `navigation.networkResponse.recordingResponseRequestSeq` when the
+capture reads a selected page-generated response. Independently decode the
+intended response field, and assert that evaluating the compiled capture
+produces that exact value. A nonempty assertion or
 comparison of the locator to itself is insufficient: the test must catch a
 broad regex or wrong nested path that resolves to a different field. Keep
 captured values in memory; never inline or print them. The host checks that the
@@ -152,6 +159,14 @@ preserved. Its response exposes the browser's final URL in the synthetic
 `x-imprint-final-url` response header. Capture that header with
 `source: "response_header"` when a redirect URL carries state needed by a later
 request.
+
+When `navigation.networkResponse` is present, the selected response body is
+returned instead of the rendered document. This is a precise agent-authored
+match, not automatic XHR selection and not a DOM playbook. Prefer a normal API
+request when it can express the same operation.
+The outer `recordingRequestSeq` must cite the document navigation, while
+`recordingResponseRequestSeq` must cite the background request whose response
+is returned. Do not use either sequence for both roles.
 
 Use runtime templates exactly as supported:
 `${credential.X}`, `${param.X}`, `${state.X}`,

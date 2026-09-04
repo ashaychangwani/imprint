@@ -68,26 +68,26 @@ Exact output schema (all objects reject extra fields):
     "recordingSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
     "planRevision": 3,
     "planSha256": "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-    "toolId": "catalog_search",
+    "toolId": "search_catalog",
     "compileInputsSha256": "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
     "currentBuildRef": {
-      "path": "runs/run-fixture-1/builds/catalog_search.json",
+      "path": "runs/run-fixture-1/builds/search_catalog.json",
       "sha256": "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
     },
     "executionBindingSha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
     "resultReceiptRef": {
-      "path": "runs/run-fixture-1/receipts/catalog_search-live.json",
+      "path": "runs/run-fixture-1/receipts/search_catalog-live.json",
       "sha256": "sha256:ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
     },
     "resultEvidenceRef": {
-      "path": "runs/run-fixture-1/result-evidence/catalog_search.json",
+      "path": "runs/run-fixture-1/result-evidence/search_catalog.json",
       "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
     }
   },
   "status": "credible",
   "reason": "The observed catalog records credibly demonstrate the promised search result.",
   "evidenceRefs": [{
-    "path": "runs/run-fixture-1/result-evidence/catalog_search.json",
+    "path": "runs/run-fixture-1/result-evidence/search_catalog.json",
     "sha256": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
   }]
 }
