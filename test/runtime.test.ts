@@ -176,11 +176,9 @@ describe('executeWorkflow', () => {
 
   it('redacts framed RPC previews and bounds disclosed object keys', async () => {
     const rpcObservations: Array<{ redactedBodyPreview?: string }> = [];
-    const jwt = [
-      'eyJhbGciOiJIUzI1NiJ9',
-      'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
-      'signature-value',
-    ].join('.');
+    const jwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', 'signature-value'].join(
+      '.',
+    );
     const rpcBody = `)]}'\n[["wrb.fr","rpc","person@example.com Bearer ${jwt}"]]`;
     await executeWorkflow({
       workflow: baseWorkflow,

@@ -295,6 +295,51 @@ describe('API research boundary reuse', () => {
     expect(apiResearchCoversToolBoundary(tool, researchFor(tool))).toBeTrue();
   });
 
+  it('reuses proven boundary evidence before a strategy is selected', () => {
+    const tool = focusedTool(1);
+    tool.candidate.requestSeqs = [1, 2];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
+    const implementation = {
+      strategyKind: 'api',
+      requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+    } as ImplementationPlanPayload;
+    const research = researchFor(tool);
+
+    expect(tool.strategy).toBeUndefined();
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
+    expect(apiResearchMatchesPlan(tool, implementation, research)).toBeFalse();
+  });
+
+  it('reuses an exact proof that discovered supporting navigation provenance', () => {
+    const tool = focusedTool(1);
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
+    const research = researchFor(tool);
+    research.researchInputsSha256 = apiResearchInputsSha256(tool);
+    research.researchedBoundary.requestSeqs = [1];
+    for (const workflow of [research.workflow, research.candidate.workflow]) {
+      const request = workflow.requests[0];
+      if (!request) throw new Error('test research has no request');
+      request.recordingRequestSeq = 2;
+      request.mode = 'navigate';
+      request.navigation = {
+        networkResponse: {
+          urlIncludes: '/api/results',
+          recordingResponseRequestSeq: 3,
+        },
+      };
+    }
+
+    expect(tool.strategy).toBeUndefined();
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
+
+    tool.candidate.requestSeqs = [4];
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+  });
+
   it('requires fresh research for a new parameter or a discarded proven request', () => {
     const tool = focusedTool(1);
     tool.strategy = { kind: 'api', reason: 'Use the proven request.' };

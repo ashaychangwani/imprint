@@ -4512,3 +4512,29 @@ preview in research feedback; this is information for the researcher and never
 changes execution or pass/fail decisions. Validation passed all 1,930 tests,
 TypeScript, formatting/lint, dead-code, circular-dependency, diff, and
 site-neutrality checks.
+
+## 2026-09-04 06:24–07:25 PDT — A freshness bug repeats successful research
+
+Fresh Flights run `0cf63e99-a3c0-4071-b44b-b65a752dda5b` again reused only the
+content-bound candidate proposal. Each of the five requested operations
+produced a working API result at least once. Calendar returned a real price
+grid, Booking returned real providers and fares, and no playbook was used.
+
+The run nevertheless spent the full hour in research and ended honestly with
+`0 ready, 5 not ready`. Planning and compilation never began. The retained
+master transcript shows that the master did not keep rewriting the plan: its
+two complete plans were identical. The repetition came from two small runtime
+freshness mistakes. The runtime required an API strategy before planning had
+selected one, and it rejected an unchanged proof when the researcher had found
+a supporting recorded request outside the detector's initial request list.
+That made successful Location, Search, Calendar, and Booking research look old,
+so the same agents were called again.
+
+The correction remains mechanical and site-neutral. A successful research
+result is now current when it belongs to the same public tool and its exact
+input fingerprint is unchanged, even if the researcher discovered extra
+supporting provenance. Later genuine changes still use the narrower
+compatibility check, and a compiled implementation must still explicitly pick
+the API strategy and match the exact proven request sequence. Regression tests
+cover strategy-free pre-planning tools, newly discovered navigation provenance,
+and a two-way follow-up that must not restart unrelated researchers.

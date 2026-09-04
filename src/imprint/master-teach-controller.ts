@@ -1918,8 +1918,11 @@ export function apiResearchCoversToolBoundary(
   tool: EditableTeachingTool,
   research: ApiResearchResult,
 ): boolean {
-  if (tool.strategy?.kind !== 'api') return false;
+  // Pre-planning research intentionally runs before the focused planner picks
+  // an implementation strategy. Coverage is a factual boundary comparison;
+  // callers that require a selected API strategy enforce that separately.
   if (research.workflow.toolName !== tool.candidate.toolName) return false;
+  if (research.researchInputsSha256 === apiResearchInputsSha256(tool)) return true;
   if (research.researchedBoundary.stableInputsSha256 !== apiResearchStableInputsSha256(tool)) {
     return false;
   }

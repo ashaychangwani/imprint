@@ -974,6 +974,76 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('does not repeat exact research that discovered supporting navigation provenance', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-exact-research-support',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      if (!baseResearch || !baseMaster) throw new Error('fixture research roles are missing');
+
+      const firstPasses = new Map<string, number>();
+      let plannerCalls = 0;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            if (!input.followUp && input.observations.length === 0) {
+              const name = input.tool.candidate.toolName;
+              firstPasses.set(name, (firstPasses.get(name) ?? 0) + 1);
+            }
+            const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName === PRODUCER_NAME && decision.candidate) {
+              const request = decision.candidate.workflow.requests[0];
+              if (!request) throw new Error('fixture producer research has no request');
+              request.recordingRequestSeq = 2;
+              request.mode = 'navigate';
+              request.navigation = {
+                networkResponse: {
+                  urlIncludes: '/api/items',
+                  recordingResponseRequestSeq: 2,
+                },
+              };
+            }
+            return decision;
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            const decision = await baseMaster(input, agent, options);
+            if (input.phase !== 'discovery') return decision;
+            return MasterDecisionOutputSchema.parse({
+              ...decision,
+              desiredPlan: {
+                ...decision.desiredPlan,
+                tools: decision.desiredPlan.tools.map(({ strategy: _strategy, ...tool }) => tool),
+              },
+            });
+          },
+          requestFocusedPlan: async () => {
+            plannerCalls += 1;
+            throw new Error('fixture stops after proving research reached focused planning');
+          },
+        },
+      );
+
+      expect(terminal.status).toBe('failed');
+      expect(firstPasses.get(PRODUCER_NAME)).toBe(1);
+      expect(firstPasses.get(CONSUMER_NAME)).toBe(1);
+      expect(plannerCalls).toBe(2);
+    });
+  });
+
   it('returns a partial MVP to the same researcher with master-selected sibling evidence', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
@@ -1098,7 +1168,15 @@ describe('fresh foreground master controller end to end', () => {
                 desiredPlan,
               });
             }
-            return await baseMaster(input, agent, options);
+            const decision = await baseMaster(input, agent, options);
+            if (input.phase !== 'discovery') return decision;
+            return MasterDecisionOutputSchema.parse({
+              ...decision,
+              desiredPlan: {
+                ...decision.desiredPlan,
+                tools: decision.desiredPlan.tools.map(({ strategy: _strategy, ...tool }) => tool),
+              },
+            });
           },
           requestFocusedPlan: async (input) => {
             plannerCalls += 1;
