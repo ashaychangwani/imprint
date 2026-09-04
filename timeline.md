@@ -4072,3 +4072,40 @@ backend used by standalone verification. It does not choose a new strategy or
 add a site rule. The existing end-to-end test now proves that a consumer whose
 research succeeded through CDP uses CDP for both its standalone and chained
 calls. All 28 controller end-to-end tests, type checking, and lint pass.
+
+## 2026-09-03 18:36–19:17 PDT — API failure was mistaken for proof that a playbook would work
+
+The first restart command omitted the mounted recording path. Run
+`b1c2ff00-552e-44d1-976a-9c3731f77929` therefore selected a different local
+latest recording and stopped immediately because its hash did not match the
+candidate checkpoint. No agent or build work ran. The next command supplied
+the exact mounted recording and started fresh run
+`f3aae5ab-4907-4814-a3f1-8d282b2ec5f9`.
+
+That run again proved four operations during research. Both location calls
+worked through fetch. Search worked through CDP. Booking tested fetch,
+fetch-bootstrap, CDP, and stealth constructions, inspected their returned
+bodies, and produced a proven result. Calendar tested the recorded body,
+omitted and recorded header variants, fresh bootstrap state, future dates, and
+browser navigation. It concluded that direct calls lacked a reproducible
+body-coupled request header and that browser navigation still showed only
+unresolved fare placeholders. One provider interruption was retried without
+becoming an artifact failure.
+
+The Calendar planner and master then made an unsupported leap. They correctly
+accepted that the tested API constructions were unresolved, but treated that
+as proof that a browser playbook would work. The proposed playbook extraction
+was invented even though the research handoff explicitly said the visible
+calendar never produced real fares. The run was cancelled before those files
+were compiled. It had no ready tools yet because planning waits for all
+research, but the four proven research handoffs remain useful diagnostic
+evidence only.
+
+The agent instructions now state the missing distinction directly: API
+infeasibility and playbook feasibility require two separate proofs. A blocked
+API researcher cannot prove a playbook. Browser evidence must independently
+show a complete parameter-controlled interaction reaching a real core result;
+loading text, placeholders, a route form, or missing results mean the operation
+should remain unresolved while proven tools ship. This is prompt guidance for
+agent judgment, not a runtime restriction or a site-specific rule. All 110
+master-agent tests, type checking, and lint pass.

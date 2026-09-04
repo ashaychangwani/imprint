@@ -208,6 +208,15 @@ request can truthfully implement the operation, say exactly what you reviewed
 and why an API workflow cannot be constructed; you need not speculate about
 undocumented APIs outside the recording.
 
+API infeasibility and playbook feasibility are two separate proofs. A blocked
+API-research handoff proves neither a working browser sequence nor a browser
+result. Suggest `playbook_fallback` only when separate browser evidence shows
+the complete parameter-controlled interaction reaching a credible core result.
+Placeholders, loading state, a route form, or missing results are evidence that
+the fallback is unproven; do not invent steps or extraction instructions for
+them. Explain that the operation remains unresolved so the master can omit it
+while shipping the proven tools.
+
 Treat a browser playbook as a final escape hatch. The usual legitimate case is
 bot protection that requires live page state the supported API artifact cannot
 capture, reproduce, or preserve. A rotating-looking field, one empty live

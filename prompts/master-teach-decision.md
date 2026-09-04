@@ -234,6 +234,14 @@ and the factual result of each. A rotating-looking field name, an empty result,
 one failed comparison, or one compiler's belief that state is page-generated
 does not establish impossibility.
 
+API infeasibility and playbook feasibility are two separate proofs. A blocked
+API-research handoff can support only the first; it never proves the second by
+itself. Choose `playbook_fallback` only when separate browser evidence shows a
+complete parameter-controlled interaction reaching a credible core result.
+When browser observation ends in placeholders, loading state, a route form, or
+missing results, leave the operation unresolved instead of inventing steps or
+result extraction that the evidence never demonstrated.
+
 If the API still has a grounded construction but current live evidence is
 inconclusive, leave that tool unresolved and publish the other usable API MVPs
 instead of converting it into a speculative playbook. A fallback is not an MVP
