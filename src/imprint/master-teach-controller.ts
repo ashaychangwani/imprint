@@ -2302,8 +2302,9 @@ function apiResearchUrlShape(value: string): string {
 }
 
 /** Give the researcher a payload-free map of every recorded call. The target's
- * own requests come first, followed by mechanically nearby calls. Only one
- * bounded page is sent at a time; exact details still require inspection. */
+ * own requests come first, then document navigations that can host page-owned
+ * API traffic, followed by mechanically nearby calls. Only one bounded page is
+ * sent at a time; exact details still require inspection. */
 function apiResearchRequestCatalog(
   session: Session,
   tool: EditableTeachingTool,
@@ -2315,11 +2316,11 @@ function apiResearchRequestCatalog(
     tool.candidate.dependencySeqs[0] ??
     0;
   const distance = (seq: number): number => Math.abs(anchor - seq);
+  const priority = (request: Session['requests'][number]): number =>
+    selected.has(request.seq) ? 0 : request.resourceType?.toLowerCase() === 'document' ? 1 : 2;
   const ordered = [...session.requests].sort((left, right) => {
-    const leftSelected = selected.has(left.seq) ? 0 : 1;
-    const rightSelected = selected.has(right.seq) ? 0 : 1;
     return (
-      leftSelected - rightSelected ||
+      priority(left) - priority(right) ||
       distance(left.seq) - distance(right.seq) ||
       left.seq - right.seq
     );
@@ -2868,62 +2869,57 @@ async function reviewApiResearchBeforePlanning(input: {
       mergeResearch(plan, refreshedSiblings);
     }
 
-    const latestHandoffs = plan.tools.flatMap((tool) => {
-      const handoff = handoffs.get(tool.candidate.toolName);
-      return handoff ? [handoff] : [];
-    });
-    const repeatedStates = followUps.flatMap((followUp) => {
-      const handoff = handoffs.get(followUp.toolName);
-      if (handoff?.status !== 'partial') return [];
-      const followUpStateSha256 = apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp);
-      return attemptedFollowUpStates.has(followUpStateSha256)
-        ? [
-            {
-              toolName: followUp.toolName,
-              partialHandoffSha256: teachingPlanContentSha256(handoff),
-              followUpStateSha256,
-              reason:
-                'The same partial handoff, public boundary, relevant sibling research, and master direction already completed without progress.',
-            } satisfies ApiResearchNoProgress,
-          ]
-        : [];
-    });
-    if (repeatedStates.length > 0) {
-      researchNoProgress = repeatedStates;
-      input.report?.('master: reviewing an exact no-progress API research cycle');
-      continue;
-    }
     researchNoProgress = [];
+    let repeatedState: ApiResearchNoProgress | undefined;
+    // The master orders causal follow-ups. Merge each result before building
+    // the next input so a consumer sees a producer repaired earlier this cycle.
     for (const followUp of followUps) {
+      const latestHandoffs = plan.tools.flatMap((tool) => {
+        const handoff = handoffs.get(tool.candidate.toolName);
+        return handoff ? [handoff] : [];
+      });
       const handoff = handoffs.get(followUp.toolName);
-      if (handoff?.status !== 'partial') continue;
-      attemptedFollowUpStates.add(apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp));
-    }
+      if (handoff?.status === 'partial') {
+        const followUpStateSha256 = apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp);
+        if (attemptedFollowUpStates.has(followUpStateSha256)) {
+          repeatedState = {
+            toolName: followUp.toolName,
+            partialHandoffSha256: teachingPlanContentSha256(handoff),
+            followUpStateSha256,
+            reason:
+              'The same partial handoff, public boundary, relevant sibling research, and master direction already completed without progress.',
+          };
+          break;
+        }
+        attemptedFollowUpStates.add(followUpStateSha256);
+      }
 
-    const targetIds = new Set(
-      followUps.flatMap((followUp) => {
-        const tool = plan.tools.find(({ candidate }) => candidate.toolName === followUp.toolName);
-        return tool ? [tool.id] : [];
-      }),
-    );
-    const continued = await researchSelectedOperations({
-      plan,
-      run: input.discoveryInput.run,
-      recordingIndex: input.discoveryInput.recordingIndex,
-      triagedSession: input.triagedSession,
-      independent: input.independent,
-      seeds: input.seeds,
-      stagingRoot: input.stagingRoot,
-      agent: input.agent,
-      deps: input.deps,
-      runDeadline: input.runDeadline,
-      signal: input.signal,
-      report: input.report,
-      toolIds: targetIds,
-      followUps,
-      previousHandoffs: latestHandoffs,
-    });
-    mergeResearch(plan, continued);
+      const target = plan.tools.find(({ candidate }) => candidate.toolName === followUp.toolName);
+      if (!target)
+        throw new Error(`API research follow-up target "${followUp.toolName}" is absent`);
+      const continued = await researchSelectedOperations({
+        plan,
+        run: input.discoveryInput.run,
+        recordingIndex: input.discoveryInput.recordingIndex,
+        triagedSession: input.triagedSession,
+        independent: input.independent,
+        seeds: input.seeds,
+        stagingRoot: input.stagingRoot,
+        agent: input.agent,
+        deps: input.deps,
+        runDeadline: input.runDeadline,
+        signal: input.signal,
+        report: input.report,
+        toolIds: new Set([target.id]),
+        followUps: [followUp],
+        previousHandoffs: latestHandoffs,
+      });
+      mergeResearch(plan, continued);
+    }
+    if (repeatedState) {
+      researchNoProgress = [repeatedState];
+      input.report?.('master: reviewing an exact no-progress API research cycle');
+    }
   }
 
   return {

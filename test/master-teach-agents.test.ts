@@ -1207,6 +1207,8 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toMatch(/same user operation by consuming a\s+selection/i);
     expect(masterPrompt).toMatch(/separate public helper is usually the\s+wrong boundary/i);
     expect(masterPrompt).toMatch(/may\s+still shrink or split an over-broad detector proposal/i);
+    expect(masterPrompt).toMatch(/array is causal execution order/i);
+    expect(masterPrompt).toMatch(/put the sibling\s+producer first/i);
   });
 
   it('separates a missing transport producer from proof that the field is required', () => {

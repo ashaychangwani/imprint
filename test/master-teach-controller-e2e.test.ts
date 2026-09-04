@@ -246,7 +246,11 @@ function threeToolSyntheticSessionPath(root: string): string {
   return path;
 }
 
-function largeCatalogSyntheticSessionPath(root: string): { path: string; lastRequestSeq: number } {
+function largeCatalogSyntheticSessionPath(root: string): {
+  path: string;
+  lastRequestSeq: number;
+  navigationRequestSeq: number;
+} {
   const path = syntheticSessionPath(root);
   const session = SessionSchema.parse(readJson(path));
   const extraRequests = Array.from({ length: 300 }, (_, index) => {
@@ -268,8 +272,23 @@ function largeCatalogSyntheticSessionPath(root: string): { path: string; lastReq
     };
   });
   session.requests.push(...extraRequests);
+  const navigationRequestSeq = 410;
+  session.requests.push({
+    seq: navigationRequestSeq,
+    timestamp: 1_000,
+    method: 'GET',
+    url: 'https://fixture.invalid/app/items',
+    headers: { accept: 'text/html' },
+    resourceType: 'Document',
+    response: {
+      status: 200,
+      headers: { 'content-type': 'text/html' },
+      mimeType: 'text/html',
+      body: '<html><body>Fixture app</body></html>',
+    },
+  });
   writeFileSync(path, `${JSON.stringify(SessionSchema.parse(session))}\n`);
-  return { path, lastRequestSeq: 309 };
+  return { path, lastRequestSeq: 309, navigationRequestSeq };
 }
 
 function preparedSession(
@@ -919,6 +938,14 @@ describe('fresh foreground master controller end to end', () => {
               input.observations.length === 0 &&
               !input.inspectedRequestSeqs?.includes(recording.lastRequestSeq)
             ) {
+              if (input.requestCatalogPage?.offset === 0) {
+                expect(
+                  input.requestCatalog?.some(
+                    ({ recordingRequestSeq }) =>
+                      recordingRequestSeq === recording.navigationRequestSeq,
+                  ),
+                ).toBeTrue();
+              }
               if (
                 !input.requestCatalog?.some(
                   ({ recordingRequestSeq }) => recordingRequestSeq === recording.lastRequestSeq,
@@ -1308,7 +1335,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('continues mutually directed retained follow-ups without fresh stale passes', async () => {
+  it('runs master-ordered retained follow-ups with each prior result visible', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const base = lifecycleFailureFixture({
@@ -1327,6 +1354,7 @@ describe('fresh foreground master controller end to end', () => {
       const returnedPartial = new Set<string>();
       const initialTurns = new Map<string, number>();
       const retainedFollowUps = new Map<string, number>();
+      const followUpOrder: string[] = [];
       const plannedNames: string[] = [];
       const terminal = await runFreshMasterTeach(
         {
@@ -1342,6 +1370,12 @@ describe('fresh foreground master controller end to end', () => {
             const toolName = input.tool.candidate.toolName;
             if (retainedTurnDelta?.kind === 'master_follow_up') {
               retainedFollowUps.set(toolName, (retainedFollowUps.get(toolName) ?? 0) + 1);
+              followUpOrder.push(toolName);
+              if (toolName === CONSUMER_NAME) {
+                expect(input.followUp?.siblingResearch[0]?.summary).toBe(
+                  'Updated producer proof from this same ordered follow-up cycle.',
+                );
+              }
             }
             if (!input.followUp) initialTurns.set(toolName, (initialTurns.get(toolName) ?? 0) + 1);
             const decision = await baseResearch(input, agent, retainedTurnDelta);
@@ -1354,7 +1388,12 @@ describe('fresh foreground master controller end to end', () => {
                 reason: 'The recorded call works; the master will refine its core result promise.',
               };
             }
-            return decision;
+            return toolName === PRODUCER_NAME && input.followUp
+              ? {
+                  ...decision,
+                  reason: 'Updated producer proof from this same ordered follow-up cycle.',
+                }
+              : decision;
           },
           requestMasterDecision: async (input, agent, options) => {
             if (
@@ -1403,6 +1442,7 @@ describe('fresh foreground master controller end to end', () => {
           [CONSUMER_NAME, 1],
         ]),
       );
+      expect(followUpOrder).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
       expect(plannedNames).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
       expect(terminal.status).toBe('failed');
     });

@@ -4577,3 +4577,40 @@ first phase or an HTTP-success wrapper.
 
 Validation passed all 1,934 tests, TypeScript, formatting/lint, dead-code,
 circular-dependency, and diff checks.
+
+## 2026-09-04 12:58–14:10 PDT — All five Flights API calls work, but duplicated dependency research consumes the deadline
+
+Fresh Flights run `62230d6a-eb6f-4a35-8e4f-9fe4f8373391` reused only the
+successful candidate-selection checkpoint. Location search, location details,
+flight search, the date-price grid, and booking options all produced credible
+live API data. Booking returned providers, fares, baggage details, and booking
+links for the selected round trip. No playbook was used.
+
+The new factual request comparison helped immediately: Booking's first request
+body was 620 bytes instead of the recorded 608 bytes, and the researcher fixed
+the extra nesting on its next turn. The harder remaining problem was not a lost
+conversation or a hidden runtime rejection. A direct request with a matching
+shape still returned a small protocol error, so the agents correctly moved to
+page-owned API transport and eventually proved the simple public Booking call.
+
+The avoidable delay was between Search and Booking. In one review, the master
+asked Search to produce a current terminal round-trip selection and asked
+Booking to consume that new selection. The controller ran both follow-ups at
+the same time from the old handoff snapshot. Booking could not see Search's new
+result, so it independently rebuilt and debugged the entire three-step search
+chain. That duplicate work took roughly nineteen minutes. All research finally
+finished after about 56 minutes. Five planners then started, three finished,
+and the shared 60-minute deadline canceled the remaining two. The terminal
+truthfully reported `0 ready, 5 not ready`; compilation never began.
+
+The correction is small and site-neutral. Research follow-ups now run in the
+exact order chosen by the master, and each later agent receives the updated
+handoffs from earlier agents in that same review. Initial independent research
+remains parallel. The recording catalog also puts ordinary document
+navigations immediately after the tool's selected requests, so a researcher
+can discover page-owned API transport without paging past hundreds of
+unrelated calls. This ordering only exposes evidence; it does not select a
+browser strategy or change pass/fail behavior.
+
+Validation passed all 1,934 tests, TypeScript, formatting/lint, dead-code,
+circular-dependency, and diff checks.

@@ -74,6 +74,11 @@ set exposes a concrete cross-tool contradiction. Do not ask for the whole
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.
+The `researchFollowUps` array is causal execution order. When one follow-up
+needs new evidence from a sibling that also needs a follow-up, put the sibling
+producer first and its dependent consumer later. The consumer then receives
+the producer's updated handoff instead of recreating its unfinished work.
+Order independent follow-ups however you prefer.
 A partial handoff alone is not evidence that the promised operation should be
 shrunk or its missing internal stage split into a new tool. First consider
 returning the exact missing proof to the retained researcher for the existing
