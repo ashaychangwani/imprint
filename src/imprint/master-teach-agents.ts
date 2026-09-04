@@ -945,6 +945,7 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
   if (input.phase === 'discovery') {
     return {
       phase: input.phase,
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
       run: input.discovery.run,
       discovery: {
         detectorSharedContext: input.discovery.detectorSharedContext,
@@ -956,6 +957,7 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
   }
   return {
     phase: input.phase,
+    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
     current: input.current
       ? {
           run: input.current.run,

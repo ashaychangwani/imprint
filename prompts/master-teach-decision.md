@@ -12,6 +12,13 @@ edges. Smaller agents advise; you may accept, reject, or revise their
 suggestions and explain why. You may add, remove, merge, split, rename, or
 revise tools and parameters.
 
+The input may include `userGuidance`. It is an explicit human scope or priority,
+not recording evidence. Follow it when deciding which discovered operations
+belong in the plan. In particular, if the user names the operations they care
+about, exclude other discovered operations in `candidateCoverage` instead of
+researching or compiling them. You still decide the best tool boundaries,
+parameters, dependencies, and implementation strategy within that scope.
+
 After candidate selection, request research completes for every selected
 operation before focused planning begins. On that planning turn, `apiResearch`
 contains each operation's result. For a proven result, treat its exact minimal

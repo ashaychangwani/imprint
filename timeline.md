@@ -4216,3 +4216,20 @@ and a 10.4 KB `GetCalendarGraph` result. Its narration marks both “looked at
 date grid” and “looked at price graph.” The next teach explicitly combines
 only these two recordings and starts candidate discovery fresh because their
 combined evidence has a new identity. No old candidate plan or build is reused.
+
+The first combined run, `abdc2f19-4eba-4095-91a9-7d8dc74e5575`, confirmed that
+fresh discovery found seven operations, including the exact four Calendar Grid
+requests and the separate Calendar Graph request from the new recording. The
+user then narrowed the desired product scope to location lookup/details, flight
+search, calendar grid, and booking options. The run was cancelled as its seven
+researchers started so the unwanted older calendar-picker and price-graph tools
+would not consume the remaining time.
+
+Teach now accepts optional `--guidance <text>` for explicit human scope and
+priorities. The guidance is given to the retained master before research and
+again after research; it is clearly labeled as a human instruction rather than
+recording evidence. The master still chooses boundaries, parameters,
+dependencies, and implementation strategy, while excluded detector candidates
+remain honestly accounted for in the plan. This is a general steering channel,
+not a site-specific filter or runtime semantic decision. CLI/prompt tests, a
+controller end-to-end propagation test, type checking, and lint pass.

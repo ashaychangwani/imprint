@@ -67,6 +67,9 @@ describe('teach help', () => {
     expect(flags.find(({ name }) => name === '--timeout <duration>')?.description).toContain(
       'Foreground teach deadline',
     );
+    expect(flags.find(({ name }) => name === '--guidance <text>')?.description).toContain(
+      'explicit human scope',
+    );
   });
 
   it('labels interrupted work as unfinished instead of failed', () => {

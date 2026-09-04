@@ -179,6 +179,8 @@ export interface FreshTeachOptions {
    * run of this site. Planning, compilation, checks, and agent conversations
    * always start fresh. */
   fromCandidates?: string;
+  /** Explicit human scope or priorities for the master. Not treated as recording evidence. */
+  userGuidance?: string;
   keepTest?: boolean;
   /** Optional explicit spelling for the same master-led flow. When no
    * provider is supplied, this also selects the Codex provider end to end. */
@@ -2337,6 +2339,7 @@ async function discoverAndPlan(input: {
   candidatePayload?: ReturnType<typeof buildToolCandidatePayload>;
   detection?: Detection;
   selected?: CandidateSelection;
+  userGuidance?: string;
   independent: IndependentExecutionObservation;
   seeds: Map<string, FreshTeachBootstrapObject>;
   agent: MasterTeachAgentOptions;
@@ -2408,6 +2411,7 @@ async function discoverAndPlan(input: {
     advice = await input.deps.requestToolSelectionAdvice(discoveryInput, input.agent);
     const discoveryDecisionInput: MasterDecisionInput = {
       phase: 'discovery',
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
       discovery: discoveryInput,
       toolSelectionAdvice: advice,
       plannerProposals: [],
@@ -2479,6 +2483,7 @@ async function discoverAndPlan(input: {
   const evidenceRefs = allEvidenceRefs(discoveryEvidence, plannerBundles);
   const revisionInput: MasterDecisionInput = {
     phase: 'revision',
+    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
     discovery: discoveryInput,
     current: {
       run: {
@@ -4760,6 +4765,7 @@ export async function runFreshMasterTeach(
       candidatePayload: masterPayload,
       detection,
       selected,
+      userGuidance: opts.userGuidance,
       independent,
       seeds,
       agent: agents,

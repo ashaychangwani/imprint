@@ -1050,6 +1050,14 @@ describe('prompts and pre-plan discovery', () => {
     expect(advisorPrompt).toContain('update every affected dependency');
   });
 
+  it('treats explicit user scope as guidance for the master rather than evidence', () => {
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('`userGuidance`');
+    expect(masterPrompt).toContain('explicit human scope');
+    expect(masterPrompt).toContain('exclude other discovered operations');
+    expect(masterPrompt).toContain('not recording evidence');
+  });
+
   it('makes one consumer invocation explicit instead of host-inferred groups', () => {
     for (const name of [
       'master-teach-decision.md',

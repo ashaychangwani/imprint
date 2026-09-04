@@ -285,6 +285,8 @@ const ParameterAdviceSubmissionSchema = strictObject({
 });
 export const MasterDecisionInputSchema = strictObject({
   phase: z.enum(['discovery', 'revision']),
+  /** Explicit user scope or priorities. This guides semantic decisions but is not recording evidence. */
+  userGuidance: utf8Text(1, 4_000).optional(),
   discovery: ToolSelectionAdvisorInputSchema,
   current: MasterCurrentSchema.optional(),
   toolSelectionAdvice: ToolSelectionAdvisorOutputSchema.optional(),

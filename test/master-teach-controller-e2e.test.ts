@@ -840,6 +840,43 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('passes explicit human guidance to the master before and after research', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-user-guidance',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseMaster = base.requestMasterDecision;
+      if (!baseMaster) throw new Error('fixture master is missing');
+      const guidance = 'Keep location lookup, search, calendar grid, and booking only.';
+      const seen: Array<string | undefined> = [];
+
+      await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          userGuidance: guidance,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (input, agent, options) => {
+            seen.push(input.userGuidance);
+            return await baseMaster(input, agent, options);
+          },
+        },
+      );
+
+      expect(seen.length).toBeGreaterThanOrEqual(2);
+      expect(new Set(seen)).toEqual(new Set([guidance]));
+    });
+  });
+
   it('verifies the researcher-proven API case before synthetic parameter breadth', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
