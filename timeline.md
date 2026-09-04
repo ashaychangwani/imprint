@@ -3986,3 +3986,31 @@ byte read and are passed into teaching directly; the controller no longer
 opens and parses the mounted file a second time. This is generic file-loading
 mechanics, not teaching strategy. Session-loading tests, the complete fresh
 controller end-to-end suite, type checking, and lint pass.
+
+## 2026-09-03 16:33–17:07 PDT — Researchers reviewed real results but the runtime ran stale edits
+
+Fresh Flights run `792bba1b-9697-4078-969f-4dcd3acd3829` loaded the mounted
+recording normally, confirming the network-file read fix. Both location
+researchers tested a second, different input and checked that the returned
+locations changed. Search rejected a successful generic landing page, proved
+that the recorded SJC-to-SAN page contained 19 real flights, and then tested a
+different LAX-to-JFK search. Calendar also rejected successful page loads that
+contained no requested route or fares. This confirmed that semantic review is
+now part of the researcher's own job rather than merely an HTTP status check.
+
+Those comparisons exposed a generic execution bug. The researcher rewrites
+`request-transform.ts` at the same path while it tests new ideas. Bun normally
+caches an imported TypeScript module by that path, so later tests sometimes ran
+the first transform even though the file contained a newer one. Search therefore
+kept returning the recorded route after its code changed, and a later GET was
+given a body that existed only in an older attempt. The run was cancelled after
+about 19 minutes because any later conclusions would have been based on stale
+code.
+
+The runtime now imports each current agent-written request transform and parser
+through a temporary unique sibling file. This forces the code actually on disk
+to run while preserving relative imports. The existing shared-module checker
+uses the same small helper. Regression tests rewrite both a transform and a
+parser in place and prove that the second execution sees the second version.
+The focused runtime and shared-module suites pass 61 tests; type checking and
+lint pass. This is module-loading mechanics for every site, not Flights policy.

@@ -5,44 +5,15 @@
  * authored test, and typechecks it with its declared dependencies.
  */
 
-import { copyFileSync, existsSync, rmSync, writeFileSync } from 'node:fs';
-import { basename, dirname as pathDirname, join as pathJoin } from 'node:path';
+import { existsSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, join as pathJoin } from 'node:path';
 import type { SharedModuleSpec } from './build-plan.ts';
 import { runBunTestWithResults, typecheckArtifacts } from './compile-tools.ts';
 import type { Session } from './types.ts';
 
 const SESSION_PATH_ENV = 'IMPRINT_SESSION_PATH';
 
-let verifyCopyCounter = 0;
-
-/** Import a freshly-written module, defeating bun's stale `.ts` import cache.
- *
- *  Bun keys its transpiled-module cache by file PATH and ignores the `?t=`
- *  query cache-buster for local `.ts` files, so within the long-lived teach
- *  process a re-import after the compile agent edits a module returns the
- *  STALE first-loaded version. That silently breaks per-cycle verification: a
- *  request-transform the agent fixed across cycles still looks like it never
- *  exported `transform`, so a valid signing module fails all cycles and gets
- *  pruned — forcing every tool to re-implement it. (The `bun test` step is
- *  immune because it runs in a fresh subprocess; that's why the test could
- *  pass while the in-process anchor wrongly failed.)
- *
- *  Copying to a unique sibling filename in the SAME directory forces a fresh
- *  load while keeping the module's relative imports to sibling shared modules
- *  resolvable. The leading dot + explicit cleanup keep the temp copy out of
- *  test/typecheck globs. */
-export async function importModuleFresh(modulePath: string): Promise<Record<string, unknown>> {
-  const uniq = pathJoin(
-    pathDirname(modulePath),
-    `.verify-${Date.now()}-${process.pid}-${verifyCopyCounter++}.ts`,
-  );
-  copyFileSync(modulePath, uniq);
-  try {
-    return (await import(`file://${uniq}`)) as Record<string, unknown>;
-  } finally {
-    rmSync(uniq, { force: true });
-  }
-}
+export { importModuleFresh } from './import-module-fresh.ts';
 
 /** Compress the verifier's (possibly multi-KB) failure list into a short,
  *  human-scannable summary of WHICH gate(s) failed — used in the per-cycle

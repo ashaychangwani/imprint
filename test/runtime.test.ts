@@ -864,6 +864,97 @@ describe('requestTransformModule', () => {
     }
   });
 
+  it('loads an edited request transform instead of a cached prior attempt', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-rewrite-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/search',
+          headers: {},
+        },
+      ],
+    };
+    const sent: Array<{ url: string; body: RequestInit['body'] }> = [];
+    const fetchMock = (async (url: string, init?: RequestInit) => {
+      sent.push({ url, body: init?.body });
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const transformPath = join(tmpDir, 'request-transform.ts');
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        transformPath,
+        `export function transform(_method, url) {
+          return { url: url + '?attempt=first', body: 'stale-body' };
+        }`,
+      );
+      await executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+
+      writeFileSync(
+        transformPath,
+        `export function transform(_method, url) {
+          return url + '?attempt=second';
+        }`,
+      );
+      await executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+
+      expect(sent).toEqual([
+        { url: 'https://api.example.com/search?attempt=first', body: 'stale-body' },
+        { url: 'https://api.example.com/search?attempt=second', body: undefined },
+      ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads an edited parser instead of a cached prior attempt', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-parser-rewrite-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requestTransformModule: undefined,
+      parserModule: './parser.ts',
+    };
+    const parserPath = join(tmpDir, 'parser.ts');
+    const run = () =>
+      executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: (async () =>
+          new Response('{"value":1}', {
+            headers: { 'content-type': 'application/json' },
+          })) as unknown as typeof fetch,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(parserPath, `export function extract() { return { attempt: 'first' }; }`);
+      expect(await run()).toMatchObject({ ok: true, data: { attempt: 'first' } });
+
+      writeFileSync(parserPath, `export function extract() { return { attempt: 'second' }; }`);
+      expect(await run()).toMatchObject({ ok: true, data: { attempt: 'second' } });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('reports value-free stage facts when a later request transform fails', async () => {
     const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');

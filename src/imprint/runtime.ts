@@ -19,6 +19,7 @@ import {
   readSiteManifest,
   saveSiteCookies,
 } from './credential-store.ts';
+import { importModuleFresh } from './import-module-fresh.ts';
 import {
   captureHeader,
   captureValueMatches,
@@ -328,7 +329,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         dirname(opts.workflowPath),
         opts.workflow.requestTransformModule,
       );
-      const mod = await import(transformPath);
+      const mod = await importModuleFresh(transformPath);
       if (typeof mod.transform === 'function') {
         requestTransform = mod.transform as RequestTransform;
       }
@@ -635,7 +636,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   if (opts.workflow.parserModule && opts.workflowPath) {
     try {
       const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);
-      const mod = await import(parserModulePath);
+      const mod = await importModuleFresh(parserModulePath);
       if (typeof mod.extract !== 'function') {
         return withRequestStageFacts(
           {
@@ -715,8 +716,8 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   let requestTransform: RequestTransform | undefined;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
-      const mod = await import(
-        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule)
+      const mod = await importModuleFresh(
+        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule),
       );
       if (typeof mod.transform === 'function') {
         requestTransform = mod.transform as RequestTransform;
