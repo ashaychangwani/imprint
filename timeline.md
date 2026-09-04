@@ -4342,3 +4342,70 @@ check. The source and prompts contain no Google-, Flights-, Hotels-, calendar-,
 or endpoint-specific rule. The next validation is a fresh, unsteered Flights
 teach from the exact two-recording combined file; no failed pre-change run will
 be resumed.
+
+## 2026-09-04 02:51–03:14 PDT — Fresh Flights research proves three tools, then exhausts context
+
+Fresh run `97f87e48-6faa-4f2f-8016-6bb0996c791d` used the intended combined
+recording with hash
+`b5542eb78a4b4df53d914fb2a9d46bd64a2813ccad8d3b61de02e66755245bb1`.
+The shipped detector proposed seven operations. The master applied the user's
+scope and started first-pass research for five tools before doing any planning
+or compilation.
+
+Location search and location details were proven with small direct requests.
+Date-grid research paged into the later recording, rejected responses that were
+only valid on paper, and eventually proved a real grid containing dates, prices,
+and selection values. Booking proved that a real page-owned background response
+returned flights, fare families, sellers, and booking links, but correctly kept
+the result partial because its public inputs were not yet connected to that
+working call. Search tried several direct and browser-backed constructions and
+did not falsely claim that its failed or empty responses worked. Warm CDP reuse
+also worked inside one unchanged tool attempt: a later call took about 1.2
+seconds instead of repeating cold startup.
+
+The run ended before planning because the retained `search_flights` researcher
+ran out of model context. It was one continuous SDK thread, not a series of
+fresh agents. The problem was Imprint repeatedly sending facts that thread
+already had: after inspection, roughly 250 KB of unchanged request evidence and
+103 KB of unchanged request catalog were repeated on nearly every turn. The
+thread therefore filled even though retaining its reasoning was the right
+architecture. The Codex SDK's configured compaction did not run before this
+failure. No artifact or website failure caused the stop.
+
+An unrelated tracing shutdown then printed a raw `ECONNREFUSED` after the real
+error because the local trace collector was unavailable. Tracing is diagnostic
+and must not affect a command's result. The correction is to make tracing
+shutdown best-effort and to send retained researchers only the new fact from
+each turn while leaving history and compaction to the SDK. The next run may
+reuse only this run's content-bound candidate selection; research and every
+later stage will start fresh after the fix.
+
+## 2026-09-04 03:15–03:47 PDT — Keep one researcher conversation without repeating its history
+
+The researcher still uses one real Codex SDK conversation per tool. Imprint now
+sends only the new fact on each later turn: one test result, one new catalog
+page, or the newly inspected requests. It no longer repeats the large catalog
+and all earlier request evidence that Codex already remembers. If the master
+changes the tool boundary, that one follow-up includes the revised boundary and
+the first page of its refreshed catalog exactly once.
+
+Codex remains responsible for retaining and compacting its own conversation.
+Imprint asks Codex to compact at 80,000 total tokens so there is room for the
+next bounded evidence package; Imprint does not summarize or rebuild the
+conversation itself. The largest newly inspected evidence package is capped at
+300,000 characters, while the complete accumulated evidence is still kept for
+planning and for providers that do not retain a conversation.
+
+Tracing is now strictly diagnostic. If its local collector cannot start or
+cannot accept the final export, Imprint prints one warning but preserves the
+real teach result and exit status. This prevents the earlier `ECONNREFUSED`
+message from hiding the actual research failure.
+
+The first full test attempt exposed 3.4 GB of abandoned temporary Chrome
+profiles from earlier runs. Only those unused `imprint-chrome-*` temporary
+directories were removed; recordings, teach runs, generated tools, and agent
+history were untouched. Final validation passed: 1,923 tests, TypeScript,
+Biome, dead-code and circular-dependency checks, and the diff/site-neutrality
+checks. The next attempt will be a new teach run that reuses only the prior
+content-bound candidate selection and starts research, planning, compilation,
+and verification from scratch.

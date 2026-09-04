@@ -31,6 +31,7 @@ import {
   requestMasterDecision as requestValidatedMasterDecision,
 } from '../src/imprint/master-teach-agents.ts';
 import {
+  API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
   runFreshMasterTeach,
   verificationForResearchParameters,
 } from '../src/imprint/master-teach-controller.ts';
@@ -868,7 +869,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('lets a retained researcher page to an omitted request and inspect an earlier page', async () => {
+  it('pages to omitted requests and sends sequential inspections without repeating prior evidence', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recording = largeCatalogSyntheticSessionPath(root);
       const base = lifecycleFailureFixture({
@@ -881,6 +882,8 @@ describe('fresh foreground master controller end to end', () => {
       if (!baseResearch) throw new Error('fixture API researcher is missing');
       let catalogTurns = 0;
       let inspectedAcrossPages = false;
+      let sawEarlierInspectionDelta = false;
+      let sawLaterInspectionDelta = false;
 
       const terminal = await runFreshMasterTeach(
         {
@@ -892,8 +895,26 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
-          requestApiResearchStep: async (input) => {
+          requestApiResearchStep: async (input, _agent, retainedTurnDelta) => {
             const decision = await baseResearch(input);
+            if (retainedTurnDelta?.kind === 'inspection') {
+              const deltaJson = JSON.stringify(retainedTurnDelta.relevantEvidence);
+              expect(deltaJson.length).toBeLessThanOrEqual(
+                API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
+              );
+              if (retainedTurnDelta.inspectedRequestSeqs.includes(2)) {
+                expect(retainedTurnDelta.inspectedRequestSeqs).toEqual([2]);
+                expect(deltaJson).toContain('https://fixture.invalid/api/items/item-1');
+                expect(deltaJson).not.toContain(`/api/neighbor/${recording.lastRequestSeq}`);
+                sawEarlierInspectionDelta = true;
+              }
+              if (retainedTurnDelta.inspectedRequestSeqs.includes(recording.lastRequestSeq)) {
+                expect(retainedTurnDelta.inspectedRequestSeqs).toEqual([recording.lastRequestSeq]);
+                expect(deltaJson).toContain(`/api/neighbor/${recording.lastRequestSeq}`);
+                expect(deltaJson).not.toContain('https://fixture.invalid/api/items/item-1');
+                sawLaterInspectionDelta = true;
+              }
+            }
             if (
               input.tool.candidate.toolName === PRODUCER_NAME &&
               input.observations.length === 0 &&
@@ -916,11 +937,19 @@ describe('fresh foreground master controller end to end', () => {
               expect(
                 input.requestCatalog?.some(({ recordingRequestSeq }) => recordingRequestSeq === 2),
               ).toBeFalse();
+              if (!input.inspectedRequestSeqs?.includes(2)) {
+                return {
+                  binding: decision.binding,
+                  action: 'inspect' as const,
+                  requestedRequestSeqs: [2],
+                  reason: 'Inspect the relevant call remembered from an earlier catalog page.',
+                };
+              }
               return {
                 binding: decision.binding,
                 action: 'inspect' as const,
-                requestedRequestSeqs: [2, recording.lastRequestSeq],
-                reason: 'Inspect the newly found call and the relevant call from an earlier page.',
+                requestedRequestSeqs: [recording.lastRequestSeq],
+                reason: 'Inspect the newly found call without repeating the earlier evidence.',
               };
             }
             if (
@@ -940,6 +969,8 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(catalogTurns).toBeGreaterThan(0);
       expect(inspectedAcrossPages).toBeTrue();
+      expect(sawEarlierInspectionDelta).toBeTrue();
+      expect(sawLaterInspectionDelta).toBeTrue();
       expect(terminal.status).toBe('failed');
     });
   });

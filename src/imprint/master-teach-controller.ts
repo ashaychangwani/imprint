@@ -154,6 +154,10 @@ const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
 const PLAYBOOK_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
 export const FOCUSED_EVIDENCE_CHARACTER_BUDGET = 700_000;
+/** A retained thread may already hold 80k tokens when a new inspection arrives.
+ * At roughly four characters per token, this leaves more than 100k tokens of
+ * headroom in the current 258k model window for output and tokenization variance. */
+export const API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET = 300_000;
 const PROMOTED_FILES = [
   'workflow.json',
   'parser.ts',
@@ -2364,6 +2368,7 @@ function expandedResearchEvidence(input: {
   triagedSession: Session;
   independent: IndependentExecutionObservation;
   seeds: Map<string, FreshTeachBootstrapObject>;
+  maximumCharacters?: number;
 }): PromptEvidenceProjection {
   const owned = new Set(input.tool.candidate.requestSeqs);
   const supportSeqs = new Set([
@@ -2386,7 +2391,34 @@ function expandedResearchEvidence(input: {
       independent: input.independent,
     }),
     input.seeds,
-    FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    input.maximumCharacters ?? FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    new Set(['focused_recording_scope', 'focused_request_summaries', 'focused_event_summaries']),
+  );
+}
+
+/** Project only the exact requests added by one inspect action. The retained
+ * conversation already owns the tool's initial and earlier inspected evidence. */
+function inspectionResearchEvidence(input: {
+  tool: EditableTeachingTool;
+  requestSeqs: readonly number[];
+  triagedSession: Session;
+  independent: IndependentExecutionObservation;
+  seeds: Map<string, FreshTeachBootstrapObject>;
+}): PromptEvidenceProjection {
+  return buildPromptEvidenceProjection(
+    focusedEvidenceDocuments({
+      session: input.triagedSession,
+      scope: {
+        toolName: input.tool.candidate.toolName,
+        requestSeqs: input.requestSeqs,
+        representativeSeqs: input.requestSeqs,
+        dependencySeqs: [],
+        eventSeqs: [],
+      },
+      independent: input.independent,
+    }),
+    input.seeds,
+    API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
     new Set(['focused_recording_scope', 'focused_request_summaries', 'focused_event_summaries']),
   );
 }
@@ -2407,6 +2439,7 @@ function followUpResearchEvidence(input: {
     triagedSession: input.triagedSession,
     independent: input.independent,
     seeds: input.seeds,
+    maximumCharacters: API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
   });
 }
 
@@ -2497,6 +2530,13 @@ async function researchSelectedOperations(input: {
             requiredLinks,
             inspectRequests: (requestSeqs) => {
               for (const seq of requestSeqs) inspectedRequestSeqs.add(seq);
+              const delta = inspectionResearchEvidence({
+                tool: sourceTool,
+                requestSeqs,
+                triagedSession: input.triagedSession,
+                independent: input.independent,
+                seeds: input.seeds,
+              });
               evidence = expandedResearchEvidence({
                 tool: sourceTool,
                 additionalRequestSeqs: [...inspectedRequestSeqs],
@@ -2505,7 +2545,7 @@ async function researchSelectedOperations(input: {
                 seeds: input.seeds,
               });
               evidenceByTool.set(sourceTool.id, evidence);
-              return evidence;
+              return { delta, accumulated: evidence };
             },
             toolDir: pathJoin(input.stagingRoot, 'api-research', tool.id),
             agent: input.agent,

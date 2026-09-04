@@ -1839,6 +1839,36 @@ export interface MasterTeachAgentOptions {
   onProviderRetry?: (event: ProviderRetryEvent) => void;
   onDeadlineReached?: () => Promise<number | null | undefined>;
 }
+export type ApiResearchRetainedTurnDelta =
+  | {
+      kind: 'observation';
+      latestObservation: ApiResearchInput['observations'][number];
+    }
+  | {
+      kind: 'catalog_page';
+      requestCatalog: NonNullable<ApiResearchInput['requestCatalog']>;
+      requestCatalogTruncated: boolean;
+      requestCatalogPage: NonNullable<ApiResearchInput['requestCatalogPage']>;
+    }
+  | {
+      kind: 'inspection';
+      inspectedRequestSeqs: number[];
+      relevantEvidence: ApiResearchInput['evidence'];
+    }
+  | {
+      kind: 'block_review';
+      blockReview: NonNullable<ApiResearchInput['blockReview']>;
+    }
+  | {
+      kind: 'master_follow_up';
+      followUp: NonNullable<ApiResearchInput['followUp']>;
+      relevantEvidence: ApiResearchInput['evidence'];
+      currentTool?: ApiResearchInput['tool'];
+      requiredLinks?: NonNullable<ApiResearchInput['requiredLinks']>;
+      requestCatalog?: NonNullable<ApiResearchInput['requestCatalog']>;
+      requestCatalogTruncated?: boolean;
+      requestCatalogPage?: NonNullable<ApiResearchInput['requestCatalogPage']>;
+    };
 export class SemanticAgentOutputError extends Error {
   constructor(
     readonly role: Role,
@@ -2136,40 +2166,42 @@ export async function requestFocusedPlan(
 export async function requestApiResearchStep(
   input: ApiResearchInput,
   agent: MasterTeachAgentOptions = {},
+  retainedTurnDelta?: ApiResearchRetainedTurnDelta,
 ) {
   const checked = ApiResearchInputValidationSchema.parse(input);
   const latestObservation = checked.observations.at(-1);
+  const retainedInput = retainedTurnDelta
+    ? (({ kind, ...delta }) => ({
+        instruction:
+          kind === 'master_follow_up'
+            ? 'Continue the same retained API-research conversation. Follow this new master direction and use the newly supplied evidence. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
+            : kind === 'observation'
+              ? 'Continue the same retained API-research conversation. Evaluate this newest factual test result. Return partial only when the selected core result or a required downstream obligation remains incomplete; defer optional breadth and further minimization.'
+              : kind === 'catalog_page'
+                ? 'Continue the same retained API-research conversation with this newly requested catalog page.'
+                : kind === 'inspection'
+                  ? 'Continue the same retained API-research conversation with only the newly requested recording evidence.'
+                  : 'Review your proposed blocker once using the retained evidence. Return another evidence-backed action when one remains, otherwise return blocked with the exact factual reason.',
+        turnKind: kind,
+        ...delta,
+      }))(retainedTurnDelta)
+    : undefined;
   return request({
     role: 'API researcher',
     conversationKey: `tool:${checked.tool.candidate.toolName}:api-researcher`,
     prompt: 'master-teach-api-researcher.md',
     input:
-      agent.provider === 'codex-cli' && latestObservation
+      agent.provider === 'codex-cli' && retainedInput
         ? {
-            instruction:
-              checked.researchPhase === 'follow_up'
-                ? 'Continue the same retained API-research conversation. Follow the master direction using only the supplied relevant request evidence and sibling handoffs. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
-                : 'Continue the same API-research conversation. Evaluate the newest factual result. The first pass is only the smallest working MVP: return partial only when the selected core result or a required downstream obligation remains incomplete; defer optional breadth and further minimization.',
-            latestObservation,
-            currentTool: apiResearchPromptTool(checked),
-            requiredLinks: checked.requiredLinks ?? [],
-            requestCatalog: checked.requestCatalog ?? [],
-            requestCatalogTruncated: checked.requestCatalogTruncated ?? false,
-            ...(checked.requestCatalogPage
-              ? { requestCatalogPage: checked.requestCatalogPage }
-              : {}),
-            ...(checked.previousProgress ? { previousProgress: checked.previousProgress } : {}),
-            ...(checked.researchPhase ? { researchPhase: checked.researchPhase } : {}),
-            ...(checked.inspectedRequestSeqs?.length
+            ...retainedInput,
+            ...('currentTool' in retainedInput && retainedInput.currentTool
               ? {
-                  inspectedRequestSeqs: checked.inspectedRequestSeqs,
-                  relevantEvidence: checked.evidence,
+                  currentTool: apiResearchPromptTool({
+                    ...checked,
+                    tool: retainedInput.currentTool,
+                  }),
                 }
               : {}),
-            ...(checked.followUp
-              ? { followUp: checked.followUp, relevantEvidence: checked.evidence }
-              : {}),
-            ...(checked.blockReview ? { blockReview: checked.blockReview } : {}),
           }
         : { ...checked, tool: apiResearchPromptTool(checked) },
     validation: {

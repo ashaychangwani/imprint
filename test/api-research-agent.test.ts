@@ -160,6 +160,7 @@ describe('focused API research', () => {
     let turn = 0;
     let executions = 0;
     let inspected: readonly number[] = [];
+    const retainedTurnDeltas: unknown[] = [];
     try {
       const result = await researchApiMvpCall({
         run,
@@ -180,13 +181,14 @@ describe('focused API research', () => {
         ],
         inspectRequests: (requestSeqs) => {
           inspected = requestSeqs;
-          return expandedEvidence;
+          return { delta: expandedEvidence, accumulated: expandedEvidence };
         },
         toolDir,
         agent: {},
         runDeadline: new RunDeadline(Date.now() + 60_000),
         dependencies: {
-          requestStep: async (input) => {
+          requestStep: async (input, _agent, retainedTurnDelta) => {
+            retainedTurnDeltas.push(retainedTurnDelta);
             turn += 1;
             if (turn === 1)
               return { binding, action: 'test', candidate: first, reason: 'Test the direct call.' };
@@ -237,6 +239,115 @@ describe('focused API research', () => {
       expect(inspected).toEqual([13]);
       expect(executions).toBe(2);
       expect(result.candidate).toEqual(revised);
+      expect(
+        retainedTurnDeltas.map((delta) =>
+          delta === undefined ? undefined : (delta as { kind: string }).kind,
+        ),
+      ).toEqual([undefined, 'observation', 'inspection', 'observation']);
+      expect(retainedTurnDeltas[1]).not.toHaveProperty('requestCatalog');
+      expect(retainedTurnDeltas[1]).not.toHaveProperty('relevantEvidence');
+      expect(retainedTurnDeltas[2]).toEqual({
+        kind: 'inspection',
+        inspectedRequestSeqs: [13],
+        relevantEvidence: expandedEvidence,
+      });
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
+  it('sends each newly paged catalog and inspection exactly once', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-page-delta-'));
+    const candidate = apiCandidate('paged-evidence');
+    const expandedEvidence = PromptEvidenceProjectionSchema.parse({
+      ref: { path: 'objects/paged-evidence.json', sha256: digest(evidencePayload) },
+      payload: evidencePayload,
+    });
+    const firstCatalogEntry = {
+      recordingRequestSeq: 12,
+      method: 'GET',
+      urlShape: 'https://fixture.invalid/search',
+      resourceType: 'fetch',
+      responseStatus: 200,
+      responseMimeType: 'application/json',
+      requestBodyBytes: 0,
+      responseBodyBytes: 48,
+    };
+    const secondCatalogEntry = {
+      ...firstCatalogEntry,
+      recordingRequestSeq: 13,
+      urlShape: 'https://fixture.invalid/bootstrap',
+    };
+    const retainedTurnDeltas: unknown[] = [];
+    let turn = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex: { ...recordingIndex, requestSeqs: [12, 13] },
+        tool,
+        evidence,
+        requestCatalog: [firstCatalogEntry],
+        requestCatalogPage: { offset: 0, totalEntries: 2, hasMore: true },
+        loadNextRequestCatalogPage: (offset) => {
+          expect(offset).toBe(1);
+          return {
+            entries: [secondCatalogEntry],
+            page: { offset: 1, totalEntries: 2, hasMore: false },
+          };
+        },
+        inspectRequests: (requestSeqs) => {
+          expect(requestSeqs).toEqual([13]);
+          return { delta: expandedEvidence, accumulated: expandedEvidence };
+        },
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (_input, _agent, retainedTurnDelta) => {
+            retainedTurnDeltas.push(retainedTurnDelta);
+            turn += 1;
+            if (turn === 1)
+              return { binding, action: 'catalog', reason: 'Read the next catalog page.' };
+            if (turn === 2)
+              return {
+                binding,
+                action: 'inspect',
+                requestedRequestSeqs: [13],
+                reason: 'Inspect the newly listed bootstrap request.',
+              };
+            if (turn === 3)
+              return { binding, action: 'test', candidate, reason: 'Test the inspected request.' };
+            const observation = _input.observations.at(-1);
+            if (!observation) throw new Error('missing paged-evidence observation');
+            return {
+              binding,
+              action: 'proven',
+              candidate,
+              basedOnObservationId: observation.id,
+              reason: 'The inspected request returned fixture records.',
+            };
+          },
+          runApiTool: async () => ({
+            executionMechanism: 'fetch',
+            result: { ok: true as const, data: { items: [{ id: 'item-1' }] } },
+          }),
+        },
+      });
+
+      expect(result.candidate).toEqual(candidate);
+      expect(retainedTurnDeltas[0]).toBeUndefined();
+      expect(retainedTurnDeltas[1]).toEqual({
+        kind: 'catalog_page',
+        requestCatalog: [secondCatalogEntry],
+        requestCatalogTruncated: false,
+        requestCatalogPage: { offset: 1, totalEntries: 2, hasMore: false },
+      });
+      expect(retainedTurnDeltas[2]).toEqual({
+        kind: 'inspection',
+        inspectedRequestSeqs: [13],
+        relevantEvidence: expandedEvidence,
+      });
+      expect(retainedTurnDeltas[3]).toMatchObject({ kind: 'observation' });
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }
@@ -271,7 +382,7 @@ describe('focused API research', () => {
           ],
           inspectRequests: () => {
             inspectCalls += 1;
-            return expandedEvidence;
+            return { delta: expandedEvidence, accumulated: expandedEvidence };
           },
           toolDir,
           agent: {},
@@ -490,11 +601,26 @@ describe('focused API research', () => {
         observation: { ...partial.observation, id: firstObservationId },
         missingProof: partial.missingProof,
       };
+      const revisedTool = {
+        ...tool,
+        candidate: { ...tool.candidate, dependencySeqs: [13] },
+      };
+      const revisedCatalogEntry = {
+        recordingRequestSeq: 13,
+        method: 'GET',
+        urlShape: 'https://fixture.invalid/bootstrap',
+        resourceType: 'fetch',
+        responseStatus: 200,
+        responseMimeType: 'application/json',
+        requestBodyBytes: 0,
+        responseBodyBytes: 48,
+      };
       let testedFollowUp = false;
+      const followUpDeltas: unknown[] = [];
       const result = await researchApiMvpCall({
         run,
-        recordingIndex,
-        tool,
+        recordingIndex: { ...recordingIndex, requestSeqs: [12, 13] },
+        tool: revisedTool,
         evidence,
         followUp: {
           masterDirection: 'Test a different query and verify the returned record changes.',
@@ -503,11 +629,15 @@ describe('focused API research', () => {
           siblingResearch: [],
         },
         previousProgress,
+        requestCatalog: [revisedCatalogEntry],
+        requestCatalogTruncated: false,
+        requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
         toolDir,
         agent: {},
         runDeadline: new RunDeadline(Date.now() + 60_000),
         dependencies: {
-          requestStep: async (input) => {
+          requestStep: async (input, _agent, retainedTurnDelta) => {
+            followUpDeltas.push(retainedTurnDelta);
             expect(input.researchPhase).toBe('follow_up');
             expect(input.followUp?.masterDirection).toContain('different query');
             expect(input.observations[0]?.id).toBe(firstObservationId);
@@ -540,6 +670,19 @@ describe('focused API research', () => {
       });
       expect('status' in result).toBeFalse();
       expect(result.candidate).toEqual(completed);
+      expect(followUpDeltas[0]).toMatchObject({
+        kind: 'master_follow_up',
+        followUp: {
+          masterDirection: 'Test a different query and verify the returned record changes.',
+        },
+        currentTool: { candidate: { dependencySeqs: [13] } },
+        requestCatalog: [revisedCatalogEntry],
+        requestCatalogTruncated: false,
+        requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
+      });
+      expect(followUpDeltas[0]).not.toHaveProperty('previousProgress');
+      expect(followUpDeltas[1]).toMatchObject({ kind: 'observation' });
+      expect(followUpDeltas[1]).not.toHaveProperty('requestCatalog');
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }
@@ -615,6 +758,7 @@ describe('focused API research', () => {
     const second = apiCandidate('overlooked');
     let agentTurn = 0;
     let execution = 0;
+    const retainedTurnDeltas: unknown[] = [];
     try {
       const result = await researchApiMvpCall({
         run,
@@ -625,7 +769,8 @@ describe('focused API research', () => {
         agent: {},
         runDeadline: new RunDeadline(Date.now() + 60_000),
         dependencies: {
-          requestStep: async (input) => {
+          requestStep: async (input, _agent, retainedTurnDelta) => {
+            retainedTurnDeltas.push(retainedTurnDelta);
             agentTurn += 1;
             if (agentTurn === 1)
               return { binding, action: 'test', candidate: first, reason: 'Test baseline.' };
@@ -666,6 +811,15 @@ describe('focused API research', () => {
       expect(agentTurn).toBe(4);
       expect(execution).toBe(2);
       expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(second));
+      expect(
+        retainedTurnDeltas.map((delta) =>
+          delta === undefined ? undefined : (delta as { kind: string }).kind,
+        ),
+      ).toEqual([undefined, 'observation', 'block_review', 'observation']);
+      expect(retainedTurnDeltas[2]).toEqual({
+        kind: 'block_review',
+        blockReview: { proposedReason: 'No request can work.' },
+      });
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }

@@ -1620,7 +1620,7 @@ describe('prompts and pre-plan discovery', () => {
     expect((sent.input.current as Record<string, unknown> | undefined)?.plan).toBeDefined();
   });
 
-  it('sends the current same-name boundary on every retained API-research follow-up', async () => {
+  it('sends only the new delta on retained API-research turns', async () => {
     const { implementationPlan: _implementationPlan, ...unplanned } = searchTool;
     const currentTool = {
       ...unplanned,
@@ -1707,56 +1707,102 @@ describe('prompts and pre-plan discovery', () => {
       },
     };
 
-    expect(await requestApiResearchStep(input, { provider: 'codex-cli', analyzer })).toEqual(
-      output,
-    );
-    const sent = seen as {
-      input: {
-        instruction?: string;
-        currentTool?: Omit<typeof currentTool, 'id'> & { id?: never };
-      };
+    const send = async (delta?: Parameters<typeof requestApiResearchStep>[2]) => {
+      seen = undefined;
+      expect(
+        await requestApiResearchStep(input, { provider: 'codex-cli', analyzer }, delta),
+      ).toEqual(output);
+      return (seen as { input: Record<string, unknown> }).input;
     };
-    expect(sent.input.currentTool).not.toHaveProperty('id');
-    expect(sent.input.currentTool?.candidate.likelyParams).toEqual(
-      currentTool.candidate.likelyParams,
-    );
-    expect((sent.input as Record<string, unknown>).previousProgress).toBeDefined();
-    expect(JSON.stringify(sent)).not.toContain('toolId');
 
-    seen = undefined;
-    await requestApiResearchStep(
-      {
-        ...input,
-        researchPhase: 'mvp',
-        followUp: undefined,
-        previousProgress: undefined,
-        inspectedRequestSeqs: [12],
-        requestCatalog: [
-          {
-            recordingRequestSeq: 12,
-            method: 'GET',
-            urlShape: 'https://fixture.invalid/search?q&limit',
-            resourceType: 'fetch',
-            responseStatus: 200,
-            responseMimeType: 'application/json',
-            requestBodyBytes: 0,
-            responseBodyBytes: 64,
-          },
-        ],
-      },
-      { provider: 'codex-cli', analyzer },
-    );
-    const mvpSent = seen as {
-      input: {
-        instruction?: string;
-        inspectedRequestSeqs?: number[];
-        relevantEvidence?: typeof evidence;
-      };
+    const initial = await send();
+    expect(initial).toHaveProperty('tool');
+    expect(initial).toHaveProperty('evidence');
+    expect(initial).toHaveProperty('observations');
+
+    const observationTurn = await send({
+      kind: 'observation',
+      latestObservation: observation,
+    });
+    expect(Object.keys(observationTurn).sort()).toEqual([
+      'instruction',
+      'latestObservation',
+      'turnKind',
+    ]);
+    expect(observationTurn.turnKind).toBe('observation');
+    expect(observationTurn).not.toHaveProperty('tool');
+    expect(observationTurn).not.toHaveProperty('requestCatalog');
+    expect(observationTurn).not.toHaveProperty('evidence');
+
+    const catalogEntry = {
+      recordingRequestSeq: 12,
+      method: 'GET',
+      urlShape: 'https://fixture.invalid/search?q&limit',
+      resourceType: 'fetch',
+      responseStatus: 200,
+      responseMimeType: 'application/json',
+      requestBodyBytes: 0,
+      responseBodyBytes: 64,
     };
-    expect(mvpSent.input.instruction).toMatch(/required downstream obligation/);
-    expect(mvpSent.input.instruction).toMatch(/defer optional breadth/);
-    expect(mvpSent.input.inspectedRequestSeqs).toEqual([12]);
-    expect(mvpSent.input.relevantEvidence?.ref).toEqual(evidence.ref);
+    const catalogTurn = await send({
+      kind: 'catalog_page',
+      requestCatalog: [catalogEntry],
+      requestCatalogTruncated: false,
+      requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
+    });
+    expect(Object.keys(catalogTurn).sort()).toEqual([
+      'instruction',
+      'requestCatalog',
+      'requestCatalogPage',
+      'requestCatalogTruncated',
+      'turnKind',
+    ]);
+    expect(catalogTurn.requestCatalog).toEqual([catalogEntry]);
+    expect(catalogTurn).not.toHaveProperty('currentTool');
+
+    const inspectionTurn = await send({
+      kind: 'inspection',
+      inspectedRequestSeqs: [12],
+      relevantEvidence: evidence,
+    });
+    expect(Object.keys(inspectionTurn).sort()).toEqual([
+      'inspectedRequestSeqs',
+      'instruction',
+      'relevantEvidence',
+      'turnKind',
+    ]);
+    expect(inspectionTurn.relevantEvidence).toEqual(evidence);
+    expect(inspectionTurn).not.toHaveProperty('requestCatalog');
+    expect(inspectionTurn).not.toHaveProperty('observations');
+
+    const followUp = input.followUp;
+    if (!followUp) throw new Error('missing follow-up fixture');
+    const followUpTurn = await send({
+      kind: 'master_follow_up',
+      followUp,
+      relevantEvidence: evidence,
+      currentTool,
+      requiredLinks: [],
+      requestCatalog: [catalogEntry],
+      requestCatalogTruncated: false,
+      requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
+    });
+    expect(followUpTurn.turnKind).toBe('master_follow_up');
+    expect(followUpTurn).toHaveProperty('followUp');
+    expect(followUpTurn).toHaveProperty('relevantEvidence');
+    expect(followUpTurn).toHaveProperty('currentTool');
+    expect(followUpTurn.requestCatalog).toEqual([catalogEntry]);
+    expect(followUpTurn.requestCatalogPage).toEqual({
+      offset: 0,
+      totalEntries: 1,
+      hasMore: false,
+    });
+    expect(followUpTurn).not.toHaveProperty('previousProgress');
+    expect(followUpTurn).not.toHaveProperty('observations');
+    expect(followUpTurn.currentTool as Record<string, unknown> | undefined).not.toHaveProperty(
+      'id',
+    );
+    expect(JSON.stringify(followUpTurn)).not.toContain('toolId');
 
     const invalidModeCandidate = structuredClone(candidate);
     const invalidModeRequest = invalidModeCandidate.workflow.requests[0];

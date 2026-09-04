@@ -68,6 +68,15 @@ rewrite the request merely to make the ladder advance.
 
 On later turns, use the newest observation and your prior reasoning. You may:
 
+For a retained Codex conversation, later inputs contain `turnKind` and only the
+new fact for that turn: an observation, catalog page, inspected evidence,
+blocker review, or master follow-up. Everything from earlier turns remains in
+your conversation. An omitted earlier field is unchanged, not withdrawn. Do
+not ask the host to repeat it.
+When a same-name tool boundary changes, its `master_follow_up` delta also
+contains the new `currentTool`, required links, and first request-catalog page;
+those replace the earlier boundary and catalog.
+
 - return `action: "catalog"` when the current compact catalog page says another
   page exists;
 - return `action: "inspect"` with exact catalog request sequences whose details

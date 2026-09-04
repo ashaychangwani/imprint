@@ -422,7 +422,14 @@ class CodexCliProvider implements LLMProvider {
     this.codex = new Codex({
       // Codex owns retained-history compaction. Imprint only asks it to compact
       // early enough that the next ordinary agent message still fits.
-      config: { model_auto_compact_token_limit: 100_000 },
+      // The largest normal research delta is a newly inspected evidence slice.
+      // Compacting at 80k leaves ample room for that next bounded turn inside
+      // the current 258k model window, even though Codex only checks between
+      // turns and does not include the incoming message in that decision.
+      config: {
+        model_auto_compact_token_limit: 80_000,
+        model_auto_compact_token_limit_scope: 'total',
+      },
     });
   }
 

@@ -18,6 +18,7 @@ import type {
   PlannableTeachingTool,
 } from './master-teach-agent-contracts.ts';
 import {
+  type ApiResearchRetainedTurnDelta,
   type MasterTeachAgentOptions,
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
@@ -84,6 +85,13 @@ interface ApiResearchDependencies {
     backendAttempts?: BackendAttemptFact[];
     responseObservations?: BackendResponseObservation[];
   }>;
+}
+
+interface ApiResearchInspectionEvidence {
+  /** Only evidence for request sequences newly inspected on this turn. */
+  delta: PromptEvidenceProjection;
+  /** Complete bounded evidence for providers without retained conversations and later planning. */
+  accumulated: PromptEvidenceProjection;
 }
 
 function utf8Prefix(value: string, maximumBytes: number): string {
@@ -179,7 +187,7 @@ export async function researchApiMvpCall(input: {
     page: NonNullable<ApiResearchInput['requestCatalogPage']>;
   };
   requiredLinks?: ApiResearchInput['requiredLinks'];
-  inspectRequests?: (requestSeqs: readonly number[]) => PromptEvidenceProjection;
+  inspectRequests?: (requestSeqs: readonly number[]) => ApiResearchInspectionEvidence;
   toolDir: string;
   agent: MasterTeachAgentOptions;
   runDeadline: RunDeadlineRef;
@@ -197,6 +205,26 @@ export async function researchApiMvpCall(input: {
     ...(input.previousProgress?.observation ? [input.previousProgress.observation] : []),
   ].filter((observation, index, all) => all.findIndex(({ id }) => id === observation.id) === index);
   let proposedBlockReason: string | undefined;
+  const researchInputsChanged =
+    input.previousProgress?.researchInputsSha256 !==
+    apiResearchInputsSha256(input.tool, input.requiredLinks);
+  let retainedTurnDelta: ApiResearchRetainedTurnDelta | undefined = input.followUp
+    ? {
+        kind: 'master_follow_up',
+        followUp: input.followUp,
+        relevantEvidence: input.evidence,
+        ...(researchInputsChanged
+          ? {
+              currentTool: input.tool,
+              requiredLinks: [...(input.requiredLinks ?? [])],
+              requestCatalog: [...(input.requestCatalog ?? [])],
+              requestCatalogTruncated:
+                input.requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
+              ...(input.requestCatalogPage ? { requestCatalogPage: input.requestCatalogPage } : {}),
+            }
+          : {}),
+      }
+    : undefined;
   while (true) {
     if (input.signal?.aborted) throw abortSignalError(input.signal);
     if (Date.now() >= input.runDeadline.deadlineMs) {
@@ -222,7 +250,12 @@ export async function researchApiMvpCall(input: {
       ...(input.previousProgress ? { previousProgress: input.previousProgress } : {}),
       ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
     };
-    const decision = await input.dependencies.requestStep(researchInput, input.agent);
+    const decision = await input.dependencies.requestStep(
+      researchInput,
+      input.agent,
+      retainedTurnDelta,
+    );
+    retainedTurnDelta = undefined;
     if (decision.action === 'catalog') {
       if (!requestCatalogPage?.hasMore || !input.loadNextRequestCatalogPage) {
         throw new Error('API researcher requested another catalog page when none is available');
@@ -234,6 +267,12 @@ export async function researchApiMvpCall(input: {
       }
       requestCatalog = [...next.entries];
       requestCatalogPage = next.page;
+      retainedTurnDelta = {
+        kind: 'catalog_page',
+        requestCatalog,
+        requestCatalogTruncated: requestCatalogPage.hasMore,
+        requestCatalogPage,
+      };
       input.report?.(`${input.tool.candidate.toolName}: reading the next request catalog page`);
       continue;
     }
@@ -258,13 +297,23 @@ export async function researchApiMvpCall(input: {
       completedInspectionStates.add(inspectionStateSha256);
       input.report?.(`${input.tool.candidate.toolName}: inspecting selected recorded requests`);
       for (const seq of newRequestSeqs) inspectedRequestSeqs.add(seq);
-      evidence = input.inspectRequests(newRequestSeqs);
+      const inspectedEvidence = input.inspectRequests(newRequestSeqs);
+      evidence = inspectedEvidence.accumulated;
+      retainedTurnDelta = {
+        kind: 'inspection',
+        inspectedRequestSeqs: newRequestSeqs,
+        relevantEvidence: inspectedEvidence.delta,
+      };
       proposedBlockReason = undefined;
       continue;
     }
     if (decision.action === 'blocked') {
       if (!proposedBlockReason) {
         proposedBlockReason = decision.reason;
+        retainedTurnDelta = {
+          kind: 'block_review',
+          blockReview: { proposedReason: proposedBlockReason },
+        };
         continue;
       }
       throw new ApiResearchBlockedError(decision.reason, observations);
@@ -319,14 +368,16 @@ export async function researchApiMvpCall(input: {
         backend: candidate.testBackend,
         signal: input.signal,
       });
-      observations.push({
+      const observation: ApiResearchObservation = {
         id: randomUUID(),
         candidateSha256: apiResearchCandidateSha256(candidate),
         executionMechanism: observed.executionMechanism,
         backendAttempts: observed.backendAttempts ?? [],
         responseObservations: observed.responseObservations ?? [],
         result: resultFact(observed.result),
-      });
+      };
+      observations.push(observation);
+      retainedTurnDelta = { kind: 'observation', latestObservation: observation };
     } finally {
       release();
     }
