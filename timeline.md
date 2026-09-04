@@ -4233,3 +4233,36 @@ dependencies, and implementation strategy, while excluded detector candidates
 remain honestly accounted for in the plan. This is a general steering channel,
 not a site-specific filter or runtime semantic decision. CLI/prompt tests, a
 controller end-to-end propagation test, type checking, and lint pass.
+
+## 2026-09-03 22:28–23:15 PDT — Scoped combined-recording run stopped during verification
+
+Fresh Flights run `c24d686d-657f-41c2-bc53-3f65863b35a4` used exactly the two
+mounted recordings named above and explicit human guidance limiting work to
+location search/details, flight search, date grid, and booking options. Fresh
+discovery found six candidate families. The master split location resolution
+into `search_locations` and `get_location_details`, excluded the unwanted old
+calendar-picker and price-graph operations, and researched the five requested
+tools.
+
+Research proved both location tools through plain fetch. It proved flight
+search and standalone booking through parameterized CDP navigation on changed
+routes and dates, with real flight and seller data rather than status-only
+success. Date-grid testing repeatedly reached valid Flights pages, but the
+expressible API calls still returned no grid records. The researcher therefore
+did not falsely publish a date-grid result.
+
+After all research, the master planned three tools in two waves:
+`search_locations`, `search_flights`, then `get_location_details`. It explicitly
+withheld date-grid because no tested call returned the promised grid data. It
+also withheld booking because the standalone booking page required a complete
+booking URL, while the proven search result did not expose that URL or another
+grounded handoff value. This was a deliberate agent decision recorded in the
+plan, not a runtime tool-count limit.
+
+Compilation finished for the first two tools. `search_locations` passed its
+first live fetch check, passed core-result review, and published its usable MVP.
+`search_flights` had begun its CDP live check when the user asked to stop. The
+run was terminated at about 47 minutes. Its controller, compiler agents, Chrome
+child, screen session, and log followers were all confirmed stopped. The run
+directory and `/tmp/imprint-flights-combined-scoped.log` remain available for
+diagnosis; this run must not be resumed after any code or prompt change.
