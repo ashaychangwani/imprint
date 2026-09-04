@@ -943,10 +943,12 @@ describe('runWorkflowWithLadder', () => {
         ),
       );
 
+      const preparedRequests: unknown[] = [];
       const { result, usedBackend, responseObservations } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
         forceBackend: 'fetch',
+        onPreparedRequest: (observation) => preparedRequests.push(observation),
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
@@ -958,6 +960,15 @@ describe('runWorkflowWithLadder', () => {
           valueType: 'object',
           topLevelKeys: ['ok', 'q'],
         }),
+      ]);
+      expect(preparedRequests).toEqual([
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          method: 'GET',
+          url: `http://127.0.0.1:${port}/api/echo?q=hello`,
+          headers: {},
+        },
       ]);
       if (result.ok) {
         expect(result.data).toEqual({ q: 'hello', ok: true });

@@ -136,6 +136,37 @@ describe('executeWorkflow', () => {
     expect(r.data).toEqual({ results: [1, 2, 3] });
   });
 
+  it('observes the exact prepared request without letting diagnostics affect execution', async () => {
+    const prepared: unknown[] = [];
+    const result = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello world' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      onPreparedRequest: (observation) => prepared.push(observation),
+    });
+    expect(result.ok).toBeTrue();
+    expect(prepared).toEqual([
+      {
+        requestIndex: 0,
+        method: 'GET',
+        url: 'https://api.example.com/search?q=hello%20world',
+        headers: { Accept: 'application/json', cookie: 'session=abc123' },
+      },
+    ]);
+
+    const resultWithBrokenObserver = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      onPreparedRequest: () => {
+        throw new Error('diagnostic failure');
+      },
+    });
+    expect(resultWithBrokenObserver.ok).toBeTrue();
+  });
+
   it('emits a bounded redacted response observation for a failed HTTP response', async () => {
     const observations: unknown[] = [];
     const opaque = 'opaque-browser-minted-credential-12345';

@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type BackendAttemptFact,
+  type BackendPreparedRequestObservation,
   type BackendResponseObservation,
   rememberProvenCompileBackend,
 } from './backend-ladder.ts';
@@ -32,7 +33,7 @@ import type {
   RunIdentity,
 } from './master-teach-prompt-projections.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
-import type { ToolResult, Workflow } from './types.ts';
+import type { Session, ToolResult, Workflow } from './types.ts';
 import type { ConcreteBackend } from './types.ts';
 
 const RESULT_PREVIEW_BYTES = 12_000;
@@ -81,6 +82,7 @@ interface ApiResearchDependencies {
     parameters: Record<string, string | number | boolean>;
     backend?: 'auto' | 'fetch' | 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch';
     signal?: AbortSignal;
+    onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
   }): Promise<{
     result: ToolResult<unknown>;
     executionMechanism: string;
@@ -153,6 +155,106 @@ function resultFact(result: ToolResult<unknown>): ApiResearchObservation['result
       };
 }
 
+function firstMismatchByte(left: string, right: string): number | undefined {
+  const leftBytes = Buffer.from(left, 'utf8');
+  const rightBytes = Buffer.from(right, 'utf8');
+  const limit = Math.min(leftBytes.length, rightBytes.length);
+  let index = 0;
+  while (index < limit && leftBytes[index] === rightBytes[index]) index += 1;
+  return index === leftBytes.length && index === rightBytes.length ? undefined : index;
+}
+
+function sortedNames(values: Iterable<string>, caseInsensitive = false): string[] {
+  return [...new Set([...values].map((value) => (caseInsensitive ? value.toLowerCase() : value)))]
+    .map((value) => utf8Prefix(value, 200))
+    .sort();
+}
+
+function urlFacts(value: string): { originPath: string; queryKeys: string[] } | undefined {
+  try {
+    const parsed = new URL(value);
+    return {
+      originPath: `${parsed.protocol}//${parsed.host}${parsed.pathname}`,
+      queryKeys: sortedNames(parsed.searchParams.keys()),
+    };
+  } catch {
+    return undefined;
+  }
+}
+
+function preparedRequestComparison(
+  observation: BackendPreparedRequestObservation,
+  workflow: Workflow,
+  session: Session | undefined,
+): NonNullable<ApiResearchObservation['requestComparisons']>[number] {
+  const provenance = workflow.requests[observation.requestIndex]?.recordingRequestSeq;
+  const recorded =
+    provenance === undefined ? undefined : session?.requests.find(({ seq }) => seq === provenance);
+  if (!recorded) {
+    return {
+      backend: observation.backend,
+      requestIndex: observation.requestIndex,
+      ...(provenance === undefined ? {} : { recordingRequestSeq: provenance }),
+      status: 'not_checked',
+      reason:
+        provenance === undefined
+          ? 'workflow request has no recording provenance'
+          : 'recorded request was unavailable',
+    };
+  }
+  const recordedUrl = urlFacts(recorded.url);
+  const renderedUrl = urlFacts(observation.url);
+  const recordedBody = recorded.body ?? '';
+  const renderedBody = observation.body ?? '';
+  const recordedHeaderNames = sortedNames(Object.keys(recorded.headers), true);
+  const preparedHeaderNames = sortedNames(Object.keys(observation.headers), true);
+  const recordedOnlyHeaderNames = recordedHeaderNames.filter(
+    (name) => !preparedHeaderNames.includes(name),
+  );
+  const preparedOnlyHeaderNames = preparedHeaderNames.filter(
+    (name) => !recordedHeaderNames.includes(name),
+  );
+  const urlMismatch = firstMismatchByte(recorded.url, observation.url);
+  const bodyMismatch = firstMismatchByte(recordedBody, renderedBody);
+  return {
+    backend: observation.backend,
+    requestIndex: observation.requestIndex,
+    recordingRequestSeq: recorded.seq,
+    status: 'checked',
+    methodEqual: recorded.method.toUpperCase() === observation.method.toUpperCase(),
+    ...(recordedUrl && renderedUrl
+      ? {
+          originPathEqual: recordedUrl.originPath === renderedUrl.originPath,
+          recordedQueryKeyCount: recordedUrl.queryKeys.length,
+          preparedQueryKeyCount: renderedUrl.queryKeys.length,
+          recordedOnlyQueryKeys: recordedUrl.queryKeys
+            .filter((name) => !renderedUrl.queryKeys.includes(name))
+            .slice(0, 32),
+          preparedOnlyQueryKeys: renderedUrl.queryKeys
+            .filter((name) => !recordedUrl.queryKeys.includes(name))
+            .slice(0, 32),
+          queryKeyDifferencesTruncated:
+            recordedUrl.queryKeys.filter((name) => !renderedUrl.queryKeys.includes(name)).length >
+              32 ||
+            renderedUrl.queryKeys.filter((name) => !recordedUrl.queryKeys.includes(name)).length >
+              32,
+        }
+      : {}),
+    sharedHeaderNameCount: recordedHeaderNames.filter((name) => preparedHeaderNames.includes(name))
+      .length,
+    recordedOnlyHeaderNames: recordedOnlyHeaderNames.slice(0, 32),
+    preparedOnlyHeaderNames: preparedOnlyHeaderNames.slice(0, 32),
+    headerNameDifferencesTruncated:
+      recordedOnlyHeaderNames.length > 32 || preparedOnlyHeaderNames.length > 32,
+    recordedUrlBytes: Buffer.byteLength(recorded.url, 'utf8'),
+    preparedUrlBytes: Buffer.byteLength(observation.url, 'utf8'),
+    ...(urlMismatch === undefined ? {} : { urlFirstMismatchByte: urlMismatch }),
+    recordedBodyBytes: Buffer.byteLength(recordedBody, 'utf8'),
+    preparedBodyBytes: Buffer.byteLength(renderedBody, 'utf8'),
+    ...(bodyMismatch === undefined ? {} : { bodyFirstMismatchByte: bodyMismatch }),
+  };
+}
+
 function writeCandidate(toolDir: string, candidate: ApiResearchCandidate): string {
   mkdirSync(toolDir, { recursive: true, mode: 0o700 });
   const workflowPath = pathJoin(toolDir, 'workflow.json');
@@ -175,6 +277,9 @@ function concreteBackend(value: string): ConcreteBackend | undefined {
 export async function researchApiMvpCall(input: {
   run: RunIdentity;
   recordingIndex: RecordingIndex;
+  /** Host-only recording used to reduce artifact-prepared requests to value-free
+   * comparison facts. It is never placed in an agent prompt. */
+  session?: Session;
   tool: PlannableTeachingTool;
   evidence: PromptEvidenceProjection;
   /** Omitted for the deliberately narrow first pass. A follow-up reuses the
@@ -364,11 +469,18 @@ export async function researchApiMvpCall(input: {
     const workflowPath = writeCandidate(input.toolDir, candidate);
     const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
     try {
+      const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
       const observed = await input.dependencies.runApiTool({
         workflowPath,
         parameters: candidate.parameterValues,
         backend: candidate.testBackend,
         signal: input.signal,
+        onPreparedRequest: (observation) => {
+          if (requestComparisons.length >= 32) requestComparisons.shift();
+          requestComparisons.push(
+            preparedRequestComparison(observation, candidate.workflow, input.session),
+          );
+        },
       });
       const observation: ApiResearchObservation = {
         id: randomUUID(),
@@ -376,6 +488,7 @@ export async function researchApiMvpCall(input: {
         executionMechanism: observed.executionMechanism,
         backendAttempts: observed.backendAttempts ?? [],
         responseObservations: observed.responseObservations ?? [],
+        requestComparisons,
         result: resultFact(observed.result),
       };
       observations.push(observation);

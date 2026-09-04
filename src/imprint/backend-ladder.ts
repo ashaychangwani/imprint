@@ -39,6 +39,7 @@ import { runPlaybook } from './playbook-runner.ts';
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  type PreparedRequestObservation,
   RESPONSE_OBSERVATIONS_MAX,
   type ResponseObservation,
   executeWorkflow,
@@ -77,6 +78,9 @@ export interface BackendAttemptFact {
 }
 
 export type BackendResponseObservation = ResponseObservation & { backend: ConcreteBackend };
+export type BackendPreparedRequestObservation = PreparedRequestObservation & {
+  backend: ConcreteBackend;
+};
 
 interface LadderResult {
   result: ToolResult;
@@ -368,6 +372,8 @@ export async function runWithLadder(
     signal?: AbortSignal;
     /** Bounded, value-free response observations for factual repair feedback. */
     onResponse?: (observation: BackendResponseObservation) => void;
+    /** Host-internal artifact-prepared requests for advisory comparison. */
+    onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -439,6 +445,8 @@ export async function runWithLadder(
     let result: ToolResult;
     const onResponse = (observation: ResponseObservation): void =>
       options?.onResponse?.({ ...observation, backend });
+    const onPreparedRequest = (observation: PreparedRequestObservation): void =>
+      options?.onPreparedRequest?.({ ...observation, backend });
     try {
       switch (backend) {
         case 'fetch': {
@@ -450,6 +458,7 @@ export async function runWithLadder(
           if (options?.initialState) fetchOpts.initialState = options.initialState;
           if (options?.credentials) fetchOpts.credentials = options.credentials;
           if (options?.onResponse) fetchOpts.onResponse = onResponse;
+          if (options?.onPreparedRequest) fetchOpts.onPreparedRequest = onPreparedRequest;
           result = await tool.toolFn(params, fetchOpts);
           break;
         }
@@ -460,6 +469,7 @@ export async function runWithLadder(
             options?.initialState,
             options?.credentials,
             options?.onResponse ? onResponse : undefined,
+            options?.onPreparedRequest ? onPreparedRequest : undefined,
           );
           break;
         case 'cdp-replay':
@@ -471,6 +481,7 @@ export async function runWithLadder(
             options?.credentials,
             options?.signal,
             options?.onResponse ? onResponse : undefined,
+            options?.onPreparedRequest ? onPreparedRequest : undefined,
           );
           break;
         case 'stealth-fetch': {
@@ -496,6 +507,7 @@ export async function runWithLadder(
             initialState,
             credentials: options?.credentials,
             ...(options?.onResponse ? { onResponse } : {}),
+            ...(options?.onPreparedRequest ? { onPreparedRequest } : {}),
           });
           break;
         }
@@ -919,6 +931,7 @@ async function runFetchBootstrap(
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
   onResponse?: (observation: ResponseObservation) => void,
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
@@ -1018,6 +1031,7 @@ async function runFetchBootstrap(
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: makeJarUaFetch(jar.ua),
       ...(onResponse ? { onResponse } : {}),
+      ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
     if (result.ok) return result;
@@ -1060,6 +1074,7 @@ async function runCdpReplay(
   credentialOverride?: CredentialStore,
   signal?: AbortSignal,
   onResponse?: (observation: ResponseObservation) => void,
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
@@ -1178,6 +1193,7 @@ async function runCdpReplay(
           : undefined,
       signal,
       ...(onResponse ? { onResponse } : {}),
+      ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
     if (result.ok) {
@@ -1643,6 +1659,9 @@ export async function runWorkflowWithLadder(opts: {
   forceBackend?: ConcreteBackend;
   /** Caller cancellation for bounded verification work. */
   signal?: AbortSignal;
+  /** Ephemeral host-only callback. Raw prepared requests are never retained by
+   * the ladder; callers must reduce them to bounded, value-free facts inline. */
+  onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
@@ -1744,6 +1763,7 @@ export async function runWorkflowWithLadder(opts: {
           credentials: opts.credentials,
           signal: opts.signal,
           onResponse: observeResponse,
+          onPreparedRequest: opts.onPreparedRequest,
         },
       );
       return { ...result, responseObservations };
@@ -1781,6 +1801,7 @@ export async function runWorkflowWithLadder(opts: {
         credentials: opts.credentials,
         signal: opts.signal,
         onResponse: observeResponse,
+        onPreparedRequest: opts.onPreparedRequest,
       });
       rememberCompileUnavailableBackends(memoKey, result);
       if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
@@ -1805,6 +1826,7 @@ export async function runWorkflowWithLadder(opts: {
       credentials: opts.credentials,
       signal: opts.signal,
       onResponse: observeResponse,
+      onPreparedRequest: opts.onPreparedRequest,
     });
     rememberCompileUnavailableBackends(memoKey, result);
     if (isProbeReachable(result.result)) {
@@ -1853,6 +1875,7 @@ export function resolveWorkflowTool(
             credentials?: CredentialStore;
             signal?: AbortSignal;
             onResponse?: (observation: ResponseObservation) => void;
+            onPreparedRequest?: (observation: PreparedRequestObservation) => void;
           }
         | undefined;
       return executeWorkflow({
@@ -1865,6 +1888,7 @@ export function resolveWorkflowTool(
         initialState: o?.initialState,
         signal: o?.signal,
         onResponse: o?.onResponse,
+        onPreparedRequest: o?.onPreparedRequest,
       });
     },
   };
@@ -2017,7 +2041,7 @@ export async function renderWorkflowRequests(opts: {
     fetchImpl,
     browser,
     persistAuthState: false,
-    onPreparedRequest: (requestIndex) => {
+    onPreparedRequest: ({ requestIndex }) => {
       preparedArtifactRequestIndex = requestIndex;
     },
   });

@@ -33,6 +33,15 @@ not authorize playbook or make dependent tools disappear automatically. Its
 structured `observations` are the bounded failed request facts the researcher
 actually saw; use those instead of relying on its prose summary.
 
+When another recorded request continues the same user operation by consuming a
+selection, cursor, or prior result and returning the same result family,
+first consider extending the existing public tool with optional continuation
+inputs or a repeated staged invocation. A separate public helper is usually the
+wrong boundary when it exists only for an internal protocol stage. You may
+still shrink or split an over-broad detector proposal when evidence shows the
+stages are distinct user-facing operations or the original boundary was wrong;
+state that evidence.
+
 On the initial discovery turn, select the public operation boundaries and their
 smallest core inputs first. Normally keep `chainEdges` empty and
 `dependsOnTools` empty until the first-pass research handoffs reveal the values
@@ -65,6 +74,12 @@ set exposes a concrete cross-tool contradiction. Do not ask for the whole
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.
+A partial handoff alone is not evidence that the promised operation should be
+shrunk or its missing internal stage split into a new tool. First consider
+returning the exact missing proof to the retained researcher for the existing
+public boundary. You may revise or split when the combined evidence shows the
+original boundary was wrong or contains genuinely distinct user-facing
+operations.
 You may name a sibling in `siblingResearch` without first adding a chain edge.
 Keep a proven standalone call stable while the sibling handoff supplies the
 missing current input for a partial core call. At this parser-free stage, a

@@ -57,6 +57,26 @@ const run = {
   recordingSha256,
 };
 const recordingIndex = { recordingSha256, requestSeqs: [12], eventSeqs: [] };
+const session = {
+  site: 'fixture.invalid',
+  startedAt: '2026-01-01T00:00:00.000Z',
+  url: 'https://fixture.invalid',
+  imprintVersion: 'test',
+  requests: [
+    {
+      seq: 12,
+      timestamp: 1,
+      method: 'GET',
+      url: 'https://fixture.invalid/search?APIKey=recorded-secret&variant=recorded',
+      headers: { 'x-recorded': 'recorded-header-secret' },
+      resourceType: 'xhr',
+    },
+  ],
+  events: [],
+  narration: [],
+  cookieSnapshots: [],
+  storageSnapshots: [],
+};
 const apiCandidate = (
   variant: string,
   testBackend?: ApiResearchCandidate['testBackend'],
@@ -96,6 +116,7 @@ describe('focused API research', () => {
       const result = await researchApiMvpCall({
         run,
         recordingIndex,
+        session,
         tool,
         evidence,
         toolDir,
@@ -108,6 +129,13 @@ describe('focused API research', () => {
               return { binding, action: 'test', candidate: first, reason: 'Test baseline.' };
             if (agentTurn === 2) {
               expect(input.observations[0]?.result.preview).toContain('protocol error');
+              expect(input.observations[0]?.requestComparisons?.[0]).toEqual(
+                expect.objectContaining({
+                  backend: 'fetch',
+                  recordingRequestSeq: 12,
+                  status: 'checked',
+                }),
+              );
               expect(input.observations[0]?.responseObservations[0]?.redactedBodyPreview).toBe(
                 '{"bootstrap":{"continuation":"current-value"}}',
               );
@@ -131,9 +159,16 @@ describe('focused API research', () => {
               reason: 'The response contains fixture records.',
             };
           },
-          runApiTool: async ({ backend }) => {
+          runApiTool: async ({ backend, onPreparedRequest }) => {
             execution += 1;
             expect(backend).toBe(execution === 1 ? undefined : 'cdp-replay');
+            onPreparedRequest?.({
+              backend: backend && backend !== 'auto' ? backend : 'fetch',
+              requestIndex: 0,
+              method: 'GET',
+              url: 'https://fixture.invalid/search?apikey=live-secret',
+              headers: { 'x-live': 'live-header-secret' },
+            });
             return {
               executionMechanism: backend ?? 'fetch',
               responseObservations:
@@ -163,6 +198,27 @@ describe('focused API research', () => {
       expect(agentTurn).toBe(3);
       expect(execution).toBe(2);
       expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(second));
+      expect(result.observation.requestComparisons).toEqual([
+        expect.objectContaining({
+          backend: 'cdp-replay',
+          requestIndex: 0,
+          recordingRequestSeq: 12,
+          status: 'checked',
+          methodEqual: true,
+          originPathEqual: true,
+          recordedQueryKeyCount: 2,
+          preparedQueryKeyCount: 1,
+          recordedOnlyQueryKeys: ['APIKey', 'variant'],
+          preparedOnlyQueryKeys: ['apikey'],
+          recordedOnlyHeaderNames: ['x-recorded'],
+          preparedOnlyHeaderNames: ['x-live'],
+        }),
+      ]);
+      expect(JSON.stringify(result.observation.requestComparisons)).not.toContain('live-secret');
+      expect(JSON.stringify(result.observation.requestComparisons)).not.toContain(
+        'recorded-secret',
+      );
+      expect(JSON.stringify(result.observation.requestComparisons)).not.toContain('header-secret');
       expect(result.parameters).toEqual({ query: 'alpha' });
       expect(result.backend).toBe('cdp-replay');
       expect(JSON.parse(readFileSync(join(toolDir, 'workflow.json'), 'utf8'))).toEqual(

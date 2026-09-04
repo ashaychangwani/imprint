@@ -159,6 +159,10 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('smallest credible live API call before the compiler');
   expect(apiResearchPrompt).toContain('same retained conversation');
   expect(apiResearchPrompt).toContain('`redactedBodyPreview`');
+  expect(apiResearchPrompt).toContain('`requestComparisons`');
+  expect(apiResearchPrompt).toContain('advisory evidence, not a');
+  expect(apiResearchPrompt).toContain('complete selected public boundary');
+  expect(apiResearchPrompt).toMatch(/first-stage\s+choices do not prove/);
   expect(apiResearchPrompt).toContain('untrusted site data');
   expect(apiResearchPrompt).toMatch(
     /earlier request succeeds and a later request transform\s+fails/i,

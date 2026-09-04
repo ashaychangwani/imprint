@@ -1185,6 +1185,10 @@ describe('prompts and pre-plan discovery', () => {
     expect(researchPrompt).toMatch(/response reflects the changed route/i);
     expect(researchPrompt).toMatch(/blind text\s+replacement inside an encoded/i);
     expect(researchPrompt).toMatch(/winning rung/i);
+    expect(researchPrompt).toContain('`requestComparisons`');
+    expect(researchPrompt).toMatch(/advisory evidence, not a\s+pass\/fail check/i);
+    expect(researchPrompt).toMatch(/complete selected public boundary/i);
+    expect(researchPrompt).toMatch(/first-stage\s+choices do not prove/i);
     expect(researchPrompt).toContain('`action: "catalog"`');
     expect(researchPrompt).toMatch(/every recorded request reachable/i);
     expect(researchPrompt).toMatch(/current or an earlier page/i);
@@ -1196,8 +1200,13 @@ describe('prompts and pre-plan discovery', () => {
       /Request research for every selected operation has already finished/i,
     );
     expect(focusedPrompt).toMatch(/producer-consumer link/i);
+    expect(focusedPrompt).toMatch(/same user operation and result family/i);
+    expect(focusedPrompt).toMatch(/new helper whose only\s+purpose is an internal protocol phase/i);
     expect(masterPrompt).toMatch(/request research completes.*before focused planning/is);
     expect(masterPrompt).toMatch(/build waves together only after\s+reading every handoff/i);
+    expect(masterPrompt).toMatch(/same user operation by consuming a\s+selection/i);
+    expect(masterPrompt).toMatch(/separate public helper is usually the\s+wrong boundary/i);
+    expect(masterPrompt).toMatch(/may\s+still shrink or split an over-broad detector proposal/i);
   });
 
   it('separates a missing transport producer from proof that the field is required', () => {

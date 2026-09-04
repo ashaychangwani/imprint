@@ -222,11 +222,40 @@ interface ExecuteOptions {
   signal?: AbortSignal;
   /** Disable auth cookie/secret writes during offline request rendering. */
   persistAuthState?: boolean;
-  /** Internal observation hook used by offline rendering after transforms run. */
-  onPreparedRequest?: (requestIndex: number) => void;
+  /** Internal observation hook used by teach/debug tooling after every
+   * substitution and request transform. Raw values stay inside the host and
+   * must be projected to bounded, value-free facts before reaching an agent.
+   * The transport may still add ordinary wire headers afterward. */
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void;
   /** Teach/debug observation. It cannot affect execution and never receives an
    * unbounded response body. */
   onResponse?: (observation: ResponseObservation) => void;
+}
+
+export interface PreparedRequestObservation {
+  requestIndex: number;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+function observePreparedRequest(
+  opts: ExecuteOptions,
+  requestIndex: number,
+  request: Pick<WorkflowRequest, 'method' | 'url' | 'headers' | 'body'>,
+): void {
+  try {
+    opts.onPreparedRequest?.({
+      requestIndex,
+      method: request.method,
+      url: request.url,
+      headers: { ...request.headers },
+      ...(request.body === undefined ? {} : { body: request.body }),
+    });
+  } catch {
+    // Diagnostics must never change the workflow's execution result.
+  }
 }
 
 interface ResponseSlot {
@@ -509,7 +538,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
-    opts.onPreparedRequest?.(i);
+    observePreparedRequest(opts, i, subbed);
 
     let resp: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
@@ -916,7 +945,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     const cookieHeader = cookieJar.getCookieHeader(request.url);
     if (cookieHeader && !hasHeader(request.headers, 'cookie'))
       request.headers.cookie = cookieHeader;
-    opts.onPreparedRequest?.(requestIndex);
+    observePreparedRequest(opts, requestIndex, request);
 
     let response: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;

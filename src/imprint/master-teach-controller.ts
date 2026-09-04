@@ -26,6 +26,7 @@ import {
 } from './api-research-agent.ts';
 import {
   type BackendAttemptFact,
+  type BackendPreparedRequestObservation,
   type BackendResponseObservation,
   runWorkflowWithLadder,
 } from './backend-ladder.ts';
@@ -466,6 +467,7 @@ type ApiToolRunner = (input: {
   parameters: Record<string, string | number | boolean>;
   backend?: ReplayBackend;
   signal?: AbortSignal;
+  onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
 }) => Promise<{
   result: ToolResult<unknown>;
   executionMechanism: string;
@@ -536,12 +538,14 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   parameters,
   backend,
   signal,
+  onPreparedRequest,
 }) => {
   const run = await runWorkflowWithLadder({
     workflowPath,
     params: parameters,
     ...(backend && backend !== 'auto' ? { forceBackend: backend } : {}),
     signal,
+    onPreparedRequest,
   });
   return {
     result: run.result,
@@ -2495,6 +2499,7 @@ async function researchSelectedOperations(input: {
           const outcome = await researchApiMvpCall({
             run: input.run,
             recordingIndex: input.recordingIndex,
+            session: input.triagedSession,
             tool,
             evidence,
             ...(followUp

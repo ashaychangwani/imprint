@@ -4538,3 +4538,42 @@ compatibility check, and a compiled implementation must still explicitly pick
 the API strategy and match the exact proven request sequence. Regression tests
 cover strategy-free pre-planning tools, newly discovered navigation provenance,
 and a two-way follow-up that must not restart unrelated researchers.
+
+## 2026-09-04 07:55–09:05 PDT — Flights reaches the last request but lacks the comparison needed to repair it
+
+Fresh Flights run `ad57a3e9-16bd-435a-9168-72621b683d7e` reused only the
+candidate-selection checkpoint. The preceding freshness fix held: completed
+Location, Search, and Calendar research did not restart. Four selected API
+operations returned real data, and the master correctly used their evidence to
+continue the unresolved Booking work. No playbook was used.
+
+The master did make one avoidable semantic change. The shipped detector had
+grouped outbound and return selection as stages of `search_flights`, but the
+master split the return stage into a new public `search_return_flights` tool.
+That created a fresh researcher conversation and spent roughly half an hour
+relearning the staged request. In general, a request that consumes a prior
+selection and returns the same result family should remain a staged form of the
+existing public operation unless it is independently useful to the caller.
+
+The final Booking attempt built the correct nested request body from the two
+current search responses. Offline comparison confirms that the body matches
+recorded request 154 byte-for-byte. The live call still returned a 131-byte
+protocol error; the clearest remaining difference was that its URL omitted the
+current session/build query envelope present in both the recording and shipped
+implementation. The researcher saw
+the short response, but not the outgoing-request differences, and the 60-minute
+run deadline arrived before its next turn. Planning and compilation therefore
+never began, and the terminal truthfully reported `0 ready, 5 not ready`.
+
+The correction is factual and site-neutral. Every research test now observes
+the artifact-prepared request before transport, immediately reduces it to
+query/header names, byte lengths, and mismatch positions, and sends only those
+bounded facts to the retained researcher beside the redacted response preview.
+Raw requests are neither stored nor placed in prompts. These comparisons are
+advisory and cannot fail a tool. The master and planner prompts now prefer
+continuing an existing public tool for an internal staged request, and the
+researcher must prove the complete selected operation rather than only its
+first phase or an HTTP-success wrapper.
+
+Validation passed all 1,934 tests, TypeScript, formatting/lint, dead-code,
+circular-dependency, and diff checks.

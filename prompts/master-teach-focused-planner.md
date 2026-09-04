@@ -16,6 +16,11 @@ backend facts, and redacted response preview. Use those factual request and
 response shapes to decide which calls stay inside one tool, every justified
 producer-consumer link, which response fields must flow to another tool, and
 which tools belong in later build waves.
+Preserve a public boundary when later requests are staged continuations of the
+same user operation and result family. Prefer optional continuation parameters,
+response dependencies, or repeated invocation over a new helper whose only
+purpose is an internal protocol phase. Suggest a split only for a separately
+useful user-facing operation and state the evidence.
 The master has already returned partial handoffs to their retained researchers;
 do not silently complete or reinterpret a partial request in this planning
 stage. If an injected or older handoff is still partial, preserve its stated

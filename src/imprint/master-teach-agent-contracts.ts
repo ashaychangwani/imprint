@@ -148,6 +148,30 @@ const BackendResponseObservationSchema = strictObject({
   topLevelKeys: z.array(utf8Text(0, 200)).max(32).optional(),
   arrayLength: z.number().int().nonnegative().optional(),
 });
+const PreparedRequestComparisonSchema = strictObject({
+  backend: z.enum(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']),
+  requestIndex: z.number().int().nonnegative(),
+  recordingRequestSeq: z.number().int().nonnegative().optional(),
+  status: z.enum(['checked', 'not_checked']),
+  reason: utf8Text(1, 500).optional(),
+  methodEqual: z.boolean().optional(),
+  originPathEqual: z.boolean().optional(),
+  recordedQueryKeyCount: z.number().int().nonnegative().optional(),
+  preparedQueryKeyCount: z.number().int().nonnegative().optional(),
+  recordedOnlyQueryKeys: z.array(utf8Text(0, 200)).max(32).optional(),
+  preparedOnlyQueryKeys: z.array(utf8Text(0, 200)).max(32).optional(),
+  queryKeyDifferencesTruncated: z.boolean().optional(),
+  sharedHeaderNameCount: z.number().int().nonnegative().optional(),
+  recordedOnlyHeaderNames: z.array(utf8Text(0, 200)).max(32).optional(),
+  preparedOnlyHeaderNames: z.array(utf8Text(0, 200)).max(32).optional(),
+  headerNameDifferencesTruncated: z.boolean().optional(),
+  recordedUrlBytes: z.number().int().nonnegative().optional(),
+  preparedUrlBytes: z.number().int().nonnegative().optional(),
+  urlFirstMismatchByte: z.number().int().nonnegative().optional(),
+  recordedBodyBytes: z.number().int().nonnegative().optional(),
+  preparedBodyBytes: z.number().int().nonnegative().optional(),
+  bodyFirstMismatchByte: z.number().int().nonnegative().optional(),
+});
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
   candidateSha256: PromptShaSchema,
@@ -157,6 +181,9 @@ export const ApiResearchObservationSchema = strictObject({
     .array(BackendResponseObservationSchema)
     .max(RESPONSE_OBSERVATIONS_MAX)
     .default([]),
+  /** Advisory only: artifact-prepared requests reduced immediately to names,
+   * lengths, and mismatch positions. No request values reach the agent. */
+  requestComparisons: z.array(PreparedRequestComparisonSchema).max(32).optional(),
   result: strictObject({
     ok: z.boolean(),
     error: utf8Text(1, 256).optional(),
