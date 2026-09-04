@@ -4470,3 +4470,45 @@ could change without new sequence numbers. Both now invalidate stale proof.
 Tests also assert that each mutual retained follow-up occurs exactly once.
 Final validation passed: 1,927 tests, TypeScript, Biome, dead-code and circular-
 dependency checks, plus diff and site-neutrality checks.
+
+## 2026-09-04 05:15–05:59 PDT — Research succeeds, then planning accidentally starts it over
+
+Fresh Flights run `219b75b8-6990-4730-ba90-3003de4e8901` reused only the
+content-bound candidate proposal. Location search and location details again
+proved small direct API calls. Search proved a real page-owned flight-search
+response. Calendar rejected responses that were merely HTTP-successful and
+proved a real date-and-price grid. Booking first paused for a sibling Search
+value, then continued in the same researcher conversation and ultimately
+proved a real booking response. All five requested operations were API-proven;
+no playbook was used.
+
+The run also exposed one avoidable cost. On Booking's first two browser-backed
+attempts, the first request returned 80–110 KB successfully but a local extractor
+failed before the second request. The runtime reported only response size and
+discarded the bounded response content, so the researcher had to relaunch the
+same browser setup to revise extraction code. Later attempts tested genuinely
+different request constructions, and the final one succeeded. The generic fix
+is to include a bounded, redacted response preview in factual research feedback
+so local parsing repairs are not blind.
+
+After research, five focused planners completed and the master produced a
+two-wave plan. That normal plan refined descriptions and narrowed each tool to
+the exact request that had worked. The runtime incorrectly treated those
+planning refinements as changes to the API itself and started research for all
+five tools again. The run was cancelled at 44 minutes with `0 ready, 5
+unfinished` because this repeat would consume the remaining deadline before
+compilation. The correction is to preserve proven research when a new plan is
+still covered by the exact tested workflow; only a genuinely new public input,
+unresearched request, or transport/authentication requirement should demand a
+new live research pass.
+
+Both corrections were implemented without site rules. Research receipts now
+separate the exact tested request set from the smaller facts that must stay
+unchanged, so a plan can narrow to the working request or fix an unused public
+input to a constant without retesting it. A new public input, an unresearched
+request, or changed authentication/transport facts still makes research stale.
+Each successful intermediate response now includes a redacted four-kilobyte
+preview in research feedback; this is information for the researcher and never
+changes execution or pass/fail decisions. Validation passed all 1,930 tests,
+TypeScript, formatting/lint, dead-code, circular-dependency, diff, and
+site-neutrality checks.

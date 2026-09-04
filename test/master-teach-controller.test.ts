@@ -4,6 +4,7 @@ import { triageRequests } from '../src/imprint/compile.ts';
 import {
   apiResearchInputsSha256,
   apiResearchRequiredLinks,
+  apiResearchStableInputsSha256,
 } from '../src/imprint/master-teach-agents.ts';
 import {
   ParameterAdvisorLane,
@@ -229,6 +230,7 @@ describe('API research boundary reuse', () => {
     researchedBoundary: {
       requestSeqs: [1, 2],
       dependencySeqs: [],
+      stableInputsSha256: apiResearchStableInputsSha256(tool),
     },
     candidate: {
       workflow: {
@@ -303,9 +305,8 @@ describe('API research boundary reuse', () => {
     const research = researchFor(tool);
     const query = tool.candidate.likelyParams[0];
     if (!query) throw new Error('test tool has no public parameter');
-    query.description = 'A different meaning for the same string parameter.';
-    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
-    query.description = 'Query to send.';
+    query.description = 'Clearer public wording for the same string parameter.';
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
     tool.candidate.likelyParams.push({
       name: 'unresearched',
       type: 'string',
@@ -460,8 +461,8 @@ describe('API research boundary reuse', () => {
     const changedParameterDescription = structuredClone(tool);
     const query = changedParameterDescription.candidate.likelyParams[0];
     if (!query) throw new Error('test tool has no public parameter');
-    query.description = 'A different semantic contract for the same name and type.';
-    expect(apiResearchInputsSha256(changedParameterDescription)).not.toBe(initial);
+    query.description = 'Clearer public wording for the same name and type.';
+    expect(apiResearchInputsSha256(changedParameterDescription)).toBe(initial);
 
     rewritten.candidate.likelyParams.push({
       name: 'mode',
@@ -475,8 +476,8 @@ describe('API research boundary reuse', () => {
     expect(apiResearchInputsSha256(changedRequestScope)).not.toBe(initial);
 
     const changedOutput = structuredClone(tool);
-    changedOutput.candidate.expectedOutput = 'A materially broader result contract.';
-    expect(apiResearchInputsSha256(changedOutput)).not.toBe(initial);
+    changedOutput.candidate.expectedOutput = 'Clearer wording for the same result contract.';
+    expect(apiResearchInputsSha256(changedOutput)).toBe(initial);
 
     const changedTransport = structuredClone(tool);
     changedTransport.compileContext.authRequestSeqs = [2];
@@ -490,6 +491,34 @@ describe('API research boundary reuse', () => {
     const changedAuthSource = structuredClone(tool);
     changedAuthSource.compileContext.authNotes = 'Reuse the active signed-in browser session.';
     expect(apiResearchInputsSha256(changedAuthSource)).not.toBe(initial);
+  });
+
+  it('reuses proven research after narrowing to its exact request but not after transport changes', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the recorded request.' };
+    tool.candidate.requestSeqs = [1, 2];
+    tool.candidate.representativeSeqs = [1];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
+    const research = researchFor(tool);
+
+    const narrowed = structuredClone(tool);
+    narrowed.candidate.requestSeqs = [1];
+    narrowed.candidate.expectedOutput = 'A clearer description of the same response.';
+    const query = narrowed.candidate.likelyParams[0];
+    if (!query) throw new Error('test tool has no public parameter');
+    query.description = 'Clearer wording for the same query.';
+    expect(apiResearchInputsSha256(narrowed)).not.toBe(apiResearchInputsSha256(tool));
+    expect(apiResearchCoversToolBoundary(narrowed, research)).toBeTrue();
+
+    const fixedParameter = structuredClone(narrowed);
+    fixedParameter.candidate.likelyParams = [];
+    expect(apiResearchCoversToolBoundary(fixedParameter, research)).toBeTrue();
+
+    const changedTransport = structuredClone(narrowed);
+    changedTransport.compileContext.authRequestSeqs = [2];
+    expect(apiResearchCoversToolBoundary(changedTransport, research)).toBeFalse();
   });
 });
 

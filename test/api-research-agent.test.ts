@@ -102,12 +102,23 @@ describe('focused API research', () => {
         agent: {},
         runDeadline: new RunDeadline(Date.now() + 60_000),
         dependencies: {
-          requestStep: async (input) => {
+          requestStep: async (input, _agent, retainedTurnDelta) => {
             agentTurn += 1;
             if (agentTurn === 1)
               return { binding, action: 'test', candidate: first, reason: 'Test baseline.' };
             if (agentTurn === 2) {
               expect(input.observations[0]?.result.preview).toContain('protocol error');
+              expect(input.observations[0]?.responseObservations[0]?.redactedBodyPreview).toBe(
+                '{"bootstrap":{"continuation":"current-value"}}',
+              );
+              expect(retainedTurnDelta).toMatchObject({
+                kind: 'observation',
+                latestObservation: {
+                  responseObservations: [
+                    { redactedBodyPreview: '{"bootstrap":{"continuation":"current-value"}}' },
+                  ],
+                },
+              });
               return { binding, action: 'test', candidate: second, reason: 'Test repair.' };
             }
             const observed = input.observations[1];
@@ -125,6 +136,21 @@ describe('focused API research', () => {
             expect(backend).toBe(execution === 1 ? undefined : 'cdp-replay');
             return {
               executionMechanism: backend ?? 'fetch',
+              responseObservations:
+                execution === 1
+                  ? [
+                      {
+                        backend: 'fetch' as const,
+                        requestIndex: 0,
+                        status: 200,
+                        bodyByteLength: 46,
+                        redactedBodyPreview: '{"bootstrap":{"continuation":"current-value"}}',
+                        contentType: 'application/json',
+                        valueType: 'object' as const,
+                        topLevelKeys: ['bootstrap'],
+                      },
+                    ]
+                  : [],
               result:
                 execution === 1
                   ? { ok: true as const, data: 'protocol error: no records' }

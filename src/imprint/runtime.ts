@@ -19,7 +19,9 @@ import {
   readSiteManifest,
   saveSiteCookies,
 } from './credential-store.ts';
+import { redactFreeformText } from './freeform-redact.ts';
 import { importModuleFresh } from './import-module-fresh.ts';
+import { redactBody } from './redact.ts';
 import {
   captureHeader,
   captureValueMatches,
@@ -192,6 +194,9 @@ export interface ResponseObservation {
   requestIndex: number;
   status: number;
   bodyByteLength: number;
+  /** Bounded, redacted response prefix for teach/debug repair. It is factual
+   * context only and never participates in runtime decisions. */
+  redactedBodyPreview?: string;
   contentType?: string;
   valueType: 'null' | 'array' | 'object' | 'string' | 'number' | 'boolean';
   topLevelKeys?: string[];
@@ -239,6 +244,31 @@ function bodyStageFacts(
 }
 
 const RESPONSE_OBSERVATION_KEYS = 32;
+const RESPONSE_OBSERVATION_KEY_BYTES = 200;
+export const RESPONSE_OBSERVATIONS_MAX = 256;
+export const RESPONSE_OBSERVATION_PREVIEW_BYTES = 4_000;
+const RESPONSE_OBSERVATION_TRUNCATED_SUFFIX = '\n[preview truncated]';
+
+function utf8Prefix(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maximumBytes) return value;
+  let end = maximumBytes;
+  while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function boundedResponsePreview(text: string, contentType?: string): string {
+  // redactBody preserves framed RPC envelopes so recording redaction does not
+  // corrupt their wire structure. A diagnostic preview is not replayed, so run
+  // the free-form secret/PII pass as well before exposing that bounded text.
+  const redacted = redactFreeformText(redactBody(text, contentType).redacted).redacted;
+  if (Buffer.byteLength(redacted, 'utf8') <= RESPONSE_OBSERVATION_PREVIEW_BYTES) return redacted;
+  const suffixBytes = Buffer.byteLength(RESPONSE_OBSERVATION_TRUNCATED_SUFFIX, 'utf8');
+  return `${utf8Prefix(
+    redacted,
+    RESPONSE_OBSERVATION_PREVIEW_BYTES - suffixBytes,
+  )}${RESPONSE_OBSERVATION_TRUNCATED_SUFFIX}`;
+}
 
 function responseObservation(
   requestIndex: number,
@@ -258,6 +288,7 @@ function responseObservation(
     requestIndex,
     status: response.status,
     bodyByteLength: new TextEncoder().encode(text).byteLength,
+    redactedBodyPreview: boundedResponsePreview(text, contentType),
     ...(contentType ? { contentType } : {}),
     valueType,
     ...(Array.isArray(parsed) ? { arrayLength: parsed.length } : {}),
@@ -265,7 +296,8 @@ function responseObservation(
       ? {
           topLevelKeys: Object.keys(parsed as Record<string, unknown>)
             .sort()
-            .slice(0, RESPONSE_OBSERVATION_KEYS),
+            .slice(0, RESPONSE_OBSERVATION_KEYS)
+            .map((key) => utf8Prefix(key, RESPONSE_OBSERVATION_KEY_BYTES)),
         }
       : {}),
   };

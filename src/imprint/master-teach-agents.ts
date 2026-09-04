@@ -113,29 +113,38 @@ export function apiResearchRequiredLinks(
   ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
-/** Hash only evidence and the public operation boundary that can change request
- * viability. Dependency names and selected chain links describe how proven
- * calls compose; changing that wiring does not invalidate the calls themselves. */
+const apiResearchTransportEvidence = (tool: ApiResearchInput['tool']) => ({
+  loginRequestSeqs: tool.compileContext.loginRequestSeqs,
+  authRequestSeqs: tool.compileContext.authRequestSeqs,
+  credentialNames: [...tool.compileContext.credentialNames].sort(),
+  tokenExtractionNotes: tool.compileContext.tokenExtractionNotes,
+  authNotes: tool.compileContext.authNotes,
+});
+
+/** Hash transport facts that must still match even when a later plan narrows
+ * the proven request scope or fixes a researched public input to a constant.
+ * Tool name and remaining parameter names/types are checked directly against
+ * the proven workflow by apiResearchCoversToolBoundary. */
+export const apiResearchStableInputsSha256 = (tool: ApiResearchInput['tool']): string =>
+  digest({
+    transportEvidence: apiResearchTransportEvidence(tool),
+  });
+
+/** Hash evidence and the public operation boundary that can change request
+ * viability. Human-facing descriptions and result prose do not affect whether
+ * the tested request works; the master must request new research when it
+ * intentionally changes their meaning. Dependency names and selected chain
+ * links describe how proven calls compose; changing that wiring does not
+ * invalidate the calls. */
 export const apiResearchInputsSha256 = (tool: ApiResearchInput['tool']): string =>
   digest({
     toolName: tool.candidate.toolName,
-    expectedOutput: tool.candidate.expectedOutput,
-    parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
-      name,
-      type,
-      description,
-    })),
+    parameters: tool.candidate.likelyParams.map(({ name, type }) => ({ name, type })),
     requestSeqs: tool.candidate.requestSeqs,
     representativeSeqs: tool.candidate.representativeSeqs,
     dependencySeqs: tool.candidate.dependencySeqs,
     eventSeqs: tool.candidate.eventSeqs,
-    transportEvidence: {
-      loginRequestSeqs: tool.compileContext.loginRequestSeqs,
-      authRequestSeqs: tool.compileContext.authRequestSeqs,
-      credentialNames: [...tool.compileContext.credentialNames].sort(),
-      tokenExtractionNotes: tool.compileContext.tokenExtractionNotes,
-      authNotes: tool.compileContext.authNotes,
-    },
+    transportEvidence: apiResearchTransportEvidence(tool),
   });
 
 /** Bind a follow-up to exactly the current public boundary, retained partial,

@@ -70,6 +70,7 @@ import {
   apiResearchFollowUpStateSha256,
   apiResearchInputsSha256,
   apiResearchRequiredLinks,
+  apiResearchStableInputsSha256,
   mechanicalProofFailures,
   requestApiResearchStep,
   requestBaselineMvpReview,
@@ -1919,17 +1920,16 @@ export function apiResearchCoversToolBoundary(
 ): boolean {
   if (tool.strategy?.kind !== 'api') return false;
   if (research.workflow.toolName !== tool.candidate.toolName) return false;
+  if (research.researchedBoundary.stableInputsSha256 !== apiResearchStableInputsSha256(tool)) {
+    return false;
+  }
   const researchedParameters = new Map(
-    research.workflow.parameters.map(({ name, type, description }) => [
-      name,
-      { type, description },
-    ]),
+    research.workflow.parameters.map(({ name, type }) => [name, type]),
   );
   if (
-    tool.candidate.likelyParams.some(({ name, type, description }) => {
-      const researched = researchedParameters.get(name);
-      return !type || researched?.type !== type || researched.description !== description;
-    })
+    tool.candidate.likelyParams.some(
+      ({ name, type }) => !type || researchedParameters.get(name) !== type,
+    )
   ) {
     return false;
   }
@@ -2662,6 +2662,16 @@ async function reviewApiResearchBeforePlanning(input: {
   const handoffs = byName.handoffs;
   const results = byName.results;
   const evidence = byName.evidence;
+  const hasCurrentResearch = (tool: EditableTeachingTool): boolean => {
+    const toolName = tool.candidate.toolName;
+    const handoff = handoffs.get(toolName);
+    if (!handoff) return false;
+    if (handoff.status !== 'proven') {
+      return handoff.researchInputsSha256 === apiResearchInputsSha256(tool);
+    }
+    const result = results.get(toolName);
+    return Boolean(result && apiResearchCoversToolBoundary(tool, result));
+  };
   const reviewRefs: ContentAddressedRef[] = [];
   const attemptedFollowUpStates = new Set<string>();
   let researchNoProgress: ApiResearchNoProgress[] = [];
@@ -2695,10 +2705,7 @@ async function reviewApiResearchBeforePlanning(input: {
         evidence.delete(toolName);
       }
     }
-    const missingTools = scopedTools.filter((tool) => {
-      const handoff = handoffs.get(tool.candidate.toolName);
-      return !handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(tool);
-    });
+    const missingTools = scopedTools.filter((tool) => !hasCurrentResearch(tool));
     if (missingTools.length > 0) {
       const fresh = await researchSelectedOperations({
         plan,
@@ -2793,10 +2800,7 @@ async function reviewApiResearchBeforePlanning(input: {
 
     const followUps = decision.researchFollowUps ?? [];
     if (followUps.length === 0) {
-      const needsFreshFirstPass = researchableTools().some((tool) => {
-        const handoff = handoffs.get(tool.candidate.toolName);
-        return !handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(tool);
-      });
+      const needsFreshFirstPass = researchableTools().some((tool) => !hasCurrentResearch(tool));
       if (needsFreshFirstPass) continue;
       const selectedPartial = researchableTools().some(
         (tool) =>
@@ -2834,10 +2838,7 @@ async function reviewApiResearchBeforePlanning(input: {
         // researcher below. Do not first replace that conversation with an
         // automatic fresh pass merely because another follow-up names it.
         if (followUpTargetNames.has(siblingName)) continue;
-        const handoff = handoffs.get(siblingName);
-        if (!handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(sibling)) {
-          staleSiblingIds.add(sibling.id);
-        }
+        if (!hasCurrentResearch(sibling)) staleSiblingIds.add(sibling.id);
       }
     }
     if (staleSiblingIds.size > 0) {

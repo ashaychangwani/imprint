@@ -1,6 +1,6 @@
 /** Strict wire contracts for bounded, one-shot semantic roles. */
 import { z } from 'zod';
-import type { BackendAttemptFact, BackendResponseObservation } from './backend-ladder.ts';
+import type { BackendAttemptFact } from './backend-ladder.ts';
 import {
   ChainEdgeSchema,
   ConcreteTeachingParameterSchema,
@@ -31,6 +31,7 @@ import {
   schemaIssue,
   utf8Text,
 } from './master-teach-prompt-projections.ts';
+import { RESPONSE_OBSERVATIONS_MAX, RESPONSE_OBSERVATION_PREVIEW_BYTES } from './runtime.ts';
 import { WorkflowSchema } from './types.ts';
 const Reason = utf8Text(1, 4_000);
 const Short = utf8Text(1, 1_000);
@@ -136,12 +137,26 @@ export const ApiResearchCandidateSchema = strictObject({
     .optional(),
 });
 export type ApiResearchCandidate = z.infer<typeof ApiResearchCandidateSchema>;
+const BackendResponseObservationSchema = strictObject({
+  backend: z.enum(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']),
+  requestIndex: z.number().int().nonnegative(),
+  status: z.number().int().min(0).max(999),
+  bodyByteLength: z.number().int().nonnegative(),
+  redactedBodyPreview: utf8Text(0, RESPONSE_OBSERVATION_PREVIEW_BYTES).optional(),
+  contentType: utf8Text(0, 200).optional(),
+  valueType: z.enum(['null', 'array', 'object', 'string', 'number', 'boolean']),
+  topLevelKeys: z.array(utf8Text(0, 200)).max(32).optional(),
+  arrayLength: z.number().int().nonnegative().optional(),
+});
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
   candidateSha256: PromptShaSchema,
   executionMechanism: utf8Text(1, 128),
   backendAttempts: z.custom<BackendAttemptFact[]>().default([]),
-  responseObservations: z.custom<BackendResponseObservation[]>().default([]),
+  responseObservations: z
+    .array(BackendResponseObservationSchema)
+    .max(RESPONSE_OBSERVATIONS_MAX)
+    .default([]),
   result: strictObject({
     ok: z.boolean(),
     error: utf8Text(1, 256).optional(),

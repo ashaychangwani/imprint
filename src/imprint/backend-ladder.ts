@@ -39,6 +39,7 @@ import { runPlaybook } from './playbook-runner.ts';
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  RESPONSE_OBSERVATIONS_MAX,
   type ResponseObservation,
   executeWorkflow,
   loadCredentialStore,
@@ -1651,6 +1652,7 @@ export async function runWorkflowWithLadder(opts: {
   const toolDir = tool.dir;
   const responseObservations: BackendResponseObservation[] = [];
   const observeResponse = (observation: BackendResponseObservation): void => {
+    if (responseObservations.length >= RESPONSE_OBSERVATIONS_MAX) responseObservations.shift();
     responseObservations.push(observation);
   };
   // assetRoot only matters for playbook-rung path resolution, which this

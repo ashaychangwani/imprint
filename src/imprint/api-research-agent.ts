@@ -22,6 +22,7 @@ import {
   type MasterTeachAgentOptions,
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
+  apiResearchStableInputsSha256,
   type requestApiResearchStep,
 } from './master-teach-agents.ts';
 import { teachingPlanContentSha256 } from './master-teach-plan.ts';
@@ -42,6 +43,7 @@ export interface ApiResearchResult {
   researchedBoundary: {
     requestSeqs: number[];
     dependencySeqs: number[];
+    stableInputsSha256: string;
     dependencyToolNames?: string[];
     requiredLinks?: NonNullable<ApiResearchInput['requiredLinks']>;
   };
@@ -336,6 +338,7 @@ export async function researchApiMvpCall(input: {
         researchedBoundary: {
           requestSeqs: [...input.tool.candidate.requestSeqs],
           dependencySeqs: [...input.tool.candidate.dependencySeqs],
+          stableInputsSha256: apiResearchStableInputsSha256(input.tool),
           dependencyToolNames: [...input.tool.candidate.dependsOnTools],
           requiredLinks: [...(input.requiredLinks ?? [])],
         },

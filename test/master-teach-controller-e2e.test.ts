@@ -993,8 +993,8 @@ describe('fresh foreground master controller end to end', () => {
       let sawFollowUp = false;
       let requestedNeighborInspection = false;
       let sawNeighborInspection = false;
-      let expectedRefreshedProducerHash: string | undefined;
-      let sawRefreshedProducer = false;
+      let expectedProducerHashAfterProseEdit: string | undefined;
+      let sawRedundantProducerRefresh = false;
       let plannerCalls = 0;
       const terminal = await runFreshMasterTeach(
         {
@@ -1010,10 +1010,10 @@ describe('fresh foreground master controller end to end', () => {
             const decision = await baseResearch(input);
             if (
               input.tool.candidate.toolName === PRODUCER_NAME &&
-              expectedRefreshedProducerHash &&
-              decision.binding.compileInputsSha256 === expectedRefreshedProducerHash
+              expectedProducerHashAfterProseEdit &&
+              decision.binding.compileInputsSha256 === expectedProducerHashAfterProseEdit
             ) {
-              sawRefreshedProducer = true;
+              sawRedundantProducerRefresh = true;
             }
             if (
               input.tool.candidate.toolName === CONSUMER_NAME &&
@@ -1060,7 +1060,7 @@ describe('fresh foreground master controller end to end', () => {
                 PRODUCER_NAME,
               ]);
               expect(input.followUp.siblingResearch[0]?.researchInputsSha256).toBe(
-                expectedRefreshedProducerHash,
+                expectedProducerHashAfterProseEdit,
               );
               expect(input.followUp.relevantRequestSeqs).toEqual([1]);
               expect(input.evidence.payload.entries.length).toBeGreaterThan(1);
@@ -1079,7 +1079,7 @@ describe('fresh foreground master controller end to end', () => {
               if (!producer) throw new Error('fixture plan lost its producer');
               producer.candidate.expectedOutput =
                 'Fixture items with identifiers required by the selected consumer.';
-              expectedRefreshedProducerHash = apiResearchInputsSha256(producer);
+              expectedProducerHashAfterProseEdit = apiResearchInputsSha256(producer);
               return MasterDecisionOutputSchema.parse({
                 binding: input.current?.run ?? input.discovery.run,
                 outcome: 'accepted',
@@ -1113,7 +1113,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(sawFollowUp).toBeTrue();
       expect(requestedNeighborInspection).toBeTrue();
       expect(sawNeighborInspection).toBeTrue();
-      expect(sawRefreshedProducer).toBeTrue();
+      expect(sawRedundantProducerRefresh).toBeFalse();
       expect(plannerCalls).toBe(2);
       expect(terminal.status).toBe('failed');
     });
@@ -1398,6 +1398,88 @@ describe('fresh foreground master controller end to end', () => {
         ]),
       );
       expect(new Set(plannedNames)).toEqual(new Set([PRODUCER_NAME, CONSUMER_NAME]));
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('keeps proven research when the post-planning master rewrites prose and narrows request scope', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-post-plan-proven-research-reuse',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner) {
+        throw new Error('fixture research roles are missing');
+      }
+
+      const researchTurns = new Map<string, number>();
+      const plannerTurns = new Map<string, number>();
+      let refinedAfterPlanning = false;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const toolName = input.tool.candidate.toolName;
+            researchTurns.set(toolName, (researchTurns.get(toolName) ?? 0) + 1);
+            return await baseResearch(input);
+          },
+          requestFocusedPlan: async (input) => {
+            const toolName = input.tool.candidate.toolName;
+            plannerTurns.set(toolName, (plannerTurns.get(toolName) ?? 0) + 1);
+            return await basePlanner(input);
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (
+              input.decisionPurpose !== 'research_review' &&
+              input.plannerProposals.length > 0 &&
+              !refinedAfterPlanning
+            ) {
+              refinedAfterPlanning = true;
+              const desiredPlan = proposalDesiredPlan(input);
+              const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              if (!consumer) throw new Error('fixture plan lost its consumer');
+              consumer.candidate.description = 'Fetch one current fixture item.';
+              consumer.candidate.expectedOutput = 'The same item detail, described more clearly.';
+              const itemId = consumer.candidate.likelyParams[0];
+              if (!itemId) throw new Error('fixture consumer lost its public parameter');
+              itemId.description = 'Current item identifier.';
+              consumer.candidate.dependencySeqs = [];
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'revised',
+                reason: 'Keep the exact proven request and clarify the public wording.',
+                recallToolNames: [],
+                researchFollowUps: [],
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+        },
+      );
+
+      expect(refinedAfterPlanning).toBeTrue();
+      expect(researchTurns).toEqual(
+        new Map([
+          [PRODUCER_NAME, 2],
+          [CONSUMER_NAME, 2],
+        ]),
+      );
+      expect(plannerTurns.get(PRODUCER_NAME)).toBe(1);
+      expect(plannerTurns.get(CONSUMER_NAME)).toBe(1);
       expect(terminal.status).toBe('failed');
     });
   });

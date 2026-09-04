@@ -136,7 +136,7 @@ describe('executeWorkflow', () => {
     expect(r.data).toEqual({ results: [1, 2, 3] });
   });
 
-  it('emits a value-free response observation for a failed HTTP response', async () => {
+  it('emits a bounded redacted response observation for a failed HTTP response', async () => {
     const observations: unknown[] = [];
     const opaque = 'opaque-browser-minted-credential-12345';
     const body = JSON.stringify({ error: 'invalid request shape', csrf: opaque });
@@ -165,8 +165,52 @@ describe('executeWorkflow', () => {
       }),
     );
     expect(observations[0]).not.toHaveProperty('preview');
+    expect(observations[0]).toEqual(
+      expect.objectContaining({
+        redactedBodyPreview: expect.stringContaining('invalid request shape'),
+      }),
+    );
+    expect(JSON.stringify(observations)).toContain('[REDACTED:');
     expect(JSON.stringify(observations)).not.toContain(opaque);
-    expect(JSON.stringify(observations)).not.toContain('invalid request shape');
+  });
+
+  it('redacts framed RPC previews and bounds disclosed object keys', async () => {
+    const rpcObservations: Array<{ redactedBodyPreview?: string }> = [];
+    const jwt = [
+      'eyJhbGciOiJIUzI1NiJ9',
+      'eyJzdWIiOiIxMjM0NTY3ODkwIn0',
+      'signature-value',
+    ].join('.');
+    const rpcBody = `)]}'\n[["wrb.fr","rpc","person@example.com Bearer ${jwt}"]]`;
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(rpcBody, {
+          status: 400,
+          headers: { 'content-type': 'application/json+protobuf' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => rpcObservations.push(observation),
+    });
+    expect(rpcObservations[0]?.redactedBodyPreview).toContain('[REDACTED]');
+    expect(rpcObservations[0]?.redactedBodyPreview).not.toContain('person@example.com');
+    expect(rpcObservations[0]?.redactedBodyPreview).not.toContain(jwt);
+
+    const longKey = 'k'.repeat(1_000);
+    const objectObservations: Array<{ topLevelKeys?: string[] }> = [];
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ [longKey]: true }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => objectObservations.push(observation),
+    });
+    expect(Buffer.byteLength(objectObservations[0]?.topLevelKeys?.[0] ?? '', 'utf8')).toBe(200);
   });
 
   it('parses JSON body even when content-type is text/html', async () => {
@@ -955,7 +999,7 @@ describe('requestTransformModule', () => {
     }
   });
 
-  it('reports value-free stage facts when a later request transform fails', async () => {
+  it('reports stage facts and a bounded redacted earlier response when a later transform fails', async () => {
     const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');
     mkdirSync(scratchRoot, { recursive: true });
@@ -978,6 +1022,10 @@ describe('requestTransformModule', () => {
       ],
     };
     let sends = 0;
+    const responseObservations: Array<{
+      redactedBodyPreview?: string;
+      requestIndex: number;
+    }> = [];
     try {
       writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
       writeFileSync(
@@ -992,11 +1040,19 @@ describe('requestTransformModule', () => {
         workflow,
         params: { q: 'private-query', filter: 'private-filter' },
         workflowPath: join(tmpDir, 'workflow.json'),
+        onResponse: (observation) => responseObservations.push(observation),
         fetchImpl: (async () => {
           sends++;
-          return new Response('{"state":"opaque"}', {
-            headers: { 'content-type': 'application/json' },
-          });
+          return new Response(
+            JSON.stringify({
+              state: { continuation: 'usable-local-value' },
+              email: 'person@example.com',
+              filler: 'x'.repeat(8_000),
+            }),
+            {
+              headers: { 'content-type': 'application/json' },
+            },
+          );
         }) as unknown as typeof fetch,
       });
 
@@ -1035,6 +1091,15 @@ describe('requestTransformModule', () => {
       expect(serializedFacts).not.toContain('private-filter');
       expect(serializedFacts).not.toContain('rendered-state');
       expect(serializedFacts).not.toContain('api.example.com');
+      expect(responseObservations).toHaveLength(1);
+      expect(responseObservations[0]?.requestIndex).toBe(0);
+      expect(responseObservations[0]?.redactedBodyPreview).toContain('usable-local-value');
+      expect(responseObservations[0]?.redactedBodyPreview).toContain('[REDACTED:');
+      expect(responseObservations[0]?.redactedBodyPreview).not.toContain('person@example.com');
+      expect(
+        Buffer.byteLength(responseObservations[0]?.redactedBodyPreview ?? '', 'utf8'),
+      ).toBeLessThanOrEqual(4_000);
+      expect(responseObservations[0]?.redactedBodyPreview).toEndWith('[preview truncated]');
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
