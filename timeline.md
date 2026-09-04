@@ -4409,3 +4409,64 @@ Biome, dead-code and circular-dependency checks, and the diff/site-neutrality
 checks. The next attempt will be a new teach run that reuses only the prior
 content-bound candidate selection and starts research, planning, compilation,
 and verification from scratch.
+
+## 2026-09-04 03:49–04:57 PDT — Every Flights call works, but link bookkeeping uses the hour
+
+Fresh run `c3d7c042-d366-4de6-b942-566cdd35a540` reused only the prior
+candidate proposal for the exact same recording. All researcher conversations,
+planning, and later work started fresh. The context fix held: no researcher ran
+out of context, and later turns received only their new fact.
+
+The first research pass took 30 minutes. Location search and details passed
+quickly with direct requests. Flight search returned a real list of flights,
+calendar returned a real date-and-price grid, and booking correctly rejected
+small HTTP-200 responses that contained no offers. Booking initially stopped
+because it needed a fresh selection from the sibling search tool.
+
+The master then used sibling evidence to repair the chain. Booking ultimately
+returned real booking providers, fares, and a redirect link; search exposed the
+paired selection values; and the recorded return date was replaced with a
+public parameter. By minute 55 every one of the five requested operations had
+a proven API call. All five focused planners then finished in about three and a
+half minutes. The final master planning decision began with only 30 seconds
+left and the 60-minute run deadline ended it. Compilation and verification
+never began, so the terminal correctly reported `0 ready, 5 not ready`.
+
+The wasted time was not an API failure or weak researcher reasoning. Runtime
+bookkeeping treated dependency names and exact chain paths as part of the core
+API proof. Each time the master refined a link, previously working calls looked
+stale and were tested again. There were 34 live observations and 51 backend
+attempts, including 36 browser-backed attempts; booking accounted for most of
+that cost. The master followed the prompt it was given.
+
+The correction is site-neutral: keep a proven core call valid when only link
+bookkeeping changes, let a researcher quickly request a missing sibling value,
+send explicit follow-ups directly into retained conversations, and leave exact
+normalized result paths to focused planning and chain verification. Public
+parameters, request scope, expected output, and transport changes will still
+require new research.
+
+## 2026-09-04 04:58–05:13 PDT — Separate a working call from how tools are connected
+
+Core API proof no longer includes dependency names or exact chain paths. Adding
+or renaming a connection between two tools therefore cannot make either tested
+request look stale. Actual operation changes still require fresh research:
+public parameter names, types, descriptions, expected output, request and
+response scope, authentication evidence, and token-source notes all remain part
+of the proof identity.
+
+When the master explicitly sends two related tools back for more evidence, both
+now continue directly in their retained researcher conversations. The runtime
+does not first launch a duplicate initial pass. The researcher prompt also says
+to stop after one useful stale-value diagnostic when only an unfinished sibling
+can provide the current value. Research proves the raw source and intended
+mapping; the compiler and chain verifier prove the final normalized result
+path. The master prompt leaves dependency design to focused planning after the
+standalone calls are stable.
+
+An independent review caught two omissions before this checkpoint: a same-type
+parameter could change meaning through its description, and token/auth notes
+could change without new sequence numbers. Both now invalidate stale proof.
+Tests also assert that each mutual retained follow-up occurs exactly once.
+Final validation passed: 1,927 tests, TypeScript, Biome, dead-code and circular-
+dependency checks, plus diff and site-neutrality checks.

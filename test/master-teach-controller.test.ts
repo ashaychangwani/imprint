@@ -287,7 +287,7 @@ describe('API research boundary reuse', () => {
     tool.strategy = { kind: 'api', reason: 'Use the proven request.' };
     tool.candidate.requestSeqs = [1, 2];
     tool.candidate.likelyParams = [
-      { name: 'query', type: 'string', description: 'Public search query.' },
+      { name: 'query', type: 'string', description: 'Query to send.' },
     ];
     tool.compileContext.sharedHelperNotes = 'Planner-authored implementation details.';
     expect(apiResearchCoversToolBoundary(tool, researchFor(tool))).toBeTrue();
@@ -298,9 +298,14 @@ describe('API research boundary reuse', () => {
     tool.strategy = { kind: 'api', reason: 'Use the proven request.' };
     tool.candidate.requestSeqs = [1];
     tool.candidate.likelyParams = [
-      { name: 'query', type: 'string', description: 'Public search query.' },
+      { name: 'query', type: 'string', description: 'Query to send.' },
     ];
     const research = researchFor(tool);
+    const query = tool.candidate.likelyParams[0];
+    if (!query) throw new Error('test tool has no public parameter');
+    query.description = 'A different meaning for the same string parameter.';
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+    query.description = 'Query to send.';
     tool.candidate.likelyParams.push({
       name: 'unresearched',
       type: 'string',
@@ -317,7 +322,7 @@ describe('API research boundary reuse', () => {
     tool.strategy = { kind: 'api', reason: 'Use the proven browser-created request.' };
     tool.candidate.requestSeqs = [1, 2];
     tool.candidate.likelyParams = [
-      { name: 'query', type: 'string', description: 'Public search query.' },
+      { name: 'query', type: 'string', description: 'Query to send.' },
     ];
     const research = researchFor(tool);
     for (const workflow of [research.workflow, research.candidate.workflow]) {
@@ -358,14 +363,14 @@ describe('API research boundary reuse', () => {
     expect(apiResearchCoversToolBoundary(tool, outsideBoundary)).toBeFalse();
   });
 
-  it('re-reviews only tools whose required producer-consumer proof changed', () => {
+  it('keeps core API proof valid when only dependency wiring changes', () => {
     const producer = focusedTool(1);
     const consumer = focusedTool(2, [producer.candidate.toolName]);
     consumer.candidate.requestSeqs = [1, 2];
     consumer.candidate.representativeSeqs = [1];
     consumer.candidate.likelyParams = [
-      { name: 'query', type: 'string', description: 'Primary consumer input.' },
-      { name: 'mode', type: 'string', description: 'Alternate consumer input.' },
+      { name: 'query', type: 'string', description: 'Query to send.' },
+      { name: 'mode', type: 'string', description: 'Optional researched breadth.' },
     ];
     const unrelatedProducer = focusedTool(3);
     const unrelatedConsumer = focusedTool(4, [unrelatedProducer.candidate.toolName]);
@@ -399,8 +404,10 @@ describe('API research boundary reuse', () => {
     consumerResearch.researchedBoundary.dependencyToolNames = [producer.candidate.toolName];
     consumerResearch.researchedBoundary.requiredLinks = consumerLinks;
 
-    expect(apiResearchCoversToolBoundary(producer, research, requiredLinks)).toBeTrue();
-    expect(apiResearchCoversToolBoundary(consumer, consumerResearch, consumerLinks)).toBeTrue();
+    expect(apiResearchCoversToolBoundary(producer, research)).toBeTrue();
+    expect(apiResearchCoversToolBoundary(consumer, consumerResearch)).toBeTrue();
+    const producerProofHash = apiResearchInputsSha256(producer);
+    const consumerProofHash = apiResearchInputsSha256(consumer);
 
     const remappedPlan = structuredClone(plan);
     const remappedLink = remappedPlan.chainEdges[0];
@@ -409,45 +416,36 @@ describe('API research boundary reuse', () => {
     const producerLinksAfterRemap = apiResearchRequiredLinks(remappedPlan, producer);
     const consumerLinksAfterRemap = apiResearchRequiredLinks(remappedPlan, consumer);
     expect(producerLinksAfterRemap).toEqual(requiredLinks);
-    expect(apiResearchInputsSha256(producer, producerLinksAfterRemap)).toBe(
-      apiResearchInputsSha256(producer, requiredLinks),
-    );
-    expect(apiResearchCoversToolBoundary(producer, research, producerLinksAfterRemap)).toBeTrue();
-    expect(apiResearchInputsSha256(consumer, consumerLinksAfterRemap)).not.toBe(
-      apiResearchInputsSha256(consumer, consumerLinks),
-    );
-    expect(
-      apiResearchCoversToolBoundary(consumer, consumerResearch, consumerLinksAfterRemap),
-    ).toBeFalse();
+    expect(consumerLinksAfterRemap).not.toEqual(consumerLinks);
+    expect(apiResearchInputsSha256(producer)).toBe(producerProofHash);
+    expect(apiResearchCoversToolBoundary(producer, research)).toBeTrue();
+    expect(apiResearchInputsSha256(consumer)).toBe(consumerProofHash);
+    expect(apiResearchCoversToolBoundary(consumer, consumerResearch)).toBeTrue();
 
     const changedPlan = structuredClone(plan);
     const changedLink = changedPlan.chainEdges[0];
     if (!changedLink) throw new Error('test plan lost its producer-consumer link');
     changedLink.producerResultPath = 'items[0].canonical_id';
     const changedLinks = apiResearchRequiredLinks(changedPlan, producer);
-    expect(apiResearchCoversToolBoundary(producer, research, changedLinks)).toBeFalse();
+    expect(changedLinks).not.toEqual(requiredLinks);
+    expect(apiResearchCoversToolBoundary(producer, research)).toBeTrue();
     expect(apiResearchRequiredLinks(changedPlan, consumer)).toEqual(consumerLinks);
-    expect(
-      apiResearchCoversToolBoundary(
-        consumer,
-        consumerResearch,
-        apiResearchRequiredLinks(changedPlan, consumer),
-      ),
-    ).toBeTrue();
+    expect(apiResearchCoversToolBoundary(consumer, consumerResearch)).toBeTrue();
 
     const planWithUnrelatedLink = {
       ...plan,
       chainEdges: [link, unrelatedLink],
     };
     expect(apiResearchRequiredLinks(planWithUnrelatedLink, producer)).toEqual(requiredLinks);
-    expect(
-      apiResearchInputsSha256(producer, apiResearchRequiredLinks(planWithUnrelatedLink, producer)),
-    ).toBe(apiResearchInputsSha256(producer, requiredLinks));
+    expect(apiResearchInputsSha256(producer)).toBe(producerProofHash);
   });
 
   it('does not invalidate API research for journal prose changes', () => {
     const tool = focusedTool(1);
     tool.strategy = { kind: 'api', reason: 'Use the recorded request.' };
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
     const initial = apiResearchInputsSha256(tool);
     const rewritten = structuredClone(tool);
     rewritten.candidate.description = 'Clearer public description.';
@@ -457,7 +455,41 @@ describe('API research boundary reuse', () => {
     expect(apiResearchInputsSha256(rewritten)).toBe(initial);
 
     rewritten.candidate.dependsOnTools = ['new_required_producer'];
+    expect(apiResearchInputsSha256(rewritten)).toBe(initial);
+
+    const changedParameterDescription = structuredClone(tool);
+    const query = changedParameterDescription.candidate.likelyParams[0];
+    if (!query) throw new Error('test tool has no public parameter');
+    query.description = 'A different semantic contract for the same name and type.';
+    expect(apiResearchInputsSha256(changedParameterDescription)).not.toBe(initial);
+
+    rewritten.candidate.likelyParams.push({
+      name: 'mode',
+      type: 'string',
+      description: 'A new public input.',
+    });
     expect(apiResearchInputsSha256(rewritten)).not.toBe(initial);
+
+    const changedRequestScope = structuredClone(tool);
+    changedRequestScope.candidate.requestSeqs = [1, 2];
+    expect(apiResearchInputsSha256(changedRequestScope)).not.toBe(initial);
+
+    const changedOutput = structuredClone(tool);
+    changedOutput.candidate.expectedOutput = 'A materially broader result contract.';
+    expect(apiResearchInputsSha256(changedOutput)).not.toBe(initial);
+
+    const changedTransport = structuredClone(tool);
+    changedTransport.compileContext.authRequestSeqs = [2];
+    expect(apiResearchInputsSha256(changedTransport)).not.toBe(initial);
+
+    const changedTokenSource = structuredClone(tool);
+    changedTokenSource.compileContext.tokenExtractionNotes =
+      'Extract a fresh token from bootstrap.';
+    expect(apiResearchInputsSha256(changedTokenSource)).not.toBe(initial);
+
+    const changedAuthSource = structuredClone(tool);
+    changedAuthSource.compileContext.authNotes = 'Reuse the active signed-in browser session.';
+    expect(apiResearchInputsSha256(changedAuthSource)).not.toBe(initial);
   });
 });
 

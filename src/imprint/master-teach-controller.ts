@@ -50,7 +50,6 @@ import {
   ApiResearchHandoffSchema,
   type ApiResearchNoProgress,
   type ApiResearchRequestCatalogEntry,
-  type ApiResearchRequiredLink,
   type CompletionReviewInput,
   type CompletionToolResultEvidence,
   CompletionToolResultEvidenceSchema,
@@ -1884,10 +1883,9 @@ export function apiResearchMatchesPlan(
   tool: EditableTeachingTool,
   implementation: ImplementationPlanPayload,
   research: ApiResearchResult,
-  requiredLinks: readonly ApiResearchRequiredLink[] = [],
 ): boolean {
   if (tool.strategy?.kind !== 'api' || implementation.strategyKind !== 'api') return false;
-  if (!apiResearchCoversToolBoundary(tool, research, requiredLinks)) return false;
+  if (!apiResearchCoversToolBoundary(tool, research)) return false;
   const plannedRequests = implementation.requestProvenance.map(
     ({ recordingRequestSeq, recordingResponseRequestSeq }) => ({
       recordingRequestSeq,
@@ -1918,34 +1916,21 @@ export function apiResearchMatchesPlan(
 export function apiResearchCoversToolBoundary(
   tool: EditableTeachingTool,
   research: ApiResearchResult,
-  requiredLinks: readonly ApiResearchRequiredLink[] = [],
 ): boolean {
   if (tool.strategy?.kind !== 'api') return false;
   if (research.workflow.toolName !== tool.candidate.toolName) return false;
   const researchedParameters = new Map(
-    research.workflow.parameters.map(({ name, type }) => [name, type] as const),
+    research.workflow.parameters.map(({ name, type, description }) => [
+      name,
+      { type, description },
+    ]),
   );
   if (
-    tool.candidate.likelyParams.some(
-      ({ name, type }) => !type || researchedParameters.get(name) !== type,
-    )
+    tool.candidate.likelyParams.some(({ name, type, description }) => {
+      const researched = researchedParameters.get(name);
+      return !type || researched?.type !== type || researched.description !== description;
+    })
   ) {
-    return false;
-  }
-  const researchedDependencyToolNames = new Set(
-    research.researchedBoundary.dependencyToolNames ?? [],
-  );
-  if (
-    tool.candidate.dependsOnTools.some((toolName) => !researchedDependencyToolNames.has(toolName))
-  ) {
-    return false;
-  }
-  const researchedRequiredLinks = new Set(
-    (research.researchedBoundary.requiredLinks ?? []).map((link) =>
-      canonicalTeachingPlanJson(link),
-    ),
-  );
-  if (requiredLinks.some((link) => !researchedRequiredLinks.has(canonicalTeachingPlanJson(link)))) {
     return false;
   }
   const plannedRequestSeqs = new Set([
@@ -2584,7 +2569,7 @@ async function researchSelectedOperations(input: {
           input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
           return ApiResearchHandoffSchema.parse({
             toolName: tool.candidate.toolName,
-            researchInputsSha256: apiResearchInputsSha256(tool, requiredLinks),
+            researchInputsSha256: apiResearchInputsSha256(tool),
             status: 'blocked',
             summary: error.message,
             ...(error.observations.length > 0
@@ -2712,11 +2697,7 @@ async function reviewApiResearchBeforePlanning(input: {
     }
     const missingTools = scopedTools.filter((tool) => {
       const handoff = handoffs.get(tool.candidate.toolName);
-      return (
-        !handoff ||
-        handoff.researchInputsSha256 !==
-          apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
-      );
+      return !handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(tool);
     });
     if (missingTools.length > 0) {
       const fresh = await researchSelectedOperations({
@@ -2814,11 +2795,7 @@ async function reviewApiResearchBeforePlanning(input: {
     if (followUps.length === 0) {
       const needsFreshFirstPass = researchableTools().some((tool) => {
         const handoff = handoffs.get(tool.candidate.toolName);
-        return (
-          !handoff ||
-          handoff.researchInputsSha256 !==
-            apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
-        );
+        return !handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(tool);
       });
       if (needsFreshFirstPass) continue;
       const selectedPartial = researchableTools().some(
@@ -2843,6 +2820,7 @@ async function reviewApiResearchBeforePlanning(input: {
       );
     }
 
+    const followUpTargetNames = new Set(followUps.map(({ toolName }) => toolName));
     const staleSiblingIds = new Set<string>();
     for (const followUp of followUps) {
       for (const siblingName of followUp.relevantToolNames) {
@@ -2852,12 +2830,12 @@ async function reviewApiResearchBeforePlanning(input: {
             `master API research follow-up references removed sibling "${siblingName}"`,
           );
         }
+        // A tool that has its own explicit direction continues in its retained
+        // researcher below. Do not first replace that conversation with an
+        // automatic fresh pass merely because another follow-up names it.
+        if (followUpTargetNames.has(siblingName)) continue;
         const handoff = handoffs.get(siblingName);
-        if (
-          !handoff ||
-          handoff.researchInputsSha256 !==
-            apiResearchInputsSha256(sibling, apiResearchRequiredLinks(plan, sibling))
-        ) {
+        if (!handoff || handoff.researchInputsSha256 !== apiResearchInputsSha256(sibling)) {
           staleSiblingIds.add(sibling.id);
         }
       }
@@ -3198,12 +3176,7 @@ async function discoverAndPlan(input: {
     if (
       !implementation?.success ||
       !result ||
-      !apiResearchMatchesPlan(
-        tool,
-        implementation.data,
-        result,
-        apiResearchRequiredLinks(plan, tool),
-      )
+      !apiResearchMatchesPlan(tool, implementation.data, result)
     ) {
       tool.implementationPlan = undefined;
     }
@@ -3629,15 +3602,7 @@ async function compileAndCheckCurrentPlan(input: {
     let apiResearch: ApiResearchResult | undefined;
     if (tool.strategy.kind === 'api') {
       apiResearch = input.apiResearchByToolId?.get(tool.id);
-      if (
-        !apiResearch ||
-        !apiResearchMatchesPlan(
-          tool,
-          implementation,
-          apiResearch,
-          apiResearchRequiredLinks(plan, tool),
-        )
-      ) {
+      if (!apiResearch || !apiResearchMatchesPlan(tool, implementation, apiResearch)) {
         throw new Error(
           `API plan for "${tool.candidate.toolName}" does not match a proven pre-plan request; revise the plan from the research handoff before compiling`,
         );
@@ -4632,11 +4597,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
       const tool = current.plan.tools.find(({ id }) => id === toolId);
       if (!tool || tool.strategy?.kind !== 'api') return false;
       const result = context.apiResearchResults.get(toolId);
-      if (
-        result &&
-        apiResearchCoversToolBoundary(tool, result, apiResearchRequiredLinks(current.plan, tool))
-      )
-        return false;
+      if (result && apiResearchCoversToolBoundary(tool, result)) return false;
       return true;
     });
     if (researchReviewToolIds.length > 0) {
@@ -4649,8 +4610,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
         return (
           !handoff ||
           handoff.status === 'proven' ||
-          handoff.researchInputsSha256 !==
-            apiResearchInputsSha256(tool, apiResearchRequiredLinks(current.plan, tool))
+          handoff.researchInputsSha256 !== apiResearchInputsSha256(tool)
         );
       });
       const researchSeeds = new Map<string, FreshTeachBootstrapObject>();

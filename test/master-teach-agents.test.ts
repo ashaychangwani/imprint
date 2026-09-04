@@ -27,7 +27,6 @@ import {
   apiResearchCandidateSha256,
   apiResearchFollowUpStateSha256,
   apiResearchInputsSha256,
-  apiResearchRequiredLinks,
   mechanicalProofFailures,
   parseApiResearchOutput,
   parseBaselineMvpReviewOutput,
@@ -1000,7 +999,29 @@ describe('prompts and pre-plan discovery', () => {
     const masterPrompt = prompt('master-teach-decision.md');
     expect(masterPrompt).toContain('Normally keep `chainEdges` empty');
     expect(masterPrompt).toContain('`dependsOnTools` empty until the first-pass research');
-    expect(masterPrompt).toContain('only the newly affected producer or consumer researchers');
+    expect(masterPrompt).toContain('stabilize each standalone MVP call');
+    expect(masterPrompt).toContain('do not add or remap `chainEdges`');
+    expect(masterPrompt).toContain('Focused planning will define those links');
+    expect(masterPrompt).toContain('free to revise a genuine core operation boundary');
+  });
+
+  it('bounds stale dependency research and defers executable chain proof', () => {
+    const researchPrompt = prompt('master-teach-api-researcher.md');
+    const masterPrompt = prompt('master-teach-decision.md');
+
+    expect(researchPrompt).toContain('run at most one');
+    expect(researchPrompt).toContain('coherent stale-value diagnostic');
+    expect(researchPrompt).toContain('request the exact sibling evidence');
+    expect(researchPrompt).toContain('`siblingResearch`');
+    expect(researchPrompt).toContain('raw tested response contains the source value');
+    expect(researchPrompt).toContain('not proof that an executable');
+    expect(researchPrompt).toContain('compiler and later chain');
+    expect(researchPrompt).toContain('does not require sweeping every transport');
+
+    expect(masterPrompt).toContain('without first adding a chain edge');
+    expect(masterPrompt).toContain('Keep a proven standalone call stable');
+    expect(masterPrompt).toContain('executable normalized result-path proof belongs');
+    expect(masterPrompt).toContain('speculative link edit merely to authorize a sibling follow-up');
   });
 
   it('documents explicit site-neutral network response capture after direct API attempts', () => {
@@ -1430,10 +1451,9 @@ describe('prompts and pre-plan discovery', () => {
   it('keeps unchanged blocked API research at the master checkpoint', async () => {
     const base = revisionMasterInput();
     const currentTool = at(base.current.plan.payload.tools, 0);
-    const requiredLinks = apiResearchRequiredLinks(base.current.plan.payload, currentTool);
     const blocked = ApiResearchHandoffSchema.parse({
       toolName: currentTool.candidate.toolName,
-      researchInputsSha256: apiResearchInputsSha256(currentTool, requiredLinks),
+      researchInputsSha256: apiResearchInputsSha256(currentTool),
       status: 'blocked',
       summary: 'The tested recorded request returned HTTP 403.',
       observations: [
@@ -1505,7 +1525,6 @@ describe('prompts and pre-plan discovery', () => {
   it('rejects an exact repeated partial follow-up after its completed audit cycle', () => {
     const base = revisionMasterInput();
     const currentTool = at(base.current.plan.payload.tools, 0);
-    const requiredLinks = apiResearchRequiredLinks(base.current.plan.payload, currentTool);
     const candidate: ApiResearchCandidate = {
       workflow: {
         toolName: currentTool.candidate.toolName,
@@ -1537,7 +1556,7 @@ describe('prompts and pre-plan discovery', () => {
     };
     const handoff = ApiResearchHandoffSchema.parse({
       toolName: currentTool.candidate.toolName,
-      researchInputsSha256: apiResearchInputsSha256(currentTool, requiredLinks),
+      researchInputsSha256: apiResearchInputsSha256(currentTool),
       status: 'partial',
       summary: 'The core response works but the required outgoing identifier is missing.',
       candidate,

@@ -206,17 +206,16 @@ export async function researchApiMvpCall(input: {
   ].filter((observation, index, all) => all.findIndex(({ id }) => id === observation.id) === index);
   let proposedBlockReason: string | undefined;
   const researchInputsChanged =
-    input.previousProgress?.researchInputsSha256 !==
-    apiResearchInputsSha256(input.tool, input.requiredLinks);
+    input.previousProgress?.researchInputsSha256 !== apiResearchInputsSha256(input.tool);
   let retainedTurnDelta: ApiResearchRetainedTurnDelta | undefined = input.followUp
     ? {
         kind: 'master_follow_up',
         followUp: input.followUp,
         relevantEvidence: input.evidence,
+        requiredLinks: [...(input.requiredLinks ?? [])],
         ...(researchInputsChanged
           ? {
               currentTool: input.tool,
-              requiredLinks: [...(input.requiredLinks ?? [])],
               requestCatalog: [...(input.requestCatalog ?? [])],
               requestCatalogTruncated:
                 input.requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
@@ -333,7 +332,7 @@ export async function researchApiMvpCall(input: {
         'utf8',
       );
       return {
-        researchInputsSha256: apiResearchInputsSha256(input.tool, input.requiredLinks),
+        researchInputsSha256: apiResearchInputsSha256(input.tool),
         researchedBoundary: {
           requestSeqs: [...input.tool.candidate.requestSeqs],
           dependencySeqs: [...input.tool.candidate.dependencySeqs],

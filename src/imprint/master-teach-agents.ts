@@ -113,30 +113,29 @@ export function apiResearchRequiredLinks(
   ].sort((left, right) => JSON.stringify(left).localeCompare(JSON.stringify(right)));
 }
 
-/** Hash only evidence and public promises that can change request viability.
- * Prose, confidence, journal ids, and implementation notes do not invalidate
- * a working request. */
-export const apiResearchInputsSha256 = (
-  tool: ApiResearchInput['tool'],
-  requiredLinks: readonly ApiResearchRequiredLink[] = [],
-): string =>
+/** Hash only evidence and the public operation boundary that can change request
+ * viability. Dependency names and selected chain links describe how proven
+ * calls compose; changing that wiring does not invalidate the calls themselves. */
+export const apiResearchInputsSha256 = (tool: ApiResearchInput['tool']): string =>
   digest({
     toolName: tool.candidate.toolName,
     expectedOutput: tool.candidate.expectedOutput,
-    parameters: tool.candidate.likelyParams.map(({ name, type }) => ({ name, type })),
+    parameters: tool.candidate.likelyParams.map(({ name, type, description }) => ({
+      name,
+      type,
+      description,
+    })),
     requestSeqs: tool.candidate.requestSeqs,
     representativeSeqs: tool.candidate.representativeSeqs,
     dependencySeqs: tool.candidate.dependencySeqs,
     eventSeqs: tool.candidate.eventSeqs,
-    dependsOnTools: [...tool.candidate.dependsOnTools].sort(),
     transportEvidence: {
       loginRequestSeqs: tool.compileContext.loginRequestSeqs,
       authRequestSeqs: tool.compileContext.authRequestSeqs,
       credentialNames: [...tool.compileContext.credentialNames].sort(),
+      tokenExtractionNotes: tool.compileContext.tokenExtractionNotes,
+      authNotes: tool.compileContext.authNotes,
     },
-    requiredLinks: [...requiredLinks].sort((left, right) =>
-      JSON.stringify(left).localeCompare(JSON.stringify(right)),
-    ),
   });
 
 /** Bind a follow-up to exactly the current public boundary, retained partial,
@@ -153,9 +152,8 @@ export function apiResearchFollowUpStateSha256(
     const handoff = handoffByName.get(toolName);
     return {
       toolName,
-      researchInputsSha256: tool
-        ? apiResearchInputsSha256(tool, apiResearchRequiredLinks(plan, tool))
-        : null,
+      researchInputsSha256: tool ? apiResearchInputsSha256(tool) : null,
+      requiredLinks: tool ? apiResearchRequiredLinks(plan, tool) : [],
       handoffSha256: handoff ? digest(handoff) : null,
     };
   };
@@ -248,7 +246,7 @@ function apiResearchBinding(input: ApiResearchInput) {
     runId: input.run.runId,
     recordingSha256: input.run.recordingSha256,
     toolName: input.tool.candidate.toolName,
-    compileInputsSha256: apiResearchInputsSha256(input.tool, input.requiredLinks),
+    compileInputsSha256: apiResearchInputsSha256(input.tool),
   };
 }
 
@@ -1487,12 +1485,7 @@ function masterOutputSchema(input: MasterDecisionInput) {
           ({ candidate }) => candidate.toolName === handoff.toolName,
         );
         const unchanged =
-          desiredTool &&
-          handoff.researchInputsSha256 ===
-            apiResearchInputsSha256(
-              desiredTool,
-              apiResearchRequiredLinks(output.desiredPlan, desiredTool),
-            );
+          desiredTool && handoff.researchInputsSha256 === apiResearchInputsSha256(desiredTool);
         const reviewedNoProgress = noProgressNames.has(handoff.toolName);
         if (
           handoff.status === 'partial' &&

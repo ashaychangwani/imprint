@@ -27,7 +27,6 @@ import {
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
   apiResearchInputsSha256,
-  apiResearchRequiredLinks,
   requestMasterDecision as requestValidatedMasterDecision,
 } from '../src/imprint/master-teach-agents.ts';
 import {
@@ -420,7 +419,7 @@ async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
       runId: researchInput.run.runId,
       recordingSha256: researchInput.run.recordingSha256,
       toolName: tool.candidate.toolName,
-      compileInputsSha256: apiResearchInputsSha256(tool, researchInput.requiredLinks),
+      compileInputsSha256: apiResearchInputsSha256(tool),
     },
     action: observation ? ('proven' as const) : ('test' as const),
     candidate,
@@ -1080,10 +1079,7 @@ describe('fresh foreground master controller end to end', () => {
               if (!producer) throw new Error('fixture plan lost its producer');
               producer.candidate.expectedOutput =
                 'Fixture items with identifiers required by the selected consumer.';
-              expectedRefreshedProducerHash = apiResearchInputsSha256(
-                producer,
-                apiResearchRequiredLinks(desiredPlan, producer),
-              );
+              expectedRefreshedProducerHash = apiResearchInputsSha256(producer);
               return MasterDecisionOutputSchema.parse({
                 binding: input.current?.run ?? input.discovery.run,
                 outcome: 'accepted',
@@ -1230,6 +1226,248 @@ describe('fresh foreground master controller end to end', () => {
       expect(returnedPartial).toBeTrue();
       expect(sawRemappedConsumer).toBeTrue();
       expect(producerTurns).toBe(2);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('continues mutually directed retained follow-ups without fresh stale passes', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-retained-follow-up-no-refresh',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner) {
+        throw new Error('fixture research roles are missing');
+      }
+
+      const returnedPartial = new Set<string>();
+      const initialTurns = new Map<string, number>();
+      const retainedFollowUps = new Map<string, number>();
+      const plannedNames: string[] = [];
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input, agent, retainedTurnDelta) => {
+            const toolName = input.tool.candidate.toolName;
+            if (retainedTurnDelta?.kind === 'master_follow_up') {
+              retainedFollowUps.set(toolName, (retainedFollowUps.get(toolName) ?? 0) + 1);
+            }
+            if (!input.followUp) initialTurns.set(toolName, (initialTurns.get(toolName) ?? 0) + 1);
+            const decision = await baseResearch(input, agent, retainedTurnDelta);
+            if (!input.followUp && decision.action === 'proven' && !returnedPartial.has(toolName)) {
+              returnedPartial.add(toolName);
+              return {
+                ...decision,
+                action: 'partial' as const,
+                missingProof: [`Review the revised core promise for ${toolName}.`],
+                reason: 'The recorded call works; the master will refine its core result promise.',
+              };
+            }
+            return decision;
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (
+              input.decisionPurpose === 'research_review' &&
+              (input.apiResearch ?? []).every(({ status }) => status === 'partial')
+            ) {
+              const desiredPlan = desiredFromCurrent(input);
+              for (const tool of desiredPlan.tools) {
+                tool.candidate.expectedOutput = `${tool.candidate.expectedOutput} Revised core result.`;
+              }
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'revised',
+                reason: 'Revise both core result promises and continue their retained researchers.',
+                recallToolNames: [],
+                researchFollowUps: desiredPlan.tools.map((tool) => ({
+                  toolName: tool.candidate.toolName,
+                  instruction: `Check the revised result promise for ${tool.candidate.toolName}.`,
+                  missingProof: [`Review the revised core promise for ${tool.candidate.toolName}.`],
+                  relevantToolNames: desiredPlan.tools
+                    .filter(({ id }) => id !== tool.id)
+                    .map(({ candidate }) => candidate.toolName),
+                  relevantRequestSeqs: [...tool.candidate.requestSeqs],
+                })),
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannedNames.push(input.tool.candidate.toolName);
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(initialTurns).toEqual(
+        new Map([
+          [PRODUCER_NAME, 2],
+          [CONSUMER_NAME, 2],
+        ]),
+      );
+      expect(retainedFollowUps).toEqual(
+        new Map([
+          [PRODUCER_NAME, 1],
+          [CONSUMER_NAME, 1],
+        ]),
+      );
+      expect(plannedNames).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('plans directly after an edge-only research-review revision', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-edge-only-research-review',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner) {
+        throw new Error('fixture research roles are missing');
+      }
+
+      const researchTurns = new Map<string, number>();
+      const plannedNames: string[] = [];
+      let revisedWiring = false;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const toolName = input.tool.candidate.toolName;
+            researchTurns.set(toolName, (researchTurns.get(toolName) ?? 0) + 1);
+            return await baseResearch(input);
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.decisionPurpose === 'research_review' && !revisedWiring) {
+              revisedWiring = true;
+              const desiredPlan = desiredFromCurrent(input);
+              const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              if (!consumer) throw new Error('fixture plan lost its consumer');
+              consumer.candidate.dependsOnTools = [];
+              desiredPlan.chainEdges = [];
+              desiredPlan.buildWaves = [[PRODUCER_ID, CONSUMER_ID]];
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'revised',
+                reason: 'The two proven MVP calls are independent.',
+                recallToolNames: [],
+                researchFollowUps: [],
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannedNames.push(input.tool.candidate.toolName);
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(researchTurns).toEqual(
+        new Map([
+          [PRODUCER_NAME, 2],
+          [CONSUMER_NAME, 2],
+        ]),
+      );
+      expect(new Set(plannedNames)).toEqual(new Set([PRODUCER_NAME, CONSUMER_NAME]));
+      expect(terminal.status).toBe('failed');
+    });
+  });
+
+  it('re-researches only the tool whose public parameters changed', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-public-parameter-research-refresh',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const baseResearch = base.requestApiResearchStep;
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseResearch || !baseMaster || !basePlanner) {
+        throw new Error('fixture research roles are missing');
+      }
+
+      const researchTurns = new Map<string, number>();
+      const plannedNames: string[] = [];
+      let revisedParameter = false;
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestApiResearchStep: async (input) => {
+            const toolName = input.tool.candidate.toolName;
+            researchTurns.set(toolName, (researchTurns.get(toolName) ?? 0) + 1);
+            return await baseResearch(input);
+          },
+          requestMasterDecision: async (input, agent, options) => {
+            if (input.decisionPurpose === 'research_review' && !revisedParameter) {
+              revisedParameter = true;
+              const desiredPlan = desiredFromCurrent(input);
+              const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              if (!consumer) throw new Error('fixture plan lost its consumer');
+              consumer.candidate.likelyParams.push({
+                name: 'include_metadata',
+                type: 'boolean',
+                description: 'Whether to include optional item metadata.',
+              });
+              return MasterDecisionOutputSchema.parse({
+                binding: input.current?.run ?? input.discovery.run,
+                outcome: 'revised',
+                reason: 'Expose one additional public input on the consumer.',
+                recallToolNames: [],
+                researchFollowUps: [],
+                desiredPlan,
+              });
+            }
+            return await baseMaster(input, agent, options);
+          },
+          requestFocusedPlan: async (input) => {
+            plannedNames.push(input.tool.candidate.toolName);
+            return await basePlanner(input);
+          },
+        },
+      );
+
+      expect(researchTurns.get(PRODUCER_NAME)).toBe(2);
+      expect(researchTurns.get(CONSUMER_NAME)).toBe(4);
+      expect(plannedNames).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
       expect(terminal.status).toBe('failed');
     });
   });

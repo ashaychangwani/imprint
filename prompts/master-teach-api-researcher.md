@@ -30,14 +30,30 @@ let planning and compilation proceed. The master waits for every operation's
 first pass, reviews the complete set together, then may send a precise
 `followUp` back to this same retained conversation.
 
+If a current or opaque input can only come from an unfinished sibling
+operation, do not exhaust the transport ladder using permutations of one stale
+recorded value. Validate the recorded request structure and run at most one
+coherent stale-value diagnostic. When that test produces a useful candidate
+but the missing sibling value is the remaining core gap, return `partial`,
+preserve the tested candidate, and request the exact sibling evidence in
+`missingProof`. The master can then resume this retained conversation with
+`siblingResearch`. Do not try to replace a missing sibling value with unrelated
+transport permutations. If there is no useful tested candidate to preserve,
+return `blocked` with the same precise sibling-evidence request rather than
+pretending that the untestable dependency disproves the API route.
+
 `requiredLinks` contains only this tool's side of each selected
 producer-consumer promise. A `role: "producer"` obligation asks whether this
-tool's result exposes `resultPath`; it does not include or bind the consumer's
-parameter name. A `role: "consumer"` obligation asks whether `parameter` can
-populate this tool's request; it does not bind the producer's result path.
-These are selected plan obligations, not hints to invent values or add optional
-future links. A missing required link is a true partial gap; unrelated tools and
-unselected possible chains are outside this research task.
+tool's raw tested response contains the source value and asks for the intended
+parser mapping to `resultPath`; it does not include or bind the consumer's
+parameter name. Research has no parser, so this is not proof that an executable
+normalized result path already exists. The compiler and later chain
+verification prove that mapping. A `role: "consumer"` obligation asks whether
+`parameter` can populate this tool's recorded request shape; it
+does not bind the producer's result path. These are selected plan obligations, not hints to
+invent values or add optional future links. A missing required link is a true
+partial gap; unrelated tools and unselected possible chains are outside this
+research task.
 
 `requestCatalog` is one bounded, payload-free page of the recorded request
 index. It contains request shapes and byte counts, not their full headers or
@@ -109,6 +125,10 @@ necessary merely because requests which omitted it or replayed it failed. Do
 not block while a coherent untried combination remains among recorded
 literals, current bootstrap/response state, generated per-call values,
 operation-specific navigation/Referer state, or evidence-backed omission.
+The exhaustive audit applies to hypotheses that this tool's current evidence
+can actually test. It does not require sweeping every transport to manufacture
+a current value that only an unfinished sibling can produce; use the bounded
+sibling-evidence handoff above instead.
 
 If direct API constructions fail, check the existing browser-navigation request
 before blocking or recommending playbook. A request with `mode: "navigate"`
@@ -359,6 +379,10 @@ necessary, which materially different constructions were tested, and why the
 strongest remaining construction cannot be expressed by the current workflow.
 If no comparison isolated the claimed field, or if a strongest remaining
 construction is expressible, return `test` instead.
+This audit is bounded by the evidence currently available to this tool. A
+precise request for an unfinished sibling's current output is a plan fact, not
+an instruction to keep testing stale substitutes after the one coherent
+diagnostic above.
 
 The input may contain `blockReview.proposedReason`. That means your previous
 `blocked` answer has been returned to this same retained conversation for one

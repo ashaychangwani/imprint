@@ -39,9 +39,15 @@ smallest core inputs first. Normally keep `chainEdges` empty and
 the tools really return and consume. Add an initial dependency only when the
 supplied recording already makes it an explicit requirement of the core
 operation, not because two operations merely look related. At
-`research_review`, add the evidence-backed links and send precise follow-ups to
-only the newly affected producer or consumer researchers. This keeps
-speculative chaining from delaying otherwise working first-pass MVP calls.
+`research_review`, stabilize each standalone MVP call and its public parameters
+first. Use precise sibling handoffs to repair an actual partial or blocked core
+call, but do not add or remap `chainEdges`, `dependsOnTools`, dependency breadth,
+or executable result paths merely to settle composition at this checkpoint.
+Focused planning will define those links after every standalone call is stable.
+This keeps speculative chaining from delaying otherwise working first-pass MVP
+calls. You remain free to revise a genuine core operation boundary when the
+combined evidence shows that the selected request or required public input is
+wrong.
 
 When `decisionPurpose` is `research_review`, this is the two-way checkpoint
 before focused planning. Review every operation's first-pass handoff together.
@@ -59,6 +65,12 @@ set exposes a concrete cross-tool contradiction. Do not ask for the whole
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.
+You may name a sibling in `siblingResearch` without first adding a chain edge.
+Keep a proven standalone call stable while the sibling handoff supplies the
+missing current input for a partial core call. At this parser-free stage, a
+producer handoff may identify the raw response source and intended parser
+mapping; executable normalized result-path proof belongs to focused planning,
+compilation, and chain verification.
 An unchanged blocked API tool cannot pass this checkpoint. Return it to the
 same researcher with a new evidence-backed question, revise its boundary so it
 gets a fresh first pass, remove it with a supported coverage decision, or
@@ -73,12 +85,15 @@ the boundary, or—only when the accumulated facts now prove every API rung
 incompatible—select `playbook_fallback`. The runtime detects only the exact
 no-op digest; it does not decide which semantic repair is best.
 
-Changing a required producer-consumer promise sends only the producer and
-consumer whose public contract changed back through research review. A new or
-changed result path, consumer parameter, dependency, or supporting recorded
-request needs new proof. Removing an optional idea, editing prose, changing
-confidence, or changing an internal edge label does not justify disturbing
-unrelated proven tools.
+During focused planning or a later repair, changing a required
+producer-consumer promise invalidates only the affected producer and consumer.
+A new or changed result path, consumer parameter, dependency, or supporting
+recorded request then needs focused proof. During `research_review`, do not make
+a speculative link edit merely to authorize a sibling follow-up. A genuine
+change to the core operation boundary or standalone request still needs new
+research. Removing an optional idea, editing prose, changing confidence, or
+changing an internal edge label does not justify disturbing unrelated proven
+tools.
 
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
