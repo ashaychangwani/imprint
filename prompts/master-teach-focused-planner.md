@@ -304,6 +304,15 @@ They are context only: return this tool's proposed incoming edges in
 `chainEdges`; the master decides whether an outgoing consumer edge should be
 revised separately.
 
+Design every chained public value backward from the consumer's exact recorded
+request position and construction options. Decide whether the consumer needs a
+server-produced opaque scalar or a stable structured selection that it can
+encode itself. Prefer the stable structured form when the consumer can rebuild
+its transport deterministically. Never label a value opaque merely because a
+nearby wire field is long or encoded, and never pair two candidate strings by
+proximity alone. The plan must explain how all sibling values come from the
+same producer record and match the consumer's required representation.
+
 All incoming edges for this consumer form one explicit consumer invocation.
 Use at most one producer binding for each consumer parameter. If the evidence
 offers alternative bindings, choose the best supported one; do not return

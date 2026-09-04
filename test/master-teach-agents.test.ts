@@ -1061,6 +1061,17 @@ describe('prompts and pre-plan discovery', () => {
       expect(authorPrompt).toMatch(/runtime|host/i);
       expect(authorPrompt).toMatch(/alternative/is);
     }
+
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('Work backward from the');
+    expect(masterPrompt).toContain('same producer record');
+
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    expect(focusedPrompt).toContain('stable structured selection');
+    expect(focusedPrompt).toContain('never pair two candidate strings by');
+
+    const compilePrompt = prompt('compile-agent.md');
+    expect(compilePrompt).toContain('same parsed producer record');
   });
 
   it('tells the focused planner exactly which evidence refs it may copy', () => {

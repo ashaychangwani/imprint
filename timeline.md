@@ -4131,3 +4131,36 @@ tool or rung starts from its own state. Recording discovery remains rooted at
 the site directory, so the cache change does not hide available recordings.
 This is generic execution isolation, not a site rule. The backend, CDP-jar, and
 stealth-cache suites pass 108 tests; type checking and lint pass.
+
+## 2026-09-03 19:49–20:49 PDT — Isolated browser state held; chained booking exposed an ambiguous handoff
+
+Fresh Flights run `18fbd99b-2fe5-4e2d-968d-07243023779a` used the exact mounted
+recording and the previously accepted candidate checkpoint. Browser state was
+separate for every tool and backend rung as intended. Repeated calls within one
+unchanged tool and rung reused the warm state: Search and Booking follow-up CDP
+calls took only a few seconds instead of repeating the full setup.
+
+Research proved both location tools with fetch and Search and Booking with CDP.
+Calendar remained unresolved, and the stronger fallback instructions held: the
+master did not invent a playbook. The master planned the four proven API tools.
+Both location tools and Search published. Search retained its compiler context
+through two focused repairs instead of restarting from scratch.
+
+Booking also worked by itself. The repaired chain verifier correctly used its
+already-proven CDP rung, confirming the earlier runtime fix. However, the fresh
+Search-to-Booking call returned no booking result. Search had emitted two long
+handoff strings found near a fare, but its parser never proved that both strings
+belonged to the same itinerary or that Booking expected that representation.
+The master recalled Search and Booking, but the final repair still produced an
+empty chained result. The run reached its 60-minute deadline with three of five
+tools ready: the two location tools and Search. Calendar was unresolved and
+Booking was unfinished.
+
+This is an agent-planning gap rather than another runtime checker problem. The
+instructions now tell the master, focused planner, and retained compiler to
+design chained values backward from the consumer's exact request position. A
+stable structured selection should be preferred when the consumer can encode
+it deterministically, and sibling values must be tied to the same parsed record
+rather than paired because they happen to be close together. This is generic
+producer-consumer guidance with no site-specific rule. All 110 master-agent
+tests, type checking, and lint pass.

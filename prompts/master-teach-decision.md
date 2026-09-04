@@ -414,6 +414,14 @@ All edges targeting the same consumer are one explicit invocation and each
 consumer parameter may be bound once. If several producer paths are plausible,
 choose one rather than returning alternatives for the runtime to interpret.
 
+Review the representation on both sides of every edge. Work backward from the
+consumer's exact recorded request position: determine whether it truly needs a
+server-produced opaque scalar or can deterministically encode a stable
+structured selection from the producer's normalized record. Do not call a
+value opaque merely because a nearby transport field is long or encoded. When
+several sibling values feed one consumer call, require evidence that they came
+from the same producer record; proximity in a response is not that evidence.
+
 Exact output schema (all objects reject extra fields):
 
 ```text
