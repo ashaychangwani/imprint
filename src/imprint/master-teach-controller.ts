@@ -3335,6 +3335,7 @@ async function compileAndCheckCurrentPlan(input: {
     } else {
       try {
         const startedAt = Date.now();
+        const apiResearch = input.apiResearchByToolId?.get(tool.id);
         const chained =
           tool.strategy?.kind === 'playbook_fallback'
             ? await runPlaybookToolCheck({
@@ -3350,6 +3351,7 @@ async function compileAndCheckCurrentPlan(input: {
             : await input.deps.runApiTool({
                 workflowPath: focused.workflowPath,
                 parameters,
+                ...(apiResearch?.backend ? { backend: apiResearch.backend } : {}),
                 signal: input.signal,
               });
         outcome = {

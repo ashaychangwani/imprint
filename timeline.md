@@ -4043,3 +4043,32 @@ researcher so another hypothesis can proceed. This is a generic execution
 deadline, not a semantic rule. A regression test uses a bootstrap that never
 returns and proves the caller regains control. The stealth and backend suites
 pass 109 tests; type checking and lint pass.
+
+## 2026-09-03 17:35–18:36 PDT — Four operations were proven; the chain forgot the proven backend
+
+Fresh Flights run `eadba376-1c90-49a6-8ca6-850865fdfa5b` reached research for
+all five discovered operations. Both location operations worked through plain
+fetch with different inputs. Search worked through CDP for a different
+LAX-to-JFK trip and returned 34 real flights. Booking worked through CDP for
+both Southwest and Alaska examples and returned real fares and sellers.
+Calendar remained honestly blocked: navigation changed the route and dates,
+but its fares never finished loading, while the direct API attempts returned a
+typed protocol error.
+
+The master planned and compiled the four proven operations. Both location
+tools published. Search needed two retained-context repairs because its first
+results lost important fields; the third build passed semantic review and
+published. Booking then passed its standalone live and semantic checks.
+
+The final Search-to-Booking chain failed for a runtime reason. Standalone
+verification remembered that research had proven Booking through CDP. The
+chain path forgot that fact, restarted from plain fetch, and rejected the
+browser-navigation workflow before CDP was tried. The 60-minute run deadline
+arrived while the compiler was responding to that misleading failure, so the
+run ended with three ready operations and two unfinished operations.
+
+The chain verifier now sends the consumer through the same already-proven
+backend used by standalone verification. It does not choose a new strategy or
+add a site rule. The existing end-to-end test now proves that a consumer whose
+research succeeded through CDP uses CDP for both its standalone and chained
+calls. All 28 controller end-to-end tests, type checking, and lint pass.

@@ -934,7 +934,7 @@ describe('fresh foreground master controller end to end', () => {
           })),
       ).toEqual([
         { parameters: { item_id: 'recorded-item' }, backend: 'cdp-replay' },
-        { parameters: { item_id: 'item-1' }, backend: undefined },
+        { parameters: { item_id: 'item-1' }, backend: 'cdp-replay' },
       ]);
       expect(reviewedConsumerCase).toBe(`replay_${CONSUMER_ID}`);
       expect(calls.some(({ parameters }) => parameters.item_id === 'synthetic-item')).toBe(false);
