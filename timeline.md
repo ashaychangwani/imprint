@@ -4164,3 +4164,35 @@ it deterministically, and sibling values must be tied to the same parsed record
 rather than paired because they happen to be close together. This is generic
 producer-consumer guidance with no site-specific rule. All 110 master-agent
 tests, type checking, and lint pass.
+
+## 2026-09-03 20:56–21:43 PDT — Rendered results could not expose hidden booking handoff values
+
+Fresh Flights run `3803a420-d1b8-4d14-b103-ea478680b24d` used the exact mounted
+recording and the accepted five-operation candidate checkpoint. Research proved
+both location operations with fetch, Search and Booking with CDP, and left
+Calendar unresolved. Search's research result used a materially different
+LAX-to-LAS round trip and contained real itineraries, prices, baggage details,
+and emissions. The master correctly planned only the four proven API tools and
+did not invent a playbook.
+
+Both location tools published. Search's first live result contained 42 real
+itineraries but omitted structured route, price, and booking handoff fields.
+The retained compiler repaired the route, price, currency, and baggage fields.
+The next live result still had null booking handoff values. That was not a
+parser typo: the chosen navigation workflow returned rendered text, while the
+promised per-result link values lived outside that returned text.
+
+The master nevertheless kept the same plan and recalled the same compiler a
+third time. Since no compiler can extract data its workflow never receives,
+the run was cancelled at about 47 minutes with the two location tools ready.
+This prevented the remaining deadline from being spent searching the same
+response surface again.
+
+Agent instructions now require an explicit response-surface check. Research
+must say when core data is proven but promised downstream values are absent.
+Focused planning must ground every outgoing value in a response the artifact
+actually receives. The compiler must report an impossible output contract
+instead of copying stale recording values. After that factual failure, the
+master must revise the request graph, representation, or chain edge before it
+recalls compilation. No runtime semantic rule and no site-specific policy were
+added. All 111 master-agent tests, type checking, and lint pass.

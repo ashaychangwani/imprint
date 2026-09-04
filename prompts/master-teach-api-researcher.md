@@ -57,6 +57,15 @@ preview. A short protocol error, challenge page, login shell, empty wrapper, or
 response without the promised core records is not a credible MVP response.
 Mark `proven` only when the cited test returned the operation's real core data.
 
+Also inspect whether the tested workflow response actually exposes every
+continuation, selection, identifier, or other downstream value promised by the
+selected boundary. Rendered page text proves only the facts present in that
+text; it does not prove that hidden DOM attributes, link URLs, or background
+network values are available to the artifact. A core operation may still be
+proven when those optional downstream values are absent, but state the gap
+explicitly in the `reason` so the later planner can revise the workflow,
+representation, or tool boundary instead of asking the compiler to invent it.
+
 Real data for the recorded example proves only that one example. When the
 public tool has meaningful caller parameters, also prove that those parameters
 actually control the operation before returning `proven`. Test at least one

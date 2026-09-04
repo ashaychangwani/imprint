@@ -144,6 +144,17 @@ limitation is irrelevant when the rendered page already contains the promised
 result. Navigation is not an implicit pre-step: it must be a declared workflow
 request and remains subject to the normal contract and live checks.
 
+Apply the same check to promised outputs. Before accepting or repairing a
+producer plan, verify that its declared result response actually exposes every
+value required by its outgoing chain edges. Rendered page text does not expose
+hidden DOM attributes, link URLs, or background network values. If a live
+semantic check reports a promised value absent from an otherwise useful result,
+do not repeatedly recall the same compiler under the same implementation plan.
+Revise the request graph, result representation, or chain edge first; omit the
+stale `implementationPlan` and return no `recallToolNames` entry so focused
+planning can ground the replacement. A compiler cannot parse data its workflow
+never receives.
+
 A compiler `give_up`, failed live call, or malformed generated request proves
 that the current plan or artifact failed. It does not prove the recorded API is
 incompatible. Before changing an API tool to `playbook_fallback`, reopen its

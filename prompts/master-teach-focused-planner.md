@@ -304,6 +304,14 @@ They are context only: return this tool's proposed incoming edges in
 `chainEdges`; the master decides whether an outgoing consumer edge should be
 revised separately.
 
+For every proposed outgoing value, confirm that one declared `resultSource`
+actually exposes the value in the artifact's returned response surface. A
+navigation result that returns rendered text cannot supply a hidden DOM
+attribute, link URL, or background network field merely because the live page
+used it. When the chosen response surface does not contain a promised value,
+revise the request graph or public representation, or report the plan gap. Do
+not send the compiler an instruction to extract data it cannot receive.
+
 Design every chained public value backward from the consumer's exact recorded
 request position and construction options. Decide whether the consumer needs a
 server-produced opaque scalar or a stable structured selection that it can

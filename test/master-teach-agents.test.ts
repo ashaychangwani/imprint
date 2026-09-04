@@ -1074,6 +1074,23 @@ describe('prompts and pre-plan discovery', () => {
     expect(compilePrompt).toContain('same parsed producer record');
   });
 
+  it('requires promised chained values to exist on the artifact response surface', () => {
+    const researcherPrompt = prompt('master-teach-api-researcher.md');
+    expect(researcherPrompt).toContain('hidden DOM attributes');
+    expect(researcherPrompt).toContain('state the gap');
+
+    const focusedPrompt = prompt('master-teach-focused-planner.md');
+    expect(focusedPrompt).toContain('actually exposes the value');
+    expect(focusedPrompt).toContain('data it cannot receive');
+
+    const masterPrompt = prompt('master-teach-decision.md');
+    expect(masterPrompt).toContain('do not repeatedly recall the same compiler');
+    expect(masterPrompt).toContain('return no `recallToolNames` entry');
+
+    const compilePrompt = prompt('compile-agent.md');
+    expect(compilePrompt).toContain('Report that exact plan contradiction with `give_up`');
+  });
+
   it('tells the focused planner exactly which evidence refs it may copy', () => {
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     expect(focusedPrompt).toContain('`validationContext.authorizedEvidenceRefs`');
