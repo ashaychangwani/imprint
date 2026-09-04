@@ -4614,3 +4614,44 @@ browser strategy or change pass/fail behavior.
 
 Validation passed all 1,934 tests, TypeScript, formatting/lint, dead-code,
 circular-dependency, and diff checks.
+
+## 2026-09-04 14:16–15:46 PDT — The 90-minute Flights run proves every API path and publishes three tools
+
+Fresh Flights run `f9d3ff7d-8fc3-40f8-9c52-d7cccf5f907a` reused only the
+successful candidate-selection checkpoint. Its hard deadline was increased
+from 60 to 90 minutes. At 60 minutes the run was allowed to continue because
+all five requested operations had produced real API data, no playbook was in
+use, and the run had moved into planning rather than repeating an unchanged
+failure.
+
+The longer run was useful. Location search, location details, flight search,
+the date-price grid, and booking options all found working live API designs.
+Booking used the proven Search output to obtain a current return-flight choice
+and then returned a real provider, fare details, restrictions, and an airline
+booking link. Calendar reused the exact working Search navigation and returned
+a real date-price grid. This confirmed that the focused research and ordered
+producer-before-consumer follow-up work as intended.
+
+The run published three usable tools before the deadline:
+`search_flight_locations`, `get_flight_location_details`, and
+`get_date_grid_prices`. Calendar initially failed compilation only because its
+plan cited recording request 1 as the page navigation even though the recorded
+calendar response belonged to the later navigation beginning at request 618.
+The master corrected that provenance, resumed the same compiler conversation,
+and Calendar published on the next attempt.
+
+`search_flights` was implemented and passed all five local tests, but did not
+publish because its plan requested the first matching captured search response
+while also citing recorded response 194. In that navigation scope, the first
+matching response is 104. The compiler correctly refused to silently change
+the accepted plan and returned the exact contradiction to the master. The
+deadline arrived before the master could correct it. `get_booking_options` had
+already proven its live two-stage API design, but could not be compiled without
+the unpublished Search producer. The location producer-consumer check also
+returned no consumer result and still needs a focused factual review.
+
+The command ended honestly at the 90-minute deadline with `3 ready, 2 not
+ready`. The next correction should stay small: make the master choose a
+captured-response occurrence that agrees with the cited recording response,
+then preserve the working compiler artifact and rerun only Search, Booking,
+and the failed location chain. No site-specific runtime rule is needed.
