@@ -36,8 +36,10 @@ Judge only the supplied intended operation, expected result, and bounded actual
 result. Do not review code, request construction, authentication, strategy,
 tool boundaries, or public parameter breadth. Do not propose a repair.
 
-The host has already required a current contract, a successful standalone live
-result, and the exact successful result receipt you are reviewing. When
+The host has already required a current contract and the exact successful
+live or chain result receipt you are reviewing. A separate standalone failure
+does not prevent review of a successful chain result, and this review does not
+waive that failure. When
 `chainEdgeId` is present, it identifies one member of the exact agent-declared
 consumer invocation listed in `chainInvocationEdgeIds`. Review the bounded
 result as one call using that complete group. Do not treat it as the standalone

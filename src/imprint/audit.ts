@@ -1150,6 +1150,8 @@ export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote:
 
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
 
+The exact report tool names are: ${JSON.stringify(opts.toolNames)}. Use those names verbatim in each report tools[].name. The client may display an MCP server prefix when calling a tool; do not include that prefix in the report name. Report every listed tool, including failed attempts.
+
 Parameter coverage is mandatory for idempotent read tools. A cold cdp-replay/browser-backed first call may be slow because it launches or warms a trusted browser session, but later calls usually reuse that warm session and are much cheaper. Do NOT use the first call's cold-start latency as a reason to skip parameter probes. For search/list/calendar/lookup/quote/read tools, keep making paced sequential differential calls until each advertised parameter has a verdict, unless the same parameter remains blocked by infrastructure after repeated paced retries. For connected state-changing but reversible tools, make only one safe baseline call and mark parameters untestable with that state-changing reason. Irreversible workflows are never connected to this audit.
 
 Promo/coupon/voucher/discount-code parameters require a known valid code to prove a visible effect. If neither the schema nor another tool output gives you a valid code, classify that parameter as untestable; do not invent a random code and call an unchanged response no_op.

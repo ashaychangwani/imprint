@@ -41,6 +41,10 @@ Baseline review requires a passed contract and the exact passed live or chain
 receipt being reviewed. A separate failed standalone call does not prevent
 reviewing a successful chain call. It remains a completion failure to repair;
 reviewing the chain does not overwrite or waive it.
+Compiler guidance asks agents to establish the meaning of unlabeled response
+values, not merely locate a matching value. Optional uncertain output fields
+can wait; required fields go back to the master for research. Audit prompts
+list exact public tool names so MCP display prefixes do not hide reported calls.
 
 ## Data flow
 

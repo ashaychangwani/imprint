@@ -123,6 +123,8 @@ Result reviewers see the actual invocation inputs; an unrelated planned test's
 expected answer is never substituted for the research baseline or a chain call.
 A successful chain result can be reviewed even if a standalone test failed;
 that failed test remains visible and still prevents completion until repaired.
+Compiler guidance separates a returned value's location from its meaning and
+defers uncertain optional output fields. Auditors receive exact report tool names.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint
 retries that exact delivery once on the same conversation and deadline.
 

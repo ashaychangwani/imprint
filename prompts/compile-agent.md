@@ -644,6 +644,8 @@ Assertions should reference real values derived from narration, exact recording 
 
 4a. **Do not infer fields the API didn't return.** Every field in the parser output must trace back to a concrete value in the API response. Do not synthesize boolean status fields (like `available`, `registered`, `in_stock`) from the absence of data — absence of a record in one endpoint does not imply a status that only a different endpoint could confirm.
 
+4b. **A source position proves where a value came from, not what it means.** An unlabeled number matching one requested input is not enough to name it after that input. Use neighboring labels, multiple recorded examples, or a focused contrasting observation to establish the meaning. For the MVP, omit optional output fields whose meaning is still uncertain instead of adding confident labels. If the accepted core contract requires the field, explain the uncertainty to the master so research can resolve it; never silently remove required output or echo the input as proof of a returned value.
+
 5. **Do not write workflow.json with hardcoded user-specific values.** Replace them with `${param.NAME}` or `${credential.NAME}` as appropriate.
 
 5a. **Do not drop the login request when its body uses `${credential.username}`/`${credential.password}` placeholders.** That's the signal that the workflow needs to log in fresh on each call. Keep it as request[0], `extract` the returned auth tokens, chain them into subsequent requests. The runtime substitutes the username/password from the credential manager at call time.

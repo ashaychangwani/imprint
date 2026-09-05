@@ -991,6 +991,10 @@ describe('audit prompt construction', () => {
     );
 
     expect(prompt).toContain('authenticate_password');
+    expect(prompt).toContain(
+      'The exact report tool names are: ["search_items","authenticate_password"]',
+    );
+    expect(prompt).toContain('do not include that prefix in the report name');
     expect(prompt).toContain('Eligible unattended authentication tool(s)');
     expect(prompt).toContain('at most one recovery authentication call');
   });

@@ -5088,3 +5088,27 @@ Triage selected three requests from seven relevance candidates; discovery
 received two data requests. This is not proof of complete Hotels coverage or
 of omitted booking/review operations. Audit only this new tool in an isolated
 copy with Codex, leaving old site tools untouched. No new code changes.
+
+## 2026-09-05 14:55 PDT — Separate a value's position from its meaning
+
+Hotels' audit returned five calls and four parameter judgments, but named the
+tool with its MCP client prefix. The scorer requires its public name and
+therefore reported inconclusive with zero graded units. The actual judgments
+were three correct calls, two broken calls, two working parameters and two
+broken parameters. Do not report that as a passing audit. The initial audit
+prompt counted tools but omitted the exact report names; now supply that list
+and explain the difference between a callable MCP name and a report name.
+
+The real artifact issue is a parser field labeled as adult occupancy that
+does not track the request. The compiler located a real numeric response slot,
+but locating a value is not evidence for its meaning. Strengthen the general
+compiler instruction to verify meaning with labels, contrasting evidence or
+a focused observation. Defer uncertain optional output fields; required fields
+go back to the master for research rather than being silently dropped. Do not
+hardcode any hotel response position or change generated output by hand.
+Also align the baseline-review prompt with the earlier chain-review fix:
+a separate failed standalone call does not prevent inspecting a passed chain.
+
+Validation: all 1,904 tests pass, including 169 focused audit/agent tests.
+Lint, type checking, dependency checks, website build and mobile/desktop
+inspection pass. These are prompt improvements, not a runtime classifier.

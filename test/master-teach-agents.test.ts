@@ -1329,6 +1329,13 @@ describe('prompts and pre-plan discovery', () => {
     expect(baselinePrompt).toContain('actualResult.count: 0');
     expect(baselinePrompt).toContain('non-empty wrapper object');
     expect(completionPrompt).toContain('a supplied `count` of zero');
+    expect(prompt('compile-agent.md')).toContain(
+      'A source position proves where a value came from, not what it means',
+    );
+    expect(prompt('compile-agent.md')).toContain(
+      'omit optional output fields whose meaning is still uncertain',
+    );
+    expect(baselinePrompt).toContain('does not prevent review of a successful chain result');
   });
 
   it.each(['passed', 'failed'] as const)(
