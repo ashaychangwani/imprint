@@ -5011,3 +5011,9 @@ review after a failed standalone call, continued rejection of that failed call,
 and continued completion failure until repair. Lint, type checking, dependency
 checks, website build and desktop/mobile inspection pass. Full suite: 1,903
 pass and one unchanged process-cleanup stress test fails; not fully green.
+
+The process-cleanup file passes all 14 tests independently. Fresh Flights run
+`18df9d36-56ee-46a9-a712-95dd02f1a6b6` started at 12:48 PDT on `46da0bd`,
+using the same combined recording and candidate-only checkpoint. Research and
+compilation start fresh, without old artifacts or shipped examples. Review at
+13:48 PDT; hard deadline 14:18 PDT. No Hotels run is started.
