@@ -4982,3 +4982,11 @@ Fresh Flights run `1c513a18-eb8f-4c86-af9e-a07b17ef52be` started at 11:15 PDT
 on `12d99e5`, with the same combined recording, candidate-only checkpoint and
 five-tool scope. No earlier research or generated solution is reused. Review
 progress at 12:15 and stop at the 12:45 hard deadline. Hotels remains on hold.
+
+At the 60-minute review, both location tools are compiled and verified, so the
+actual-input review fix has reached live validation. Continue within the same
+90-minute limit. Calendar's compiled navigation timed out. Search compilation
+was stopped by the host because the master-added second search request was
+absent from Search's own research graph, although Booking research had proved
+that stage. The master is revising the split between Search and Booking and
+retaining the location tools. This is not yet a successful complete teach.
