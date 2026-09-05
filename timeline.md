@@ -4860,3 +4860,10 @@ Keep current metadata in retained output-repair messages and name each exact
 mismatched identity field with its expected and returned values. A synthetic
 run-ID typo test exercises that repair path. No strategy classifier or site rule
 is added. Hotels remains on hold; post-change validation starts fresh.
+
+Validation passes: 1,895 tests, lint, type checking, dependency checks, website
+build, and desktop/mobile inspection. Commit `b2885ec` contains the repair fix.
+Fresh Flights run `915dc9e2-ad5b-4173-a75e-4236677322cf` started at 06:35 PDT with
+the same combined recording, candidate-only checkpoint, and explicit five-tool
+plus Search-to-Booking requirement. It has a 90-minute hard deadline; evaluate
+real progress at 60 minutes. No old research or generated solution was supplied.
