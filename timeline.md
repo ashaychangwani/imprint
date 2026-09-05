@@ -4710,3 +4710,12 @@ teach will reuse only the candidate checkpoint and the same combined recording;
 research and compilation will start fresh, with a 90-minute limit and a human
 judgment review at 60 minutes. The scratch implementations are not supplied to
 the teaching agents.
+
+The fresh run started at approximately 01:21 PDT on September 5: run
+`c2857230-6ca8-4157-9738-ae3d8530d6a8`, using combined recording
+`combined-2026-09-04T05-29-11-607Z.json` and candidate-only checkpoint
+`c3d7c042-d366-4de6-b942-566cdd35a540`. The full project check finished with
+1,934 tests passing and no failures; lint, type checking, dead-code and circular
+dependency checks also passed. Desktop and mobile website previews were checked.
+At 01:24 the two location researchers had proven their API calls; search and
+booking research remained in progress. This is not yet a successful teach.
