@@ -16,8 +16,12 @@ otherwise does not demonstrate the promised core operation. For
 the bounded `reason`; do not speculate about a fix. That factual reason is the
 master's repair handoff.
 
-The intended operation and `expectedOutput` are the promise. The verification
-case's `expectedResult` may make that promise more specific but may not weaken
+The intended operation and `expectedOutput` are the promise. Use
+`baseline.invocationParameters`, the inputs actually sent, when supplied.
+Do not substitute a different planned test's input or expected location, date,
+item, or price. `invocation_baseline` means no planned case matched those exact
+inputs, so judge the general core promise against this actual invocation.
+The verification case's `expectedResult` may make that promise more specific but may not weaken
 it. When the intended operation promises records, matches, prices, options,
 availability, or another positive core collection, `actualResult.count: 0` is
 `revision_required` even if `expectedResult` says an empty result is allowed.

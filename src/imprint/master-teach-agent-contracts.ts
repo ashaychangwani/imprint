@@ -584,6 +584,7 @@ const CompletionToolResultEvidencePayloadSchema = strictObject({
   verificationCaseId: PromptIdSchema,
   expectedResult: utf8Text(1, 2_000),
   resultReceiptRef: ContentAddressedRefSchema,
+  invocationParameters: ScalarParameterValuesSchema.optional(),
   chainEdgeId: PromptIdSchema.optional(),
   actualResult: CompletionActualResultSchema,
 });
@@ -624,6 +625,7 @@ export const BaselineMvpReviewerPromptInputSchema = strictObject({
     verificationCaseId: PromptIdSchema,
     expectedResult: utf8Text(1, 2_000),
     actualResult: CompletionActualResultSchema,
+    invocationParameters: ScalarParameterValuesSchema.optional(),
     resultEvidenceRef: ContentAddressedRefSchema,
     resultReceiptRef: ContentAddressedRefSchema,
     chainEdgeId: PromptIdSchema.optional(),

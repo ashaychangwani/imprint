@@ -1874,10 +1874,8 @@ export function verificationForResearchParameters(
   implementation: ImplementationPlanPayload,
   parameters: Record<string, string | number | boolean>,
 ) {
-  return (
-    implementation.verificationCases.find((verification) =>
-      sameParameters(verificationParameters(verification), parameters),
-    ) ?? implementation.verificationCases.find(({ check }) => check === 'live')
+  return implementation.verificationCases.find((verification) =>
+    sameParameters(verificationParameters(verification), parameters),
   );
 }
 
@@ -3325,10 +3323,10 @@ async function runLiveCheck(input: {
 }): Promise<UnboundLiveCheckResult> {
   const parameters =
     input.apiResearch?.parameters ?? liveVerificationParameters(input.implementation);
-  const verification = input.apiResearch
-    ? verificationForResearchParameters(input.implementation, parameters)
-    : input.implementation.verificationCases.find(({ check }) => check === 'live');
-  if (!verification) throw new Error('implementation plan has no usable MVP verification case');
+  const verification = verificationForResearchParameters(input.implementation, parameters) ?? {
+    id: 'invocation_baseline',
+    expectedResult: input.tool.candidate.expectedOutput || input.tool.candidate.description,
+  };
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
     const playbookPath = pathJoin(input.compiled.toolDir, 'playbook.yaml');
@@ -3949,7 +3947,6 @@ async function compileAndCheckCurrentPlan(input: {
       | { kind: 'artifact_error'; error: Error }
       | { kind: 'host_error'; error: unknown };
     let parameters = liveVerificationParameters(implementation);
-    const liveVerification = implementation.verificationCases.find(({ check }) => check === 'live');
     let bindingFailure: { edge: ChainEdge; error: Error } | undefined;
     for (const edge of edges) {
       const producer = liveByToolId.get(edge.producerToolId);
@@ -4084,18 +4081,21 @@ async function compileAndCheckCurrentPlan(input: {
     if (outcome.kind !== 'returned') return undefined;
     const buildRef = currentBuildRef(tool.id);
     if (!buildRef) throw new Error(`chain check lost current build for "${tool.id}"`);
+    const liveVerification = verificationForResearchParameters(
+      implementation,
+      outcome.parameters,
+    ) ?? {
+      id: 'invocation_baseline',
+      expectedResult: tool.candidate.expectedOutput || tool.candidate.description,
+    };
     const shared = {
       result: outcome.result,
       durationMs: outcome.durationMs,
       executionMechanism: outcome.mechanism,
       responseObservations: outcome.responseObservations,
       parameters: outcome.parameters,
-      ...(liveVerification
-        ? {
-            verificationCaseId: liveVerification.id,
-            expectedResult: liveVerification.expectedResult,
-          }
-        : {}),
+      verificationCaseId: liveVerification.id,
+      expectedResult: liveVerification.expectedResult,
       buildRef,
       chainInvocationSha256: invocation.sha256,
     };
@@ -5254,6 +5254,7 @@ function completionToolResultEvidenceFor(
     implementationPlanRef: tool.implementationPlan,
     verificationCaseId: live.verificationCaseId ?? verification.id,
     expectedResult: live.expectedResult ?? verification.expectedResult,
+    invocationParameters: live.parameters,
     resultReceiptRef: resultReceipt.ref,
     ...(chainEdge ? { chainEdgeId: chainEdge.id } : {}),
     actualResult: {

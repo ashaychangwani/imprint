@@ -4923,3 +4923,30 @@ an Alaska USD 182 offer. Search reused Calendar's working navigation evidence
 and derived the return-selection route from a current outbound result. The
 master says no further research is needed and is moving to focused planning.
 Compilation is still outstanding; the 10:32 hard deadline is unchanged.
+
+## 2026-09-05 10:32 PDT — Four tools and the chain pass; wrong review input wastes repairs
+
+Run `539c7dd4-963c-46c8-b173-653faea447ae` reached its deadline with four
+verified tools. Both compiled Search-to-Booking edges passed, returning 17
+credible offers with fares and booking links. The concrete-path fix held.
+Location search was recalled twice after its reviewer expected Seattle but
+saw San Diego-area results. Inspection shows the runtime actually invoked the
+research input `san d`, then attached the unrelated Seattle case's expectation.
+The compiler was sent to fix a mismatch created by the host, not demonstrated
+by the artifact. The terminal also incorrectly called the deadline provider
+unavailability; that known reporting defect remains separate.
+
+Use a case's expectation only when its input values match the actual call.
+Otherwise use the tool's general output promise and supply the actual inputs
+to the reviewer. Apply the same correction to chain reviews. Do not add a
+location classifier or change the generated artifact to satisfy a false test.
+Failed-run artifacts remain read-only. Hotels remains on hold.
+
+Validation: 161 focused tests pass, including unmatched research inputs and
+chain inputs; the 42-test controller file also passes after added chain
+assertions. Lint, type checking, dependency checks, website build and both
+viewport inspections pass. Two full-suite attempts each passed 1,897 of 1,898
+tests: the first hit a browser form-test timeout, the second an unchanged
+process-cleanup stress-test failure. Both affected files pass in isolation
+(31 browser tests and 14 process tests). No unrelated runtime change was made
+to chase those timing failures; the full-suite attempts are not claimed green.

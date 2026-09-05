@@ -1284,6 +1284,12 @@ describe('prompts and pre-plan discovery', () => {
 
   it('keeps baseline MVP review focused on one bounded result and exact current binding', async () => {
     const input = baselineMvpInput();
+    input.resultEvidence = CompletionToolResultEvidenceSchema.parse(
+      projection(input.resultEvidence.ref.path, {
+        ...input.resultEvidence.payload,
+        invocationParameters: { query: 'fixture query' },
+      }),
+    );
     const output = baselineMvpOutput(input);
     const seen: unknown[] = [];
     const analyzer: MasterTeachAnalyzer = {
@@ -1306,6 +1312,9 @@ describe('prompts and pre-plan discovery', () => {
     ]);
     expect(requestPayload.input).not.toHaveProperty('currentPlan');
     expect(requestPayload.input).not.toHaveProperty('snapshot');
+    expect(requestPayload.input).toHaveProperty('baseline.invocationParameters', {
+      query: 'fixture query',
+    });
     expect(requestPayload.validationContext.binding).toEqual(baselineMvpBinding(input));
   });
 

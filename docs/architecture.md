@@ -31,6 +31,12 @@ that same record for related consumer inputs. The runtime does not choose a
 row or serialize objects implicitly. Binding failures report the bad path and
 explain that the consumer was not called; a wiring-only repair keeps working
 artifacts and reruns the chain check.
+Semantic result evidence includes the actual invocation inputs. A planned
+verification expectation applies only when its inputs match those actually
+sent. Otherwise the reviewer judges the tool's general promised output for
+the actual inputs, rather than borrowing another case's expected location,
+date, item, or price. This applies equally to research-baseline and chain calls.
+Value-bearing result evidence remains separate from factual check receipts.
 
 ## Data flow
 

@@ -1066,6 +1066,9 @@ function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
       verificationCaseId: input.resultEvidence.payload.verificationCaseId,
       expectedResult: input.resultEvidence.payload.expectedResult,
       actualResult: input.resultEvidence.payload.actualResult,
+      ...(input.resultEvidence.payload.invocationParameters
+        ? { invocationParameters: input.resultEvidence.payload.invocationParameters }
+        : {}),
       resultEvidenceRef: input.resultEvidence.ref,
       resultReceiptRef: input.resultEvidence.payload.resultReceiptRef,
       ...(chainEdge
