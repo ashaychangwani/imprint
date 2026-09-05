@@ -5112,3 +5112,9 @@ a separate failed standalone call does not prevent inspecting a passed chain.
 Validation: all 1,904 tests pass, including 169 focused audit/agent tests.
 Lint, type checking, dependency checks, website build and mobile/desktop
 inspection pass. These are prompt improvements, not a runtime classifier.
+
+Fresh Hotels run `f99cdadb-b5e0-466a-a67f-b054b9683de9` started at 14:58 PDT
+on `86b8de1`, with the same June 4 recording and no prior candidate/research
+checkpoint or generated solution. Review at 15:58; hard deadline 16:28 PDT.
+Disk space is tight again (665 MiB), so watch for storage errors as well as
+artifact failures; do not turn them into semantic diagnoses.
