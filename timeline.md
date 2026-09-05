@@ -5133,3 +5133,13 @@ same June 4 recording, without old research or generated artifacts. The first
 launch could not find Bun through env; the explicit installed Bun path and
 its bin directory in PATH started successfully. No code change was needed.
 Review at 16:47 PDT; hard deadline 17:17 PDT. Continue watching disk space.
+
+## 2026-09-05 15:58 PDT — Hotels passes with plain fetch; audit next
+
+Run `a2846e61-4c51-447e-8692-c991dd8b8b5c` completed with one published
+`search_hotels` MVP and passed independent final review. Its live execution
+used plain fetch in 933 ms, rather than the earlier browser-backed path.
+This is one measured call, not a latency benchmark. Start a new isolated
+Codex audit of only this output to test the public parameters. The corrected
+audit prompt now supplies the exact public report name. Disk remains about
+15 GiB free. No code or prompt changed during the teach.
