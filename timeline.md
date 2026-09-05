@@ -4976,4 +4976,9 @@ Validation: 46 LLM tests, lint, type checking, dependency checks, website build
 and desktop/mobile inspection pass. Full suite: 1,902 pass, one unchanged
 process-cleanup stress test fails; its full 14-test file passes independently.
 The suite is not claimed fully green. This change provides bounded recovery,
-not a claim that the underlying stdin delivery race has been reproduced or fixed.
+not a claim that the underlying stdin delivery failure has been reproduced or fixed.
+
+Fresh Flights run `1c513a18-eb8f-4c86-af9e-a07b17ef52be` started at 11:15 PDT
+on `12d99e5`, with the same combined recording, candidate-only checkpoint and
+five-tool scope. No earlier research or generated solution is reused. Review
+progress at 12:15 and stop at the 12:45 hard deadline. Hotels remains on hold.
