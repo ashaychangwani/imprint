@@ -5077,3 +5077,14 @@ on the same code, using the explicit latest original June 4 recording
 old generated tools or shipped examples are supplied. Flights work has ended
 before starting Hotels. Review at 15:35 PDT; hard deadline 16:05 PDT. Disk
 space is 4.6 GiB at launch; monitor it as well as teach progress.
+
+## 2026-09-05 14:44 PDT — Hotels search compiles; audit its limited scope
+
+Hotels run `aac60bad-e5e3-4fda-85ac-7d277c2d9ad9` completed in about eight
+minutes with one published MVP, `search_hotels`, and a passed independent
+completion review. Discovery proposed one operation: the selected recording
+contains 155 network requests but only one navigation event and no narration.
+Triage selected three requests from seven relevance candidates; discovery
+received two data requests. This is not proof of complete Hotels coverage or
+of omitted booking/review operations. Audit only this new tool in an isolated
+copy with Codex, leaving old site tools untouched. No new code changes.
