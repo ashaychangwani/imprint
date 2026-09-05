@@ -5017,3 +5017,13 @@ The process-cleanup file passes all 14 tests independently. Fresh Flights run
 using the same combined recording and candidate-only checkpoint. Research and
 compilation start fresh, without old artifacts or shipped examples. Review at
 13:48 PDT; hard deadline 14:18 PDT. No Hotels run is started.
+
+At the one-hour review (13:50 PDT), continue: Calendar has just proved a real
+7-by-7 live fare grid, so all five research handoffs are now proven and the
+master is reviewing them before planning. The delay came from a wrong field
+in the researcher-generated round-trip page URL. It opened a blank Flights
+page, which looked like a missing Date grid button. A rendered-page diagnostic
+exposed the blank dates; comparing the URL encoding with the recording fixed
+the field and yielded actual prices. No runtime or prompt was changed during
+this run, and no shipped solution was supplied. About 28 minutes remain for
+compilation and verification; research proof is not a compiled-tool pass.
