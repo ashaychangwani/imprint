@@ -5042,3 +5042,23 @@ disabled, grading zero calls. It also discovered 13 tools from mixed older
 outputs. Start the real audit with Codex against an isolated copy of only
 this run's five published tools. Original artifacts remain unchanged, and no
 shipped examples are included. Hotels waits for this Flights validation.
+
+## 2026-09-05 14:23–14:34 PDT — Audit reaches 88.9%; check disk-related failures
+
+The isolated Codex audit graded all five new tools: 22 calls and 14 parameters,
+36 units total. It counted 32 correct and four broken units: three Calendar
+calls plus one parameter. Thirteen of fourteen parameters worked, with no
+excluded infrastructure, bad-input or untestable units. Both location tools,
+Search and Booking passed their tested calls. Current Search results from
+two different flights produced matching Booking offers. Calendar returned
+real grids for several route/date changes, but three calls reported an
+unavailable request-transform module; one failed case succeeded on retry.
+
+88.9% exceeds the user's approximate 80% target but is a FAIL against the
+audit's default 95% threshold. During the audit Codex reported no space left
+on device, with only 135 MiB free. The report was saved, but the timeline and
+monitor update could not be saved. No user files were deleted. At 14:33,
+4.5 GiB was available again. Retry the exact failed Calendar inputs against
+the unchanged isolated tools before blaming their parameter logic. Do not
+rewrite the audit score or assume disk space caused those failures without
+evidence. Hotels remains on hold during this diagnostic.
