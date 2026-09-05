@@ -5200,3 +5200,7 @@ desktop/mobile inspection pass. The full suite had 1,902 passes, the known
 process-cleanup stress failure and one prompt assertion sensitive to a line
 break. Fix the assertion's whitespace matching; both affected files then pass
 all 134 tests together. Do not claim the full suite was fully green.
+
+Fresh Hotels run `636457ee-ee12-44fc-8eb1-f7f10bfda624` started at 16:45 PDT
+on `5f74e88`, same June 4 recording, no previous research or generated solution.
+Review at 17:45; hard deadline 18:15 PDT. Disk remains about 11 GiB free.
