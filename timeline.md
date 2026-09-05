@@ -4910,3 +4910,9 @@ keep the working artifacts. Hotels stays on hold until Flights also connects.
 
 Validation passes: 1,897 tests, lint, type checking, dependency checks, website
 build, and desktop/mobile inspection. No path-selection policy was added.
+
+Fresh Flights run `539c7dd4-963c-46c8-b173-653faea447ae` started at 09:02 PDT
+on commit `a75eafc`. It reuses only the same combined recording and candidate
+selection, not old research or generated artifacts. Scope remains five usable
+MVPs with a working Search-to-Booking connection. Review progress at 60 minutes;
+the hard limit is 90 minutes. Hotels has not started.
