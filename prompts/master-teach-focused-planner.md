@@ -329,6 +329,14 @@ equal the corresponding public `candidate.toolName`. Return no implementation-pl
 
 `outgoingChainEdges` are current consumer obligations on this tool's result.
 Account for each named `producerResultPath` when proposing the result shape.
+These are executable paths into returned data, not schema descriptions:
+`items[1].id` selects the second item and `$.items[1]["item-id"]` supports a
+quoted property. Use concrete zero-based indices, not `[]`, `[*]`, filters, or
+projections. Choose a compatible record from the live evidence; related values
+must refer to that same record. Bind a scalar matching the consumer parameter
+type; objects and arrays are not automatically serialized. If the consumer
+needs an encoded string, plan an explicit producer output for it. A path-only
+repair changes the edge, not an otherwise working tool implementation.
 They are context only: return this tool's proposed incoming edges in
 `chainEdges`; the master decides whether an outgoing consumer edge should be
 revised separately.

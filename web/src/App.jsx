@@ -418,7 +418,7 @@ export default function App() {
               <p>Each taught tool compiles to a network workflow whenever the recorded operation supports one; a DOM playbook is only the final fallback. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When a page must construct the data request itself, an API workflow can explicitly collect its matching background response through CDP. Recorded examples support offline checks without forcing fresh calls to repeat the recording’s request order.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
-              <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures. Evidence-backed navigation URLs can be generated from parameters and proved live, even when not recorded literally.</p></article>
+              <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures and evidence-backed navigation. Agents choose concrete values for tool handoffs; path errors are distinguished from failed API calls.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
               <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and an installable MCP server for local tools or checked-in examples.</p></article>
               <article className="artifact"><small>Optional</small><h3>request-transform.ts</h3><p>URL signing or request mutation when the API requires per-call tokens (HMAC, CRC32, OAuth).</p></article>

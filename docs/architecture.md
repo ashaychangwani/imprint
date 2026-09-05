@@ -25,6 +25,12 @@ returned value so agents do not have to rediscover an opaque run identifier.
 Document provenance is not a destination allowlist. Recorded Referers, events,
 links, and request data may support a parameter-derived URL absent from Document
 rows; a live check must establish that it returns the intended response.
+Chain edges use executable result paths such as `items[1].id`, not schema
+notation such as `items[].id`. The agent selects a compatible record and uses
+that same record for related consumer inputs. The runtime does not choose a
+row or serialize objects implicitly. Binding failures report the bad path and
+explain that the consumer was not called; a wiring-only repair keeps working
+artifacts and reruns the chain check.
 
 ## Data flow
 

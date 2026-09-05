@@ -82,6 +82,7 @@ import {
 } from './master-teach-agents.ts';
 import {
   bindProducerResultToConsumer,
+  chainBindingFailureMessage,
   invocationOutcomeCheck,
   resultCollectionCount,
 } from './master-teach-checks.ts';
@@ -3970,7 +3971,7 @@ async function compileAndCheckCurrentPlan(input: {
       if (!binding.ok) {
         bindingFailure = {
           edge,
-          error: new Error(`chain binding "${edge.id}" failed: ${binding.reason}`),
+          error: new Error(chainBindingFailureMessage(edge, binding.reason)),
         };
         break;
       }

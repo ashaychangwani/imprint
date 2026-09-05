@@ -538,6 +538,19 @@ All edges targeting the same consumer are one explicit invocation and each
 consumer parameter may be bound once. If several producer paths are plausible,
 choose one rather than returning alternatives for the runtime to interpret.
 
+`producerResultPath` is an executable path relative to the producer's returned
+data, not a result-schema description. Use concrete zero-based array indices:
+`items[1].id` selects the second item's ID; `$.items[1]["item-id"]` also works.
+`[]`, `[*]`, filters, and projections are not supported. Select a compatible
+record from the live result yourself; the runtime never chooses a row. Related
+values for one consumer must use the same selected record. The selected value
+must match the consumer's scalar parameter type; an object/array is not
+automatically serialized. If you need an encoded string, design that public
+producer output explicitly. An `invalid_path` chain receipt means binding
+failed before the consumer was called, not that its API failed. Correct only
+the edge when the existing output already contains the required value; keep
+working artifacts and rerun the chain check, not research or compilation.
+
 Review the representation on both sides of every edge. Work backward from the
 consumer's exact recorded request position: determine whether it truly needs a
 server-produced opaque scalar or can deterministically encode a stable

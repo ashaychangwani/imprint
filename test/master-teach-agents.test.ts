@@ -43,6 +43,7 @@ import {
   requestParameterSelectionAdvice,
   requestToolSelectionAdvice,
 } from '../src/imprint/master-teach-agents.ts';
+import { extractJsonResultPath } from '../src/imprint/master-teach-checks.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -909,6 +910,22 @@ function setProvenance<T extends typeof searchProof>(proof: T, requestSeqs: read
 }
 
 describe('prompts and pre-plan discovery', () => {
+  it('executes the concrete chain path examples given to master and planner', () => {
+    for (const name of ['master-teach-decision.md', 'master-teach-focused-planner.md']) {
+      const text = prompt(name);
+      const paths = [...text.matchAll(/`(\$?\.?items\[1\](?:\.id|\["item-id"\]))`/g)];
+      expect(paths.length).toBeGreaterThanOrEqual(2);
+      for (const match of paths) {
+        expect(
+          extractJsonResultPath(
+            { items: [{}, { id: 'chosen', 'item-id': 'chosen' }] },
+            match[1] ?? '',
+          ),
+        ).toEqual({ ok: true, value: 'chosen' });
+      }
+      expect(text).toContain('`[]`, `[*]`');
+    }
+  });
   const roles = [
     ['master-teach-tool-advisor.md', ToolSelectionAdvisorOutputSchema],
     ['master-teach-focused-planner.md', FocusedPlannerOutputSchema],

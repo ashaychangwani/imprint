@@ -183,6 +183,18 @@ type ChainParameterBinding =
 
 const PARAMETER_NAME = /^[A-Za-z_][A-Za-z0-9_]{0,127}$/;
 
+/** Explain a failed handoff without choosing a replacement producer value. */
+export function chainBindingFailureMessage(
+  edge: Pick<ChainEdge, 'producerResultPath' | 'consumerParameter'>,
+  reason: Extract<ChainParameterBinding, { ok: false }>['reason'],
+): string {
+  const hint =
+    reason === 'invalid_path'
+      ? 'Use a concrete index, e.g. items[1].id; [] and [*] are not executable paths. '
+      : '';
+  return `chain binding failed: ${reason}. Consumer not called. ${hint}Path ${JSON.stringify(edge.producerResultPath)} -> parameter ${JSON.stringify(edge.consumerParameter)}.`;
+}
+
 function validParameterName(name: string): boolean {
   return PARAMETER_NAME.test(name);
 }

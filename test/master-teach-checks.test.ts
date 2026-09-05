@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import {
   bindProducerResultToConsumer,
+  chainBindingFailureMessage,
   extractJsonResultPath,
   invocationOutcomeCheck,
 } from '../src/imprint/master-teach-checks.ts';
@@ -11,6 +12,23 @@ const privateResult = 'private-result-value';
 const privateHostSecret = 'private-host-secret';
 
 describe('safe result paths and chain binding', () => {
+  it('explains unsupported collection notation without silently selecting a row', () => {
+    for (const path of ['items[].id', 'items[*].id']) {
+      const edge = { producerResultPath: path, consumerParameter: 'item_id' };
+      const result = bindProducerResultToConsumer({
+        edge,
+        producerResult: { items: [{ id: 'first' }, { id: 'second' }] },
+        consumerParameterDeclarations: [{ name: 'item_id', type: 'string' }],
+      });
+      expect(result).toEqual({ ok: false, reason: 'invalid_path' });
+      const message = chainBindingFailureMessage(edge, 'invalid_path');
+      expect(message).toContain(path);
+      expect(message).toContain('items[1].id');
+      expect(message).toContain('Consumer not called');
+      expect(message).not.toContain('second');
+      expect(message.length).toBeLessThanOrEqual(250);
+    }
+  });
   it('extracts own JSON properties and numeric indices', () => {
     const result = {
       results: [{ token: 'opaque-token' }],

@@ -4891,3 +4891,22 @@ build and desktop/mobile inspection pass. Fresh run
 the same candidate-only checkpoint, combined recording, five-tool scope and
 Search-to-Booking requirement. Deadline remains 90 minutes, with a 60-minute
 progress review. Hotels remains on hold.
+
+## 2026-09-05 07:15–08:45 PDT — Five standalone passes, broken handoff paths
+
+Run `4d6c41fa-3bb4-4bf3-a32a-0e6008d97a6c` published usable standalone MVPs
+for all five selected tools. It did not complete successfully: both tool-chain
+checks failed before calling the consumer, then the 90-minute deadline ended
+the master's repair turn. The plan used array-description paths with `[]`, but
+the runner needs a specific item index. Its error said only `invalid_path`.
+This is a prompt/feedback gap, not evidence that the underlying API failed.
+
+Explain executable paths and type matching in the master and planner prompts,
+with neutral examples tested against the real path reader. Binding errors now
+name the path, give a concrete-index example, and state that the consumer was
+not called. Agents still choose compatible records; the runtime does not pick
+the first item or gain wildcard heuristics. A wiring-only correction should
+keep the working artifacts. Hotels stays on hold until Flights also connects.
+
+Validation passes: 1,897 tests, lint, type checking, dependency checks, website
+build, and desktop/mobile inspection. No path-selection policy was added.
