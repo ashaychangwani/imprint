@@ -19,6 +19,9 @@ alone does not rerun a proven call.
 The completion reviewer also receives the original human guidance: explicit
 scope exclusions are valid, and a requested connected workflow needs compatible
 producer/consumer evidence, not just two standalone successes.
+Output repairs include the current validation metadata even in retained
+conversations. Identity mismatches name the exact field, expected value, and
+returned value so agents do not have to rediscover an opaque run identifier.
 
 ## Data flow
 

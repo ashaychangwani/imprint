@@ -1387,8 +1387,15 @@ function masterOutputSchema(input: MasterDecisionInput) {
       },
     };
   }).superRefine((output, ctx) => {
-    if (!same(output.binding, masterDecisionBinding(input)))
-      issue(ctx, ['binding'], 'stale master binding');
+    for (const [field, expected] of Object.entries(masterDecisionBinding(input))) {
+      const actual = output.binding[field as keyof typeof output.binding];
+      if (!same(actual, expected))
+        issue(
+          ctx,
+          ['binding', field],
+          `Expected ${JSON.stringify(expected)}; received ${JSON.stringify(actual)}`,
+        );
+    }
     if (
       output.desiredPlan.site !== input.discovery.run.site ||
       output.desiredPlan.recordingSha256 !== input.discovery.run.recordingSha256
@@ -2108,6 +2115,7 @@ async function request<S extends z.ZodTypeAny>(options: {
       const repaired = await analyze(
         retainedCodexConversation
           ? {
+              validationContext: options.validation,
               priorResponse: first.text,
               parseErrors: error.parseErrors,
             }

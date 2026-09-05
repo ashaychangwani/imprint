@@ -3849,9 +3849,35 @@ describe('strict repair and one real deadline', () => {
     await requestToolSelectionAdvice(input, { provider: 'codex-cli', analyzer });
     const repair = calls[1] as Record<string, unknown>;
     expect(repair).not.toHaveProperty('originalInput');
-    expect(repair).not.toHaveProperty('validationContext');
+    expect(repair.validationContext).toEqual({
+      binding: input.run,
+      recordingIndex: input.recordingIndex,
+    });
     expect(repair.priorResponse).toBe(JSON.stringify(invalid));
     expect(repair.parseErrors).toBeTruthy();
+  });
+
+  it('repairs a mistyped run id using exact current metadata in the retained conversation', async () => {
+    const input = initialMasterInput();
+    const valid = initialMasterOutput(input);
+    const invalid = structuredClone(valid);
+    invalid.binding.runId = `${valid.binding.runId}-typo`;
+    const payloads: unknown[] = [];
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_prompt, payload) {
+        payloads.push(payload);
+        return { text: JSON.stringify(payloads.length === 1 ? invalid : valid) };
+      },
+    };
+    expect(await requestMasterDecision(input, { provider: 'codex-cli', analyzer })).toEqual(valid);
+    const repair = payloads[1] as {
+      validationContext: { binding: unknown };
+      parseErrors: string[];
+    };
+    expect(repair.validationContext.binding).toEqual(valid.binding);
+    expect(repair.parseErrors.join(' ')).toContain('binding.runId');
+    expect(repair.parseErrors.join(' ')).toContain(JSON.stringify(valid.binding.runId));
+    expect(repair.parseErrors.join(' ')).toContain(JSON.stringify(invalid.binding.runId));
   });
 
   it('gives a master repair the complete long output, exact field path, and namespace rule', async () => {

@@ -4846,3 +4846,17 @@ all five usable MVPs and a live Search-to-Booking connection; agents choose the
 minimal compatible recorded case. The price graph and flexible-date picker are
 explicitly excluded. Deadline is 90 minutes, with progress review at 60 minutes.
 Hotels remains on hold.
+
+## 2026-09-05 05:51–06:26 PDT — Working research stopped by a run-ID typo
+
+Run `43cfbc08-1d77-4778-9b8b-ee4f3cff9665` proved all five selected operations,
+with compatible one-way Search and Booking evidence. Booking returned an Alaska
+itinerary and USD 69 offer. No compiler started: the master omitted one character
+from the opaque run ID, and repeated it after the repair prompt. The runtime
+reported only “stale master binding”; the retained-conversation repair omitted
+the current validation metadata. This was not an API failure or an old plan.
+
+Keep current metadata in retained output-repair messages and name each exact
+mismatched identity field with its expected and returned values. A synthetic
+run-ID typo test exercises that repair path. No strategy classifier or site rule
+is added. Hotels remains on hold; post-change validation starts fresh.
