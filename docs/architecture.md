@@ -45,6 +45,11 @@ Compiler guidance asks agents to establish the meaning of unlabeled response
 values, not merely locate a matching value. Optional uncertain output fields
 can wait; required fields go back to the master for research. Audit prompts
 list exact public tool names so MCP display prefixes do not hide reported calls.
+Planning and final review consider required input acquisition as part of MVP
+usability: ordinary inputs, a demonstrated resolver or producer, or a supported
+documented caller prerequisite. A hidden research-baseline identifier is not
+proof of public usability. Agents choose the repair; no host ID classifier or
+mandatory resolver rule is added.
 
 ## Data flow
 

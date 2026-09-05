@@ -5143,3 +5143,23 @@ This is one measured call, not a latency benchmark. Start a new isolated
 Codex audit of only this output to test the public parameters. The corrected
 audit prompt now supplies the exact public report name. Disk remains about
 15 GiB free. No code or prompt changed during the teach.
+
+## 2026-09-05 16:09 PDT — Make required inputs obtainable by callers
+
+The new audit used the correct tool name, so that prompt fix worked. It could
+not grade any of six calls or four parameters: the tool requires an opaque
+destination identifier but gives callers no way to obtain one. A known ID
+from the private recording passed teaching, not public usability. The final
+review had returned passed with no findings. This is not an audit pass.
+
+The planning prompt protected exact API identifiers but omitted the reverse
+question: where does the caller get one? Add that question to the master,
+planner and completion reviewer. Agents should establish ordinary inputs with
+internal resolution, an available producer, or a documented caller prerequisite
+supported by the use case. A hidden baseline/example is not an acquisition path.
+No required resolver rule, ID classifier, new runtime orchestration or
+site-specific code is added; the master still decides the repair.
+
+Validation: 120 focused tests, lint, type checking, dependency checks, website
+build and desktop/mobile inspection pass. Full suite: 1,903 pass and the known
+process-cleanup stress test fails; not fully green.

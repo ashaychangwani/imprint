@@ -1432,6 +1432,14 @@ describe('prompts and pre-plan discovery', () => {
   });
 
   it('keeps API repair and response-produced state decisions agent-owned and evidence-backed', () => {
+    for (const name of [
+      'master-teach-focused-planner.md',
+      'master-teach-decision.md',
+      'master-teach-completion-review.md',
+    ]) {
+      expect(prompt(name)).toContain('private recording or research');
+      expect(prompt(name)).toMatch(/caller\s+prerequisite/);
+    }
     const focusedPrompt = prompt('master-teach-focused-planner.md');
     expect(focusedPrompt).toContain('A promise to “resolve current state”');
     expect(focusedPrompt).toContain('readable name or label is not a substitute');

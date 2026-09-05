@@ -38,6 +38,14 @@ not authorize playbook or make dependent tools disappear automatically. Its
 structured `observations` are the bounded failed request facts the researcher
 actually saw; use those instead of relying on its prose summary.
 
+Before accepting public parameters, check how a caller obtains each required
+value without the private recording or research transcript. A hidden baseline
+identifier is not a usable input path. Ask research to establish internal
+resolution from ordinary input, an available producer, or a documented caller
+prerequisite supported by the intended use case. Keep exact API representations
+internally; do not invent a new discovery tool without evidence or block an
+entire site merely because the first proposed input contract is incomplete.
+
 When another recorded request continues the same user operation by consuming a
 selection, cursor, or prior result and returning the same result family,
 first consider extending the existing public tool with optional continuation

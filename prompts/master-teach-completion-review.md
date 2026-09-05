@@ -78,6 +78,15 @@ Require evidence that a current producer result actually works as the consumer
 input. The master chooses how to align their supported MVPs; do not invent an
 edge or silently waive the requested connection because no edge was declared.
 
+Check required public input usability, not optional parameter breadth: can a
+caller obtain the required values without the private recording or research
+transcript? Look for ordinary inputs, a demonstrated available producer or
+internal resolver, or a documented caller prerequisite supported by this use
+case. Do not require a resolver for every identifier, but do not treat a hidden
+recorded baseline value or an example alone as an acquisition path. If that
+path is missing, request revision with the exact missing input and evidence
+gap; leave the repair strategy to the master.
+
 `toolResultEvidence`, when present, is a separate bounded, already-redacted
 semantic view of each current standalone live result and each current chain-edge
 result. It does not alter, enrich, or replace the value-free receipts. For every supplied result, compare the

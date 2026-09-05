@@ -292,6 +292,15 @@ its exact response path. When the evidence does not establish which field is
 required, state that gap and ask the master for a revised evidence plan instead
 of choosing the friendliest-looking value.
 
+Also explain how a caller obtains every required public input without access
+to the private recording or research transcript. Prefer ordinary caller input
+with evidence-backed internal resolution, an available producer tool, or a
+documented caller prerequisite genuinely supported by the intended use case.
+A successful call using a hidden recorded identifier proves the API, not that
+the public tool is usable. An example identifier alone is not a lookup path.
+If that path is missing, ask the master for focused research rather than
+inventing an identifier or relabeling an opaque ID as a human-readable name.
+
 Author the live invocation cases that should verify this exact plan. Each case
 states where its parameter values came from, states the expected result in
 plain language, and cites only the focused tool's exact evidence refs and known
