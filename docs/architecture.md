@@ -13,6 +13,10 @@ they use a **backend ladder** that escalates through the applicable replay
 strategies. The teaching agents choose the tool design; the runtime only
 executes and checks the artifacts.
 
+Research remains reusable when planning rewrites auth or token explanations.
+The master requests fresh research for a real strategy change; note wording
+alone does not rerun a proven call.
+
 ## Data flow
 
 ```

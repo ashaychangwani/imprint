@@ -531,11 +531,11 @@ describe('API research boundary reuse', () => {
     const changedTokenSource = structuredClone(tool);
     changedTokenSource.compileContext.tokenExtractionNotes =
       'Extract a fresh token from bootstrap.';
-    expect(apiResearchInputsSha256(changedTokenSource)).not.toBe(initial);
+    expect(apiResearchInputsSha256(changedTokenSource)).toBe(initial);
 
     const changedAuthSource = structuredClone(tool);
     changedAuthSource.compileContext.authNotes = 'Reuse the active signed-in browser session.';
-    expect(apiResearchInputsSha256(changedAuthSource)).not.toBe(initial);
+    expect(apiResearchInputsSha256(changedAuthSource)).toBe(initial);
   });
 
   it('reuses proven research after narrowing to its exact request but not after transport changes', () => {
@@ -555,6 +555,10 @@ describe('API research boundary reuse', () => {
     if (!query) throw new Error('test tool has no public parameter');
     query.description = 'Clearer wording for the same query.';
     expect(apiResearchInputsSha256(narrowed)).not.toBe(apiResearchInputsSha256(tool));
+    expect(apiResearchCoversToolBoundary(narrowed, research)).toBeTrue();
+
+    narrowed.compileContext.authNotes = 'Clarified: no login is required.';
+    narrowed.compileContext.tokenExtractionNotes = 'Preserve the returned continuation value.';
     expect(apiResearchCoversToolBoundary(narrowed, research)).toBeTrue();
 
     const fixedParameter = structuredClone(narrowed);

@@ -117,8 +117,6 @@ const apiResearchTransportEvidence = (tool: ApiResearchInput['tool']) => ({
   loginRequestSeqs: tool.compileContext.loginRequestSeqs,
   authRequestSeqs: tool.compileContext.authRequestSeqs,
   credentialNames: [...tool.compileContext.credentialNames].sort(),
-  tokenExtractionNotes: tool.compileContext.tokenExtractionNotes,
-  authNotes: tool.compileContext.authNotes,
 });
 
 /** Hash transport facts that must still match even when a later plan narrows
@@ -135,7 +133,8 @@ export const apiResearchStableInputsSha256 = (tool: ApiResearchInput['tool']): s
  * the tested request works; the master must request new research when it
  * intentionally changes their meaning. Dependency names and selected chain
  * links describe how proven calls compose; changing that wiring does not
- * invalidate the calls. */
+ * invalidate the calls. Auth/token prose is also advisory: the master requests
+ * new research when it changes the actual strategy, not merely its wording. */
 export const apiResearchInputsSha256 = (tool: ApiResearchInput['tool']): string =>
   digest({
     toolName: tool.candidate.toolName,

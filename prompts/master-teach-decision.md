@@ -120,6 +120,10 @@ research. Removing an optional idea, editing prose, changing confidence, or
 changing an internal edge label does not justify disturbing unrelated proven
 tools.
 
+Auth and token notes are guidance, not a trigger for automatic research. If an
+edit changes the actual authentication or token-acquisition strategy, explicitly
+request focused research; rewriting an explanation should reuse the proven call.
+
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.

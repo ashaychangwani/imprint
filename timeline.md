@@ -4771,3 +4771,36 @@ detached-child cleanup failure; that test and the runtime/research tests passed
 together on the isolated rerun (82 passes). Type checking, lint, dependency
 checks, website build, and mobile/desktop previews pass. No unrelated process
 cleanup policy was changed to hide the intermittent test failure.
+
+## 2026-09-05 02:37–04:08 PDT — Fresh Flights result and a small time-saving fix
+
+Run `b17da797-ce8d-446e-bb5a-2695d5b8f0ac` used the explicitly combined September
+4 Flights recording and a candidate-only checkpoint. No old research, example,
+or scratch implementation was supplied. All five selected operations found
+working live API calls, including Search followed by Booking with real offers.
+That was research proof, not a completed toolchain.
+
+Planning then repeated research unnecessarily. Written auth/token explanations
+were part of the runtime's research identity, so clearer planning notes could
+discard a valid proof. Removed those two prose fields from that identity.
+Actual credential names, auth request references, public parameters, and request
+scope still participate. The master must explicitly request research when it
+changes the strategy. Neutral tests cover both note edits and actual auth-source
+changes. No website-specific policy was added.
+
+Other time went to correcting missing recorded-request references in plans.
+Calendar published successfully. Location search also published earlier, but a
+later revision made that build stale. Search reached live review but was not
+published; Booking never compiled. The 90-minute deadline ended the run with
+one current ready tool and four unfinished. The terminal incorrectly labelled
+this provider unavailability despite active compiler work; that reporting issue
+is recorded in TODOS rather than expanding this research-reuse patch.
+
+The user requested Hotels next. It will be a fresh sequential teach, using the
+latest original recording, after the focused fix passes validation.
+
+Focused validation: 157 tests pass, as do lint and type checking. Website build
+and desktop/mobile inspection pass. Hotels' newest original by `startedAt` is
+June 4 at 21:20 UTC (155 requests). Filename sorting incorrectly ranks an older
+prefixed recording first; the next teach explicitly selects the June 4 file.
+That separate selector defect is recorded in TODOS.

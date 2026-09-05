@@ -4,6 +4,15 @@ Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint
 
 ## Current master-teach follow-ups
 
+- Sort original recordings by their recorded `startedAt`, not filename alone.
+  A prefixed older file can otherwise outrank a newer timestamp-named recording.
+  The next Hotels validation explicitly selects the newest timestamp to avoid it.
+
+- Distinguish an ordinary run deadline from provider unavailability in terminal
+  output. The Flights run on September 5 was actively compiling when its timer
+  expired, but compiler recovery reported provider unavailability. Keep real
+  capacity retry behavior and avoid blaming artifacts for the run deadline.
+
 - Add an explicit `finesse` command that reads the build-bound suggestions now
   saved under a teach run's `finesse/` directory. It should show the master the
   still-current advice, let the master accept or reject it, and freshly rebuild
