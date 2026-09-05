@@ -4837,3 +4837,12 @@ case, not incompatible standalone modes. No site-specific rule or automatic
 chain selection was added. A neutral end-to-end test verifies the reviewer
 receives the human guidance. Focused checks: 158 tests, lint, type checking,
 website build and desktop/mobile inspection pass. Full suite follows.
+
+Full validation passes: 1,894 tests, lint, type checking, and dependency checks.
+Commit `923eb5e` is the scope-review fix. Fresh Flights run
+`43cfbc08-1d77-4778-9b8b-ee4f3cff9665` started at 05:51 PDT with the same combined
+recording and candidate-only checkpoint. Human guidance now explicitly requires
+all five usable MVPs and a live Search-to-Booking connection; agents choose the
+minimal compatible recorded case. The price graph and flexible-date picker are
+explicitly excluded. Deadline is 90 minutes, with progress review at 60 minutes.
+Hotels remains on hold.
