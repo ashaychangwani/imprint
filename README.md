@@ -112,6 +112,8 @@ can send the exact missing question back to that same conversation with only
 the relevant sibling results and recorded requests.
 Rewording auth or token notes reuses that proof; the master explicitly requests
 new research when the actual strategy changes.
+The final reviewer receives the same human scope and checks requested tool
+connections rather than requiring explicitly excluded operations.
 
 Every teach is fresh and stays in the foreground until it reaches a terminal
 result. There are no resume, phase-window, primary-tool, or partial-selection

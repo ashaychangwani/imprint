@@ -656,6 +656,7 @@ export const BaselineMvpReviewOutputSchema = strictObject({
   evidenceRefs: z.array(ContentAddressedRefSchema).min(1).max(4),
 });
 export const CompletionReviewInputSchema = strictObject({
+  userGuidance: utf8Text(1, 4_000).optional(),
   terminalIntent: z.enum(['completed', 'partial', 'blocked']),
   run: CurrentPlanBindingSchema,
   recordingIndex: RecordingIndexSchema,

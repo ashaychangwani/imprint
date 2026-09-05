@@ -18,8 +18,11 @@ against exact builds, and the plan contains at least one tool. Every original
 discovery row in `candidateCoverage` must either
 resolve to a current tool or carry an explicit exclusion reason. Each exclusion
 is supplied as an `exclusion` claim: compare it with the discovery evidence and
-mark it supported only when the detector proposal is genuinely duplicate,
-unsupported, or not user-facing. A completed review cannot pass with an
+mark it supported when the detector proposal is genuinely duplicate,
+unsupported, not user-facing, or explicitly outside the supplied human
+`userGuidance`. Human scope outranks detector breadth: do not demand an
+explicitly excluded operation merely because its recording is valid. Do not
+infer human scope from the master's exclusion statement alone. A completed review cannot pass with an
 unsupported exclusion. A mixed plan with unresolved rows cannot be
 `completed`; it may be `partial` when at least one current tool is verified and
 every unresolved-candidate blocker claim is supported by the supplied evidence.
@@ -63,6 +66,12 @@ unsupported rather than final.
 An invocation fact may include a slug-only `executionMechanism`. It reports
 which backend actually ran for that invocation; it is evidence only and never
 selects strategy or changes the required checks.
+
+When userGuidance requires an end-to-end producer-consumer use case, standalone
+receipts are insufficient if the tools use incompatible modes or value types.
+Require evidence that a current producer result actually works as the consumer
+input. The master chooses how to align their supported MVPs; do not invent an
+edge or silently waive the requested connection because no edge was declared.
 
 `toolResultEvidence`, when present, is a separate bounded, already-redacted
 semantic view of each current standalone live result and each current chain-edge

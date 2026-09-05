@@ -2262,6 +2262,7 @@ describe('fresh foreground master controller end to end', () => {
       let consumerMvpPreview = '';
       let consumerMvpCount: number | null | undefined;
       const revisedProducerDescription = 'Search the revised fixture item catalog.';
+      const humanScope = 'Build catalog lookup and details, including their working connection.';
 
       const terminal = await runFreshMasterTeach(
         {
@@ -2270,6 +2271,7 @@ describe('fresh foreground master controller end to end', () => {
           noInteractive: true,
           provider: 'codex-cli',
           maxDurationMs: 30_000,
+          userGuidance: humanScope,
         },
         {
           now: () => FIXED_NOW,
@@ -2500,6 +2502,7 @@ describe('fresh foreground master controller end to end', () => {
             });
           },
           requestCompletionReview: async (input) => {
+            expect(input.userGuidance).toBe(humanScope);
             events.push('completion-review');
             checksSeenByReviewer = new Map(
               input.snapshot.payload.tools.map((tool) => [

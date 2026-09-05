@@ -5088,6 +5088,7 @@ function createParameterFinesseLane(input: {
 }
 
 function completionInput(input: {
+  userGuidance?: string;
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
@@ -5161,6 +5162,7 @@ function completionInput(input: {
       : undefined;
   return {
     terminalIntent: input.terminalIntent,
+    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
     run: current.binding,
     recordingIndex: input.discoveryInput.recordingIndex,
     currentPlan: current.projection,
@@ -5266,6 +5268,7 @@ function completionToolResultEvidenceFor(
 }
 
 async function requestIndependentReview(input: {
+  userGuidance?: string;
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
   evidence: PromptEvidenceProjection;
@@ -5616,6 +5619,7 @@ export async function runFreshMasterTeach(
       plannedTools = currentPlan.tools.length;
       if (plannedTools === 0) {
         const reviewed = await requestIndependentReview({
+          userGuidance: opts.userGuidance,
           journal: activeJournal,
           discoveryInput: planned.discoveryInput,
           evidence: planned.discoveryEvidence,
@@ -5811,6 +5815,7 @@ export async function runFreshMasterTeach(
           : undefined;
       reportProgress(opts, 'running independent completion review');
       const reviewed = await requestIndependentReview({
+        userGuidance: opts.userGuidance,
         journal: activeJournal,
         discoveryInput: planned.discoveryInput,
         evidence: partialEvidence?.evidence ?? planned.discoveryEvidence,

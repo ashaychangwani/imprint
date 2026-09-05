@@ -16,6 +16,9 @@ executes and checks the artifacts.
 Research remains reusable when planning rewrites auth or token explanations.
 The master requests fresh research for a real strategy change; note wording
 alone does not rerun a proven call.
+The completion reviewer also receives the original human guidance: explicit
+scope exclusions are valid, and a requested connected workflow needs compatible
+producer/consumer evidence, not just two standalone successes.
 
 ## Data flow
 

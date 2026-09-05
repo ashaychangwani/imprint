@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Focused researchers first prove a small working call for every operation; the master sends partial proof back to the same conversation before choosing dependency-aware plans and builds. Rewording auth or token notes reuses proven research.',
+    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Focused researchers prove working calls, then the master plans and builds. Rewording auth or token notes reuses proven research. Final review respects human scope and checks requested tool connections.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {

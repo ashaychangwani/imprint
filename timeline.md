@@ -4811,3 +4811,29 @@ a usable verified MVP, including the Search-to-Booking chain. Hotels was not
 started. Fresh Flights run `23f58f7d-7ac2-4900-97c6-50f8415aa904` started at 04:13
 PDT on `cd68a6d`, with the same explicitly combined recording and candidate-only
 checkpoint. Research and builds start fresh; the hard timeout remains 90 minutes.
+
+## 2026-09-05 04:13–05:43 PDT — Five standalone MVPs, incomplete connection
+
+Run `23f58f7d-7ac2-4900-97c6-50f8415aa904` reached five standalone tools with
+passing contract/live checks. Planning-note edits did not cause the earlier
+all-tools research repeat. Booking initially stalled because the first Search
+response was not booking-ready. The independent reviewer reopened an untested
+page-generated API route, and Booking then returned four real provider offers.
+Search was honestly narrowed to outbound choices for a round-trip search;
+Booking's proven MVP accepted a one-way selection. Those two modes do not yet
+form the requested connection, so Hotels remains on hold.
+
+The final review also exposed a prompt/setup defect. It was instructed to allow
+only duplicate, unsupported, or non-user-facing candidate exclusions, and the
+controller did not pass it the user's explicit scope. It repeatedly rejected
+excluding the price graph and flexible-date picker, which the user had excluded.
+The run reached its 90-minute deadline while master and reviewer disagreed.
+
+Pass the original human guidance to both completion-review paths and persist it
+in the existing review input. The reviewer prompt now respects explicit scope
+and requires actual compatible producer/consumer evidence when human scope asks
+for a connected workflow. The master prompt calls for one common working MVP
+case, not incompatible standalone modes. No site-specific rule or automatic
+chain selection was added. A neutral end-to-end test verifies the reviewer
+receives the human guidance. Focused checks: 158 tests, lint, type checking,
+website build and desktop/mobile inspection pass. Full suite follows.

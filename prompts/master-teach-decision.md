@@ -124,6 +124,12 @@ Auth and token notes are guidance, not a trigger for automatic research. If an
 edit changes the actual authentication or token-acquisition strategy, explicitly
 request focused research; rewriting an explanation should reuse the proven call.
 
+If human scope requires a connected workflow, choose mutually compatible MVPs
+for its producer and consumer. A result for one mode and an input for another
+are not a working connection even if both standalone checks pass. Ask the
+relevant retained researcher to align one minimal common case, then prove the
+connection with current producer output. Defer extra modes, not that core link.
+
 Treat the serialized `recordingIndex` as the authority for which request and
 event sequence numbers exist; reason from the supplied evidence and proposals
 without inventing additional facts.

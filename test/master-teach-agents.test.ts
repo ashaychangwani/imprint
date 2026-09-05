@@ -1096,6 +1096,11 @@ describe('prompts and pre-plan discovery', () => {
     expect(masterPrompt).toContain('explicit human scope');
     expect(masterPrompt).toContain('exclude other discovered operations');
     expect(masterPrompt).toContain('not recording evidence');
+    const completionPrompt = prompt('master-teach-completion-review.md');
+    expect(completionPrompt).toContain('Human scope outranks detector breadth');
+    expect(completionPrompt).toContain('`userGuidance`');
+    expect(completionPrompt).toContain('standalone');
+    expect(completionPrompt).toContain('incompatible modes or value types');
   });
 
   it('makes one consumer invocation explicit instead of host-inferred groups', () => {
