@@ -5168,3 +5168,12 @@ Its full 14-test file passes independently. Fresh Hotels run
 `458cbf95-5c77-4fa1-a08e-a46116ba3401` started at 16:12 PDT on `556e922`,
 using the same June 4 recording with no prior research or output artifacts.
 Review at 17:12; hard deadline 17:42 PDT. Disk has about 11 GiB free.
+
+## 2026-09-05 16:20 PDT — New Hotels MVP advertises ordinary destinations
+
+Run `458cbf95-5c77-4fa1-a08e-a46116ba3401` completed in about seven minutes
+with a published search MVP and passed final review. The destination parameter
+now advertises names or geographic areas as well as place identifiers; guests
+and stay dates are public inputs. A fetch live check took about one second.
+This description is not proof that ordinary names actually work: run a fresh
+isolated Codex audit against only this output to test that and the other inputs.
