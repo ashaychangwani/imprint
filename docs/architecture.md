@@ -50,6 +50,11 @@ usability: ordinary inputs, a demonstrated resolver or producer, or a supported
 documented caller prerequisite. A hidden research-baseline identifier is not
 proof of public usability. Agents choose the repair; no host ID classifier or
 mandatory resolver rule is added.
+The researcher tests one coherent contrasting set of core inputs before
+claiming those mappings proven, rather than waiting for a repair follow-up.
+It checks returned meaning, including unchanged core values, not just input
+echoes. This is agent guidance, not a host-enforced call count or an exhaustive
+parameter sweep. Rate-limited uncertainty remains explicit for the master.
 
 ## Data flow
 

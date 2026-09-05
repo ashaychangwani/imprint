@@ -5177,3 +5177,26 @@ now advertises names or geographic areas as well as place identifiers; guests
 and stay dates are public inputs. A fetch live check took about one second.
 This description is not proof that ordinary names actually work: run a fresh
 isolated Codex audit against only this output to test that and the other inputs.
+
+## 2026-09-05 16:32 PDT — Check changed core inputs before the first handoff
+
+The audit scored Hotels 33.3%: three correct and six broken units across five
+calls and four parameters. Destination worked, but date/guest changes returned
+default stay dates and occupancy. Nothing was excluded as infrastructure or
+bad input. The generated request does write those inputs and the parser reads
+returned stay fields; the exact reason the API defaulted is not established.
+Do not count the successful baseline as reliable parameterization.
+
+The research prompt already requested a contrasting core-input set, but only
+on a repair follow-up. Move that small check into the first proof, before the
+agent calls required mappings proven. Several core inputs may change together;
+this is not exhaustive parameter testing or optional finesse. Inspect actual
+returned meaning and unchanged core values, not just input echoes. Keep
+rate-limited uncertainty explicit for the master. This edits existing agent
+guidance, not the runtime, and adds no Hotels-specific rule.
+
+Validation: lint, type checking, dependency checks, website build and
+desktop/mobile inspection pass. The full suite had 1,902 passes, the known
+process-cleanup stress failure and one prompt assertion sensitive to a line
+break. Fix the assertion's whitespace matching; both affected files then pass
+all 134 tests together. Do not claim the full suite was fully green.

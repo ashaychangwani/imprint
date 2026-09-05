@@ -127,6 +127,8 @@ Compiler guidance separates a returned value's location from its meaning and
 defers uncertain optional output fields. Auditors receive exact report tool names.
 Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
+Research uses a small contrasting core-input check before claiming parameter
+mappings are proven; optional parameter breadth remains deferred.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint
 retries that exact delivery once on the same conversation and deadline.
 

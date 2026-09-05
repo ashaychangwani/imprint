@@ -1204,7 +1204,7 @@ describe('prompts and pre-plan discovery', () => {
     expect(researchPrompt).toMatch(/as little as possible from\s+recorded headers/i);
     expect(researchPrompt).toMatch(/exact smallest workflow actually proven so far/i);
     expect(researchPrompt).toMatch(/materially different parameter set/i);
-    expect(researchPrompt).toMatch(/response reflects the changed route/i);
+    expect(researchPrompt).toMatch(/response\s+reflects the changed route/i);
     expect(researchPrompt).toMatch(/blind text\s+replacement inside an encoded/i);
     expect(researchPrompt).toMatch(/winning rung/i);
     expect(researchPrompt).toContain('`requestComparisons`');
@@ -1432,6 +1432,9 @@ describe('prompts and pre-plan discovery', () => {
   });
 
   it('keeps API repair and response-produced state decisions agent-owned and evidence-backed', () => {
+    const researchPrompt = prompt('master-teach-api-researcher.md');
+    expect(researchPrompt).toContain('This small contrast belongs in the first proof');
+    expect(researchPrompt).toContain('not an exhaustive parameter-by-parameter sweep');
     for (const name of [
       'master-teach-focused-planner.md',
       'master-teach-decision.md',

@@ -203,14 +203,19 @@ pass, prove the parameters needed by the selected core invocation. Do not delay
 the first handoff for optional breadth; identify optional filters and extra
 variants as deferred best-effort work in `reason`. If an unproven parameter is
 part of the selected MVP contract, return `partial` so the master can narrow the
-contract or request a follow-up. On that follow-up, test at least one
-coherent, materially different parameter set when the recording and live site
-make that possible, then verify that the response reflects the changed route,
-query, dates, identifier, or other core input. This is especially important
+contract or request a follow-up. Before claiming the required core mappings
+are proven, test one coherent, materially different parameter set when the
+recording and live site make that possible, then verify that the response
+reflects the changed route, query, dates, identifier, or other core input. This is especially important
 when parameters are embedded inside an encoded URL, nested form value, binary
 token, or request transform: a response that still describes the recorded
 example is a failed parameterization even when it contains excellent real
-data. If rate limiting or bot protection makes a second live test unsafe, say
+data. This small contrast belongs in the first proof, not only a repair
+follow-up. It is not an exhaustive parameter-by-parameter sweep: several core
+inputs may change together, while optional filters and extra modes remain
+deferred. Check unchanged core inputs too; a defaulted value is not proof just
+because other fields or a top-level input echo look correct.
+If rate limiting or bot protection makes a second live test unsafe, say
 which parameter mapping remains inferred instead of claiming it was proven.
 
 Start with the smallest directly recorded result request and the minimum wire
