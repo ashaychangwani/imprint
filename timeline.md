@@ -5163,3 +5163,8 @@ site-specific code is added; the master still decides the repair.
 Validation: 120 focused tests, lint, type checking, dependency checks, website
 build and desktop/mobile inspection pass. Full suite: 1,903 pass and the known
 process-cleanup stress test fails; not fully green.
+
+Its full 14-test file passes independently. Fresh Hotels run
+`458cbf95-5c77-4fa1-a08e-a46116ba3401` started at 16:12 PDT on `556e922`,
+using the same June 4 recording with no prior research or output artifacts.
+Review at 17:12; hard deadline 17:42 PDT. Disk has about 11 GiB free.
