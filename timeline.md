@@ -5062,3 +5062,18 @@ monitor update could not be saved. No user files were deleted. At 14:33,
 the unchanged isolated tools before blaming their parameter logic. Do not
 rewrite the audit score or assume disk space caused those failures without
 evidence. Hotels remains on hold during this diagnostic.
+
+The exact return-window inputs that failed twice in the audit now returned
+fare cells twice with unchanged artifacts: cold CDP 33.5 seconds, warm CDP
+2.8 seconds. This supports a disk-related explanation but does not establish
+the cause; keep the original 88.9% audit result unchanged. All five tools
+have verified MVPs, the live chain works, and the broader score exceeds the
+user's approximate 80% target. This meets reasonable completion for moving
+to the next site, without claiming perfect coverage or a 95% audit pass.
+
+Fresh Hotels run `aac60bad-e5e3-4fda-85ac-7d277c2d9ad9` started at 14:35 PDT
+on the same code, using the explicit latest original June 4 recording
+(`2026-06-04T21-20-20-173Z.json`). No automatic combining, candidate checkpoint,
+old generated tools or shipped examples are supplied. Flights work has ended
+before starting Hotels. Review at 15:35 PDT; hard deadline 16:05 PDT. Disk
+space is 4.6 GiB at launch; monitor it as well as teach progress.
