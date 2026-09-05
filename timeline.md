@@ -4655,3 +4655,40 @@ ready`. The next correction should stay small: make the master choose a
 captured-response occurrence that agrees with the cited recording response,
 then preserve the working compiler artifact and rerun only Search, Booking,
 and the failed location chain. No site-specific runtime rule is needed.
+
+## 2026-09-05 — Manual scratch compile proves Search and Booking; corrects the earlier diagnosis
+
+The user asked for a hands-on attempt using the evidence already available. A
+scratch copy used the failed run's Search compiler output and Booking research
+output; no code was taken from the shipped examples. The failed run was left
+unchanged. Search ran successfully before any artifact edit and produced 19
+bookable options for SJC–SAN, October 15–24, alongside 19 incomplete duplicate
+parser rows. Removing those incomplete rows was the only Search change. Its
+request construction already worked.
+
+The Booking researcher had also already built a working two-request workflow.
+Using a fresh Search selection, that unchanged construction returned actual
+round-trip offers. A small parser added in the scratch directory extracted 16
+priced offers, both selected route legs, fare names, and booking links. A second
+live test changed the dates to October 16–25: Search returned 20 usable options
+and Booking returned 15 offers with the correct dates and route. Search took
+about 43–45 seconds and Booking about 34 seconds, each using its own cold CDP
+setup. Five Search offline tests and two Booking parser tests passed. This is
+evidence for a narrow MVP, not broad parameter coverage or warm-CDP timing.
+
+The same artifacts still fail the runtime recording-order check. The check
+equates the first matching response in a long recording with the first matching
+response from a fresh parameterized page load. That assumption is wrong for
+these workflows: the recording includes earlier searches, while the live tool
+opens the desired search or selection directly. Research proves the live call,
+but compilation introduces this extra rejection. The compiler is instructed to
+return any accepted-plan contradiction to the master, creating expensive
+replanning and research rounds before it can publish.
+
+This corrects the previous entry's recommendation to change Search's occurrence
+number. Doing that could make a working live call wait for extra responses that
+never arrive. The appropriate general correction is to separate the explicitly
+chosen recording example from the live occurrence counter and preserve factual
+checks that the cited response exists and matches the endpoint. No runtime or
+prompt change was made during this diagnostic. The scratch report and runnable
+artifacts are in `/tmp/imprint-manual-compile-pggaC9`.
