@@ -161,6 +161,7 @@ export interface CdpPageSnapshot {
   bodyText: string;
   cookies: Array<{
     name: string;
+    value?: string;
     domain: string;
     path: string;
     expires?: number;
@@ -2211,6 +2212,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         ...page,
         cookies: cookies.map((cookie) => ({
           name: cookie.name,
+          value: cookie.value,
           domain: cookie.domain,
           path: cookie.path,
           expires: cookie.expires,

@@ -21,7 +21,6 @@ import {
 } from './credential-store.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import { importModuleFresh } from './import-module-fresh.ts';
-import { redactBody } from './redact.ts';
 import {
   captureHeader,
   captureValueMatches,
@@ -286,11 +285,11 @@ function utf8Prefix(value: string, maximumBytes: number): string {
   return bytes.subarray(0, end).toString('utf8');
 }
 
-function boundedResponsePreview(text: string, contentType?: string): string {
-  // redactBody preserves framed RPC envelopes so recording redaction does not
-  // corrupt their wire structure. A diagnostic preview is not replayed, so run
-  // the free-form secret/PII pass as well before exposing that bounded text.
-  const redacted = redactFreeformText(redactBody(text, contentType).redacted).redacted;
+function boundedResponsePreview(text: string, credentials: CredentialStore): string {
+  const values = new Map(
+    Object.entries(credentials.values).map(([name, value]) => [value, `\${credential.${name}}`]),
+  );
+  const redacted = redactFreeformText(text, values).redacted;
   if (Buffer.byteLength(redacted, 'utf8') <= RESPONSE_OBSERVATION_PREVIEW_BYTES) return redacted;
   const suffixBytes = Buffer.byteLength(RESPONSE_OBSERVATION_TRUNCATED_SUFFIX, 'utf8');
   return `${utf8Prefix(
@@ -304,6 +303,7 @@ function responseObservation(
   response: Response,
   text: string,
   parsed: unknown,
+  credentials: CredentialStore,
 ): ResponseObservation {
   let valueType: ResponseObservation['valueType'];
   if (parsed === null) valueType = 'null';
@@ -317,7 +317,7 @@ function responseObservation(
     requestIndex,
     status: response.status,
     bodyByteLength: new TextEncoder().encode(text).byteLength,
-    redactedBodyPreview: boundedResponsePreview(text, contentType),
+    redactedBodyPreview: boundedResponsePreview(text, credentials),
     ...(contentType ? { contentType } : {}),
     valueType,
     ...(Array.isArray(parsed) ? { arrayLength: parsed.length } : {}),
@@ -633,7 +633,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         // Not valid JSON — keep as raw text string.
       }
       try {
-        opts.onResponse?.(responseObservation(i, resp, text, parsed));
+        opts.onResponse?.(responseObservation(i, resp, text, parsed, liveCredentials));
       } catch {
         // Diagnostics must never change the workflow's execution result.
       }

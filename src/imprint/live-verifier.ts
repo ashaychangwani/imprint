@@ -25,7 +25,6 @@ import {
 } from './compile-verification.ts';
 import { collectOwnedProcess, spawnOwnedProcess } from './compiler-process.ts';
 import { workflowHasIrreversibleEffect } from './effects.ts';
-import { redactFreeformText } from './freeform-redact.ts';
 import {
   type ProviderName,
   isToolUseProvider,
@@ -54,7 +53,6 @@ import {
 import { ProviderTerminalAccumulator } from './provider-terminal.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { loadCredentialStore } from './runtime.ts';
-import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
 import {
   type BackendsCache,
@@ -474,18 +472,15 @@ export async function runLiveIntegrationSuite(opts: {
   }
 }
 
-function sanitizeEvidenceValue(value: unknown, key?: string, depth = 0): unknown {
-  if (key && isSensitiveKey(key)) return '[REDACTED]';
+function sanitizeEvidenceValue(value: unknown, depth = 0): unknown {
   if (depth > 8) return '[TRUNCATED_DEPTH]';
   if (typeof value === 'string') {
     const bounded =
       value.length > 2_000 ? `${value.slice(0, 2_000)}…[TRUNCATED:${value.length}]` : value;
-    return redactFreeformText(bounded).redacted;
+    return bounded;
   }
   if (Array.isArray(value)) {
-    const items = value
-      .slice(0, 50)
-      .map((item) => sanitizeEvidenceValue(item, undefined, depth + 1));
+    const items = value.slice(0, 50).map((item) => sanitizeEvidenceValue(item, depth + 1));
     if (value.length > 50) items.push(`[TRUNCATED_ITEMS:${value.length - 50}]`);
     return items;
   }
@@ -493,7 +488,7 @@ function sanitizeEvidenceValue(value: unknown, key?: string, depth = 0): unknown
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([name, item]) => [
         name,
-        sanitizeEvidenceValue(item, name, depth + 1),
+        sanitizeEvidenceValue(item, depth + 1),
       ]),
     );
   }
@@ -1114,7 +1109,7 @@ async function runBackendProbeSubprocess(opts: {
   let rawStderrTail = '';
   const logChunk = (stream: 'stdout' | 'stderr', raw: unknown): void => {
     const rawChunk = String(raw);
-    const chunk = redactFreeformText(boundedTail(rawChunk, 4_000)).redacted;
+    const chunk = boundedTail(rawChunk, 4_000);
     if (stream === 'stderr') {
       rawStderrTail = appendBackendProbeRawStderrTail(rawStderrTail, rawChunk);
       stderr = boundedTail(`${stderr}${chunk}`, 8_000);
@@ -1590,7 +1585,7 @@ function compactVerifierValue(value: unknown, depth: number): unknown {
 }
 
 function clipVerifierString(value: string, maxChars: number): string {
-  const redacted = redactFreeformText(value).redacted;
+  const redacted = value;
   if (redacted.length <= maxChars) return redacted;
   const headChars = Math.ceil(maxChars * 0.6);
   const tailChars = Math.floor(maxChars * 0.4);

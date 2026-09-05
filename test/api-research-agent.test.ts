@@ -151,6 +151,10 @@ describe('focused API research', () => {
             }
             const observed = input.observations[1];
             if (!observed) throw new Error('missing successful observation');
+            expect(observed.result.preview).toContain('${credential.password}');
+            expect(observed.result.preview).toContain('ordinary-continuation');
+            expect(observed.result.preview).not.toContain('typed-fixture-password');
+            expect(observed).not.toHaveProperty('credentialValues');
             return {
               binding,
               action: 'proven',
@@ -171,6 +175,7 @@ describe('focused API research', () => {
             });
             return {
               executionMechanism: backend ?? 'fetch',
+              credentialValues: { password: 'typed-fixture-password' },
               responseObservations:
                 execution === 1
                   ? [
@@ -189,7 +194,14 @@ describe('focused API research', () => {
               result:
                 execution === 1
                   ? { ok: true as const, data: 'protocol error: no records' }
-                  : { ok: true as const, data: { items: [{ id: 'item-1' }] } },
+                  : {
+                      ok: true as const,
+                      data: {
+                        items: [{ id: 'item-1' }],
+                        password: 'typed-fixture-password',
+                        token: 'ordinary-continuation',
+                      },
+                    },
             };
           },
         },

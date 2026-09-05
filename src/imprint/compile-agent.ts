@@ -62,7 +62,7 @@ import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
 import { rebindExistingBackendsCacheToWorkflow } from './probe-backends.ts';
 import { type RunDeadlineRef, resolvedRunDeadline } from './provider-retry.ts';
-import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import { redactSession } from './redact.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
   type SharedTriageSelection,
@@ -197,8 +197,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
   const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
   if (!looksRedacted) {
     const replacements = extractCredentials(session).replacements;
-    const pageMintedHeaders = detectPageMintedHeaders(session);
-    const redaction = redactSession(session, { replacements, keepHeaders: pageMintedHeaders });
+    const redaction = redactSession(session, { replacements });
     session = redaction.session;
     if (redaction.stats.totalRedactions > 0 || redaction.stats.placeholdersInjected > 0) {
       log(

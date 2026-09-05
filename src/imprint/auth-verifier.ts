@@ -7,7 +7,6 @@
 import { runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch, CdpPageSnapshot } from './cdp-browser-fetch.ts';
 import { abortSignalError, withAbortSignal } from './concurrency.ts';
-import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
 import type { CredentialStore } from './runtime.ts';
 
@@ -53,8 +52,6 @@ export class AuthVerifier {
     private readonly credentials: CredentialStore,
   ) {
     this.rememberSensitiveValues(credentials.values);
-    for (const cookie of credentials.cookies) this.rememberSensitiveValues(cookie.value);
-    for (const storage of credentials.storage ?? []) this.rememberSensitiveValues(storage.value);
   }
 
   async runAction(
@@ -81,17 +78,6 @@ export class AuthVerifier {
     const durationMs = Date.now() - startedAt;
     const result = ladder.result;
 
-    for (const browser of this.cdpPool.values()) {
-      if (!browser.snapshotCookies) continue;
-      try {
-        for (const cookie of await browser.snapshotCookies()) {
-          this.rememberSensitiveValues(cookie.value);
-        }
-      } catch {
-        // A failed browser will be handled by the ladder's liveness policy.
-      }
-    }
-
     if (result.ok) {
       this.continuation = undefined;
     } else if (result.continuation !== undefined) {
@@ -99,7 +85,6 @@ export class AuthVerifier {
     } else {
       this.continuation = previousContinuation;
     }
-    this.rememberSensitiveValues(this.continuation);
 
     const actionResult: AuthActionResult = {
       action,
@@ -149,6 +134,7 @@ export class AuthVerifier {
         : {
             cookies: snapshot.cookies.map((cookie) => ({
               name: cookie.name,
+              value: this.sanitizeOptional(cookie.value),
               domain: cookie.domain,
               path: cookie.path,
               expires: cookie.expires,
@@ -211,7 +197,7 @@ export class AuthVerifier {
   }
 
   private sanitize(value: string): string {
-    let sanitized = redactFreeformText(value).redacted;
+    let sanitized = value;
     const secrets = Array.from(this.sensitiveValues).sort((a, b) => b.length - a.length);
     for (const secret of secrets) {
       sanitized = sanitized.split(secret).join('[REDACTED]');

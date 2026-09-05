@@ -4742,3 +4742,32 @@ dependency checks. The initial suite hit two process-cleanup timeouts; those
 tests passed both alone and in the full rerun. The website build and desktop/mobile
 preview checks pass. All 19 selection tokens in the scratch Search result survive
 the corrected preview redaction; no scratch content is given to teaching agents.
+
+## 2026-09-05 — Credential-only visibility, requested by the user
+
+Fresh run `b20688e1-0d61-4e1c-973e-8ae4cd461940` started around 02:03 PDT.
+Location and Search research succeeded; Calendar was still investigating when
+the user requested removing all automatic redaction except typed credentials.
+Stopped that run before editing. It is diagnostic evidence, not a resumable run.
+
+Removed the broad redaction library, token/PII scanners, sensitive-field body
+rewrites, cookie/storage masking, and the optional blanket-header masking mode.
+The remaining substitution uses known login values rather than guessing from
+the shape of API data. Password-field capture masking and credential placeholders
+remain. Auth diagnostics now preserve session cookies and continuation state.
+Bounded previews stay bounded, but are not generically redacted a second time.
+
+CLI help, documentation, and teaching prompts now explain that even files named
+“redacted” retain cookies, tokens, and personal data and are not safe to share.
+The replacement tests cover ordinary data preservation and known login-value
+substitution. A fresh teach will follow validation; no old research or generated
+implementation will be supplied to it.
+
+Validation: the combined Flights recording has 632 requests and now passes
+through credential substitution completely unchanged (zero replacements).
+The broad suite passed 1,893 tests before the final additional credential-preview
+test. The final 1,894-test run had 1,893 passes and one existing intermittent
+detached-child cleanup failure; that test and the runtime/research tests passed
+together on the isolated rerun (82 passes). Type checking, lint, dependency
+checks, website build, and mobile/desktop previews pass. No unrelated process
+cleanup policy was changed to hide the intermittent test failure.

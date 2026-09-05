@@ -63,7 +63,7 @@ import {
   combinedDeadlineSignal,
   providerControlError,
 } from './provider-retry.ts';
-import { detectPageMintedHeaders, redactSession } from './redact.ts';
+import { redactSession } from './redact.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { type SharedTriageSelection, applySharedTriageSelection } from './triage-selection.ts';
 import { type Session, SessionSchema, type Workflow, WorkflowSchema } from './types.ts';
@@ -171,7 +171,6 @@ export async function runCompileMcpServer(opts: RunCompileMcpServerOptions): Pro
     if (!JSON.stringify(session).includes('[REDACTED:')) {
       session = redactSession(session, {
         replacements: extractCredentials(session).replacements,
-        keepHeaders: detectPageMintedHeaders(session),
       }).session;
     }
     if (opts.sharedTriageSelection) {

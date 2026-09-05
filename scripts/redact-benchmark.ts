@@ -58,21 +58,17 @@ const session: Session = {
   cookieSnapshots: [],
 };
 
-function measure(label: string, freeform: boolean): number {
+function measure(label: string): number {
   for (let i = 0; i < 5; i++) {
-    redactSession(session, { freeform });
+    redactSession(session);
   }
   const start = performance.now();
   for (let i = 0; i < ITERATIONS; i++) {
-    redactSession(session, { freeform });
+    redactSession(session);
   }
   const duration = performance.now() - start;
   console.log(`${label}: ${duration.toFixed(1)}ms`);
   return duration;
 }
 
-const structuredOnly = measure('structured-only', false);
-const hybrid = measure('hybrid', true);
-const overhead = structuredOnly === 0 ? 0 : (hybrid - structuredOnly) / structuredOnly;
-
-console.log(`overhead: ${(overhead * 100).toFixed(1)}% (target: <= 20% on typical sessions)`);
+measure('credential-only');

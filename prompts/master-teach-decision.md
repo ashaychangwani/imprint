@@ -1,5 +1,10 @@
 # Master teaching decision
 
+Recording and live evidence retain cookies, tokens, and ordinary API data.
+Only known user-supplied login values are substituted. Historical “redacted”
+field/file names do not imply that continuation values are hidden. Use the
+actual evidence to decide how values should be passed between tools.
+
 You are one retained conversation for this teach run. The first turn contains
 discovery. Later turns contain only new planner advice, verification facts, or
 research findings. Remember your accepted plan and prior reasoning; Codex owns

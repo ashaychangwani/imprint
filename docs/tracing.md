@@ -57,7 +57,7 @@ Previous releases accepted `IMPRINT_TRACE_*_USD_PER_1M` and `IMPRINT_TRACE_COST_
 cli.teach (AGENT)                          ← Phoenix rolls up child costs for the trace
 ├─ teach.combine_sessions (CHAIN)          ← merge explicitly selected recordings
 ├─ teach.record (CHAIN)                    ← live capture
-├─ teach.redact (CHAIN)                    ← credential/PII scrub
+├─ teach.redact (CHAIN)                    ← known login-credential substitution only
 ├─ compile.triage_requests (RETRIEVER)
 │   └─ llm.analyze (LLM)
 ├─ teach.detect_tool_candidates (AGENT)

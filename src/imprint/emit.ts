@@ -213,7 +213,7 @@ function assertNoCredentialShapedParams(workflow: Workflow): void {
     '  3. Accept the "Save credentials for site to the credential manager?" prompt this time.',
     '  4. Let teach continue through generate → compile-playbook → emit.',
     '',
-    "If the prompt does NOT appear during step 3, the extractor still cannot pair this site's login fields — please file a bug attaching the (redacted!) session.",
+    "If the extractor cannot pair this site's login fields, report the field structure using synthetic values. Do not attach recordings: even redacted sessions retain cookies, tokens, and personal data.",
   );
   throw new Error(lines.join('\n'));
 }

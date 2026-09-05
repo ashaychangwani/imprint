@@ -88,6 +88,8 @@ interface ApiResearchDependencies {
     executionMechanism: string;
     backendAttempts?: BackendAttemptFact[];
     responseObservations?: BackendResponseObservation[];
+    /** Host-only known login values, never included in the agent observation. */
+    credentialValues?: Record<string, string>;
   }>;
 }
 
@@ -133,7 +135,7 @@ function renderedHtmlText(value: string): string | undefined {
   return text ? `[rendered HTML text]\n${text}` : undefined;
 }
 
-function preview(value: unknown): string {
+function preview(value: unknown, credentialValues: Record<string, string> = {}): string {
   let serialized: string;
   try {
     serialized = typeof value === 'string' ? value : JSON.stringify(value);
@@ -141,16 +143,22 @@ function preview(value: unknown): string {
     serialized = String(value);
   }
   const factualPreview = renderedHtmlText(serialized ?? '') ?? serialized ?? '';
-  return boundedPreview(redactFreeformText(factualPreview).redacted);
+  const values = new Map(
+    Object.entries(credentialValues).map(([name, value]) => [value, `\${credential.${name}}`]),
+  );
+  return boundedPreview(redactFreeformText(factualPreview, values).redacted);
 }
 
-function resultFact(result: ToolResult<unknown>): ApiResearchObservation['result'] {
+function resultFact(
+  result: ToolResult<unknown>,
+  credentialValues?: Record<string, string>,
+): ApiResearchObservation['result'] {
   return result.ok
-    ? { ok: true, preview: preview(result.data) }
+    ? { ok: true, preview: preview(result.data, credentialValues) }
     : {
         ok: false,
         error: result.error,
-        message: result.message.slice(0, 4_000),
+        message: preview(result.message, credentialValues).slice(0, 4_000),
         preview: '',
       };
 }
@@ -489,7 +497,7 @@ export async function researchApiMvpCall(input: {
         backendAttempts: observed.backendAttempts ?? [],
         responseObservations: observed.responseObservations ?? [],
         requestComparisons,
-        result: resultFact(observed.result),
+        result: resultFact(observed.result, observed.credentialValues),
       };
       observations.push(observation);
       retainedTurnDelta = { kind: 'observation', latestObservation: observation };

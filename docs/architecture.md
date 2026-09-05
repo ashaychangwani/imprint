@@ -68,8 +68,8 @@ src/imprint/
 ├── react-flight-limits.ts  Shared Flight row and JSON-node budgets
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
-├── redact.ts            Credential / PII scrub
-├── freeform-redact.ts   Supplemental free-form PII/secret detection (generic catch-alls excluded; AWS session credentials require field context, not base64 length)
+├── redact.ts            Known login-credential substitution; other session data preserved
+├── freeform-redact.ts   Exact known credential values only; no PII or token classifiers
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions

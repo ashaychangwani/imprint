@@ -501,10 +501,10 @@ export default function App() {
               <article className="security-card">
                 <span className="kicker">Security posture</span>
                 <h2 id="security-title">Made for real sessions, not toy demos.</h2>
-                <p>Imprint records sensitive browser traffic, so the product treats redaction, credentials, cookies, and storage as first-class workflow steps rather than README footnotes.</p>
+                <p>Imprint preserves browser traffic so teaching agents can inspect real requests and responses. Recordings and logs contain sensitive data and must be reviewed before sharing.</p>
               </article>
               <div className="checks">
-                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions. Long encoded API values are not classified as AWS session credentials by length alone; explicitly named session credentials remain protected.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Login credentials only</b><span>Known user-supplied login values become credential placeholders. Cookies, tokens, API responses, and personal data remain available to the agents; even files named “redacted” are not safe to share publicly.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools initialize per-run cookie/state jars from the local credential backend instead of committing plaintext secrets.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Traceable compiles</b><span><code>IMPRINT_TRACE=1</code> streams OpenInference spans, token estimates, and optional LLM/tool I/O into local Phoenix.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version.</span></div></div>

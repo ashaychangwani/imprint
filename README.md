@@ -81,7 +81,7 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </td>
 <td align="center" width="33%">
 <h3>2. Compile</h3>
-<p>Builds an API workflow when the recording supports one. A DOM playbook is the final fallback, used only when the agent finds the faster replay paths incompatible.<br><br>Credentials are redacted automatically.</p>
+<p>Builds an API workflow when the recording supports one. A DOM playbook is the final fallback, used only when the agent finds the faster replay paths incompatible.<br><br>Known login credentials are replaced with credential placeholders; other recorded data remains available to the agents.</p>
 </td>
 <td align="center" width="34%">
 <h3>3. Use</h3>
@@ -91,9 +91,9 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </table>
 
 > [!TIP]
-> Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Credentials and PII are redacted automatically before anything reaches the LLM.
+> Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Only known user-supplied login credentials are replaced before teaching; cookies, API tokens, responses, and personal data remain visible to the agents.
 
-Long encoded API values are not treated as AWS session credentials merely because of their length; explicitly named session credentials remain redacted.
+Recordings and logs, including files named `.redacted.json`, are not safe to share publicly. Automatic PII and token redaction is disabled; review any file before sharing it.
 
 For every teach, a master agent accounts for the complete discovered operation
 set. Focused advisors review tool boundaries and parameters, focused planners

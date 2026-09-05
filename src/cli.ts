@@ -66,7 +66,7 @@ USAGE
 CAPTURE
   record <site>            Drive a workflow in Chromium, capture session.
   teach <site>             Record + compile + emit in one flow. <site> is a label you pick.
-  redact <session.json>    Scrub credentials + PII before LLM analysis.
+  redact <session.json>    Replace known login credentials only; not share-safe.
 
 COMPILE
   generate <session>       Session → workflow.json (API replay).
@@ -196,7 +196,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     example: 'imprint check ~/.imprint/acmecorp/sessions/2026-05-03T22-00-00Z.json',
   },
   redact: {
-    summary: 'Scrub credentials + PII; write <session>.redacted.json.',
+    summary: 'Replace known login values; other sensitive data remains in <session>.redacted.json.',
     usage: ['imprint redact <session.json> [--keep-header <name>]…'],
     flags: [
       {
@@ -700,7 +700,7 @@ async function main(argv: string[]): Promise<number> {
     case 'redact': {
       const sessionPath = requirePositional(argv, 'redact', 'a <session.json> argument');
       if (sessionPath === null) return 2;
-      const { values } = parseArgs({
+      parseArgs({
         args: argv.slice(2),
         options: { 'keep-header': { type: 'string', multiple: true } },
         allowPositionals: false,
@@ -725,14 +725,8 @@ async function main(argv: string[]): Promise<number> {
         console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
         return 2;
       }
-      const keepHeaders = values['keep-header'] ?? [];
-      // `imprint redact` produces a file to SHARE (bug reports, fixtures), so it
-      // applies the strongest scrub including sensitive headers — unlike the
-      // compile path, which keeps headers visible to the agent by default.
-      const { session: scrubbed, stats } = redactSession(session, {
-        keepHeaders,
-        redactSensitiveHeaders: true,
-      });
+      // --keep-header remains accepted for CLI compatibility; all headers are kept.
+      const { session: scrubbed, stats } = redactSession(session);
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
       writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
       console.log(`[imprint] redacted → ${outPath}`);
@@ -743,9 +737,9 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}${freeformNote}`,
       );
-      if (keepHeaders.length > 0) {
-        console.log(`[imprint] kept (not redacted): ${keepHeaders.join(', ')}`);
-      }
+      console.log(
+        '[imprint] Only login credentials are replaced. Cookies, tokens and personal data remain; this file is not safe to share.',
+      );
       for (const w of stats.warnings) {
         console.log(`[imprint]   ⚠ ${w}`);
       }

@@ -167,7 +167,24 @@ describe('executeWorkflow', () => {
     expect(resultWithBrokenObserver.ok).toBeTrue();
   });
 
-  it('emits a bounded redacted response observation for a failed HTTP response', async () => {
+  it('protects only explicitly supplied login values in live response previews', async () => {
+    const observations: Array<{ redactedBodyPreview?: string }> = [];
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: { ...STORE, values: { password: 'typed-fixture-password' } },
+      fetchImpl: (async () =>
+        new Response(
+          '{"password":"typed-fixture-password","token":"ordinary-token"}',
+        )) as unknown as typeof fetch,
+      onResponse: (observation) => observations.push(observation),
+    });
+    expect(observations[0]?.redactedBodyPreview).toContain('${credential.password}');
+    expect(observations[0]?.redactedBodyPreview).toContain('ordinary-token');
+    expect(observations[0]?.redactedBodyPreview).not.toContain('typed-fixture-password');
+  });
+
+  it('preserves ordinary token data in bounded failed-response observations', async () => {
     const observations: unknown[] = [];
     const opaque = 'opaque-browser-minted-credential-12345';
     const body = JSON.stringify({ error: 'invalid request shape', csrf: opaque });
@@ -201,11 +218,11 @@ describe('executeWorkflow', () => {
         redactedBodyPreview: expect.stringContaining('invalid request shape'),
       }),
     );
-    expect(JSON.stringify(observations)).toContain('[REDACTED:');
-    expect(JSON.stringify(observations)).not.toContain(opaque);
+    expect(JSON.stringify(observations)).not.toContain('[REDACTED:');
+    expect(JSON.stringify(observations)).toContain(opaque);
   });
 
-  it('redacts framed RPC previews and bounds disclosed object keys', async () => {
+  it('preserves framed RPC previews and bounds disclosed object keys', async () => {
     const rpcObservations: Array<{ redactedBodyPreview?: string }> = [];
     const jwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', 'signature-value'].join(
       '.',
@@ -222,9 +239,7 @@ describe('executeWorkflow', () => {
         })) as unknown as typeof fetch,
       onResponse: (observation) => rpcObservations.push(observation),
     });
-    expect(rpcObservations[0]?.redactedBodyPreview).toContain('[REDACTED]');
-    expect(rpcObservations[0]?.redactedBodyPreview).not.toContain('person@example.com');
-    expect(rpcObservations[0]?.redactedBodyPreview).not.toContain(jwt);
+    expect(rpcObservations[0]?.redactedBodyPreview).toBe(rpcBody);
 
     const longKey = 'k'.repeat(1_000);
     const objectObservations: Array<{ topLevelKeys?: string[] }> = [];
@@ -1123,8 +1138,8 @@ describe('requestTransformModule', () => {
       expect(responseObservations).toHaveLength(1);
       expect(responseObservations[0]?.requestIndex).toBe(0);
       expect(responseObservations[0]?.redactedBodyPreview).toContain('usable-local-value');
-      expect(responseObservations[0]?.redactedBodyPreview).toContain('[REDACTED:');
-      expect(responseObservations[0]?.redactedBodyPreview).not.toContain('person@example.com');
+      expect(responseObservations[0]?.redactedBodyPreview).not.toContain('[REDACTED:');
+      expect(responseObservations[0]?.redactedBodyPreview).toContain('person@example.com');
       expect(
         Buffer.byteLength(responseObservations[0]?.redactedBodyPreview ?? '', 'utf8'),
       ).toBeLessThanOrEqual(4_000);

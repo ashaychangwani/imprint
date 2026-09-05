@@ -42,7 +42,6 @@ import {
 import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
-import { redactFreeformText } from './freeform-redact.ts';
 import { type LLMOptions, type ProviderName, detectTeachProvider, resolveProvider } from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
@@ -1400,10 +1399,7 @@ function verificationFailureProjection(
       ),
       ...(failure.compilerSummary
         ? {
-            compilerSummary: utf8Prefix(
-              redactFreeformText(failure.compilerSummary).redacted,
-              8_000,
-            ),
+            compilerSummary: utf8Prefix(failure.compilerSummary, 8_000),
           }
         : {}),
       ...(failure.liveResponseObservations?.length
@@ -3269,8 +3265,7 @@ function returnedToolFailure(
   result: Extract<ToolResult<unknown>, { ok: false }>,
   backendAttempts: readonly BackendAttemptFact[] = [],
 ): Error {
-  const bounded = (value: string, bytes: number): string =>
-    utf8Prefix(redactFreeformText(value).redacted, bytes);
+  const bounded = (value: string, bytes: number): string => utf8Prefix(value, bytes);
   const details = [`${label} returned ${result.error}`];
   if (result.status !== undefined) details.push(`HTTP status: ${result.status}`);
   if (result.requestStageFacts?.length) {
@@ -5422,6 +5417,11 @@ export async function runFreshMasterTeach(
     reportProgress(opts, 'resolving the latest recording');
     const recording = await resolveRecordingForFreshRun(opts, site, deps);
     const redacted = redactRecording(recording, runRoot);
+    const runApiResearchTool = deps.runApiResearchTool;
+    deps.runApiResearchTool = async (input) => ({
+      ...(await runApiResearchTool(input)),
+      credentialValues: redacted.credentialValues,
+    });
     const fullScope = prepareFullSessionForTeach(redacted.session);
     const triagedPath = pathJoin(runRoot, 'recording.triaged.json');
     // The detector may use a narrowed advisory view, but the master must be

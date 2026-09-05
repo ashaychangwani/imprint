@@ -480,7 +480,7 @@ describe('live semantic verification report', () => {
     ).toThrow('approval requires a semantically_correct baseline');
   });
 
-  it('appends sanitized verifier events without overwriting an earlier attempt', () => {
+  it('appends factual verifier events without guessing secrets from field names', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-log-'));
     dirs.push(dir);
     const path = pathJoin(dir, '.live-verifier-log.jsonl');
@@ -496,12 +496,12 @@ describe('live semantic verification report', () => {
       .split('\n')
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(events.map((event) => event.attempt)).toEqual([1, 2]);
-    expect(events[0]?.password).toBe('[REDACTED]');
-    expect(events[0]?.stderr).not.toContain('bob@example.com');
-    expect(events[0]?.stderr).not.toContain('secret-token-value');
+    expect(events[0]?.password).toBe('secret');
+    expect(events[0]?.stderr).toContain('bob@example.com');
+    expect(events[0]?.stderr).toContain('secret-token-value');
   });
 
-  it('redacts shaped auth tokens in persisted verifier strings without hiding benign IDs', () => {
+  it('preserves tokens and identifiers in persisted verifier strings', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-shaped-token-log-'));
     dirs.push(dir);
     const path = pathJoin(dir, '.live-verifier-log.jsonl');
@@ -517,8 +517,8 @@ describe('live semantic verification report', () => {
     const persisted = readFileSync(path, 'utf8');
     expect(persisted).toContain(`request_id=${uuid}`);
     expect(persisted).toContain(`content_hash=${hex}`);
-    expect(persisted).not.toContain(`Bearer ${uuid}`);
-    expect(persisted).not.toContain(`access_token=${hex}`);
+    expect(persisted).toContain(`Bearer ${uuid}`);
+    expect(persisted).toContain(`access_token=${hex}`);
   });
 
   it('rejects a clean approval that quietly contains a non-working parameter', () => {
@@ -565,7 +565,7 @@ describe('live semantic verification report', () => {
     ).toThrow('permits only works or untestable');
   });
 
-  it('persists a sanitized evidence sidecar with readable labels', () => {
+  it('persists factual evidence without field-name redaction', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-verifier-evidence-'));
     dirs.push(dir);
     const path = pathJoin(dir, 'evidence.json');
@@ -586,7 +586,9 @@ describe('live semantic verification report', () => {
     ]);
     const persisted = JSON.parse(readFileSync(path, 'utf8')) as Array<Record<string, unknown>>;
     expect(persisted[0]?.label).toBe('baseline-search');
-    expect((persisted[0]?.requestedParams as Record<string, unknown>).password).toBe('[REDACTED]');
+    expect((persisted[0]?.requestedParams as Record<string, unknown>).password).toBe(
+      'do-not-persist',
+    );
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readdirSync(dir).filter((name) => name.startsWith('evidence.json.tmp-'))).toEqual([]);
   });
