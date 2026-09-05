@@ -420,7 +420,7 @@ export default function App() {
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures and agent-chosen tool handoffs. Reviewers judge the actual call's inputs and results, never another test's expected answer.</p></article>
               <article className="artifact"><small>Fallback path</small><h3>playbook.yaml</h3><p>DOM-level steps for sites that move logic into the browser.</p></article>
-              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and an installable MCP server for local tools or checked-in examples.</p></article>
+              <article className="artifact"><small>Agent interface</small><h3>index.ts MCP tool</h3><p>Typed inputs, structured outputs, and an installable MCP server. Teaching retains agent conversations and retries a missing-prompt delivery once without resetting them.</p></article>
               <article className="artifact"><small>Optional</small><h3>request-transform.ts</h3><p>URL signing or request mutation when the API requires per-call tokens (HMAC, CRC32, OAuth).</p></article>
             </div>
           </section>

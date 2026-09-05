@@ -4956,3 +4956,24 @@ Fresh run `14aa5604-0ad3-4d00-8fd9-2be70ae44145` started at 10:45 PDT on
 plans and builds start fresh; no example or prior generated solution is given
 to the agents. Review at 11:45 and hard deadline at 12:15 PDT. All five tools
 and a working Search-to-Booking chain are still required before Hotels.
+
+## 2026-09-05 11:09 PDT — Search agent launch received no stdin prompt
+
+Run `14aa5604-0ad3-4d00-8fd9-2be70ae44145` stopped during research, before
+compilation. Search's next SDK turn exited with `No prompt provided via stdin`,
+although Imprint constructs a non-empty prompt. The cause of the lost delivery
+inside the SDK/process boundary is not established. Other researchers finished
+before the aggregate failure surfaced, which made Search appear silently stuck.
+Neither this result nor Booking's protocol-only response is an API success.
+
+Add one local retry for that exact pre-turn error when the prompt is nonempty.
+Reuse the same SDK conversation, prompt and deadline. Repeated delivery failures,
+empty prompts and unrelated invalid requests are not retried by this helper.
+No SDK fork, new context-management system or site rule is introduced. The
+review-input fix still needs a fresh run to reach compiled live verification.
+
+Validation: 46 LLM tests, lint, type checking, dependency checks, website build
+and desktop/mobile inspection pass. Full suite: 1,902 pass, one unchanged
+process-cleanup stress test fails; its full 14-test file passes independently.
+The suite is not claimed fully green. This change provides bounded recovery,
+not a claim that the underlying stdin delivery race has been reproduced or fixed.

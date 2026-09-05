@@ -341,6 +341,12 @@ A tool whose parameter is an opaque token/id minted by a *sibling* tool (e.g. `g
 
 ## The provider is unavailable or refuses a request
 
+If Codex reports `No prompt provided via stdin` despite Imprint supplying a
+non-empty prompt, Imprint retries that exact prompt once on the same retained
+conversation, within the existing turn/run deadline. A repeated failure stays
+visible. This local delivery retry does not apply to empty prompts, model or
+authentication errors, and is separate from provider-capacity backoff.
+
 Capacity, overload, and temporary provider failures retry automatically with
 backoff until the provider recovers, the user cancels, or the run deadline
 expires. If the terminal reports provider unavailable, start a fresh teach after

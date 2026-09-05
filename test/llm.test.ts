@@ -23,6 +23,7 @@ import {
   normalizeCliAnalyzeOutput,
   preferredAgentModel,
   preferredVerificationModel,
+  retryMissingCodexStdin,
   runCodexTurnWithWatchdog,
 } from '../src/imprint/llm.ts';
 import {
@@ -186,6 +187,62 @@ describe('structured CLI provider failures', () => {
       codes: ['codex_turn_stalled'],
     });
     expect(childSignal?.aborted).toBe(true);
+  });
+
+  it('retries a missing-stdin launch once without changing the prompt or conversation callback', async () => {
+    let calls = 0;
+    let notices = 0;
+    const result = await retryMissingCodexStdin(
+      'nonempty fixture prompt',
+      async () => {
+        if (++calls === 1)
+          throw new Error(
+            'Codex Exec exited with code 1: Reading prompt from stdin...\nNo prompt provided via stdin.\n',
+          );
+        return 'same-thread-result';
+      },
+      { onRetry: () => notices++ },
+    );
+    expect(result).toBe('same-thread-result');
+    expect(calls).toBe(2);
+    expect(notices).toBe(1);
+  });
+
+  it.each([
+    [' ', 'Codex Exec exited with code 1: No prompt provided via stdin.', 1],
+    ['prompt', 'Codex Exec exited with code 1: invalid model', 1],
+    ['prompt', 'Codex Exec exited with code 1: No prompt provided via stdin.', 2],
+  ])(
+    'does not indefinitely retry prompt delivery %s / %s',
+    async (prompt, message, expectedCalls) => {
+      let calls = 0;
+      const error = new Error(String(message));
+      await expect(
+        retryMissingCodexStdin(String(prompt), async () => {
+          calls++;
+          throw error;
+        }),
+      ).rejects.toBe(error);
+      expect(calls).toBe(expectedCalls);
+    },
+  );
+
+  it('does not retry missing stdin after cancellation', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const error = new Error('Codex Exec exited with code 1: No prompt provided via stdin.');
+    await expect(
+      retryMissingCodexStdin(
+        'prompt',
+        async () => {
+          calls++;
+          controller.abort();
+          throw error;
+        },
+        { signal: controller.signal },
+      ),
+    ).rejects.toBe(error);
+    expect(calls).toBe(1);
   });
 
   it('propagates cancellation through the Codex turn watchdog', async () => {

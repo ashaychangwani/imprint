@@ -491,7 +491,14 @@ ${cliFinalArtifactInstruction()}`;
         let turn: Awaited<ReturnType<Thread['run']>>;
         try {
           turn = await runCodexTurnWithWatchdog(
-            (signal) => thread.run(combinedPrompt, { signal }),
+            (signal) =>
+              retryMissingCodexStdin(combinedPrompt, () => thread.run(combinedPrompt, { signal }), {
+                signal,
+                onRetry: () =>
+                  console.error(
+                    '[imprint] Codex received no stdin prompt; retrying the same conversation once',
+                  ),
+              }),
             { signal: opts.signal },
           );
         } catch (err) {
@@ -545,6 +552,29 @@ ${cliFinalArtifactInstruction()}`;
 }
 
 const DEFAULT_CODEX_TURN_WATCHDOG_MS = 5 * 60_000;
+
+/** Retry only an explicit pre-turn delivery failure for a known nonempty prompt. */
+export async function retryMissingCodexStdin<T>(
+  prompt: string,
+  run: () => Promise<T>,
+  options: { signal?: AbortSignal; onRetry?: () => void } = {},
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (
+      !prompt.trim() ||
+      options.signal?.aborted ||
+      !/^Codex Exec exited with code 1:\s*(?:Reading prompt from stdin\.\.\.\s*)?No prompt provided via stdin\.\s*$/.test(
+        message,
+      )
+    )
+      throw error;
+    options.onRetry?.();
+    return await run();
+  }
+}
 
 export function codexTurnWatchdogMs(value = process.env.IMPRINT_CODEX_TURN_TIMEOUT_MS): number {
   if (value === undefined || value.trim() === '') return DEFAULT_CODEX_TURN_WATCHDOG_MS;
