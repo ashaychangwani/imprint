@@ -4884,3 +4884,10 @@ events, links and request data may ground a derived destination, which still
 requires a live test. Added a neutral recording-response provenance test with
 a parameterized destination absent from the recording. No runtime strategy or
 site-specific code changed. Focused tests: 182 pass; lint and type checking pass.
+
+Full validation: 1,895 tests, lint, type checking, dependency checks, website
+build and desktop/mobile inspection pass. Fresh run
+`4d6c41fa-3bb4-4bf3-a32a-0e6008d97a6c` started at 07:15 PDT on `7d4877a`, with
+the same candidate-only checkpoint, combined recording, five-tool scope and
+Search-to-Booking requirement. Deadline remains 90 minutes, with a 60-minute
+progress review. Hotels remains on hold.
