@@ -4719,3 +4719,26 @@ The fresh run started at approximately 01:21 PDT on September 5: run
 dependency checks also passed. Desktop and mobile website previews were checked.
 At 01:24 the two location researchers had proven their API calls; search and
 booking research remained in progress. This is not yet a successful teach.
+
+## 2026-09-05 01:57 PDT — Stop a run whose continuation data was erased
+
+Run `c2857230-6ca8-4157-9738-ae3d8530d6a8` independently proved location calls,
+calendar data, first-stage search, and then return-flight search. The master
+correctly requested return-selection research after Booking rejected an empty
+response. The next handoff failed because the host replaced the final selection
+token and encoded flight descriptors with `[REDACTED]`. Booking correctly refused
+to invent them. No compiled tools had been published when the run was cancelled.
+
+The cause was the redaction library's AWS session-token rule: it matches any
+base64-looking string of at least 100 characters without credential context.
+Removed that rule and retained redaction of explicitly named AWS session values.
+Neutral tests cover long opaque values in JSON and nested response frames, plus
+named credentials alongside identical ordinary values. No site-specific exception
+or teaching strategy was added. A fresh run will use only the candidate checkpoint,
+not the failed run's research or artifacts.
+
+All 1,936 tests pass on the full rerun, along with lint, type checking and
+dependency checks. The initial suite hit two process-cleanup timeouts; those
+tests passed both alone and in the full rerun. The website build and desktop/mobile
+preview checks pass. All 19 selection tokens in the scratch Search result survive
+the corrected preview redaction; no scratch content is given to teaching agents.

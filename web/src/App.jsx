@@ -504,7 +504,7 @@ export default function App() {
                 <p>Imprint records sensitive browser traffic, so the product treats redaction, credentials, cookies, and storage as first-class workflow steps rather than README footnotes.</p>
               </article>
               <div className="checks">
-                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions; equality markers preserve state relationships without exposing raw values.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Redaction before compile</b><span><code>generate</code> and <code>compile-playbook</code> auto-redact sessions. Long encoded API values are not classified as AWS session credentials by length alone; explicitly named session credentials remain protected.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools initialize per-run cookie/state jars from the local credential backend instead of committing plaintext secrets.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Traceable compiles</b><span><code>IMPRINT_TRACE=1</code> streams OpenInference spans, token estimates, and optional LLM/tool I/O into local Phoenix.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version.</span></div></div>

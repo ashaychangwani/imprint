@@ -16,6 +16,23 @@ const syntheticJwt = (): string =>
   ].join('.');
 
 describe('redactFreeformText (trimmed policy set)', () => {
+  it('does not classify long base64 API payloads as AWS sessions', () => {
+    const long = 'AbCdEfGhIj'.repeat(16);
+    const input = JSON.stringify({ continuation_token: long, encoded_record: long });
+    expect(redactFreeformText(input).redacted).toBe(input);
+    const framed = `)]}'\n123\n${JSON.stringify([['frame', JSON.stringify([long, 'token'])]])}`;
+    expect(redactFreeformText(framed).redacted).toBe(framed);
+  });
+
+  it('redacts explicitly named AWS credentials without deleting identical ordinary data', () => {
+    const token = 'AbCdEfGhIj'.repeat(16);
+    for (const name of ['AWS_SESSION_TOKEN', 'sessionToken', 'X-Amz-Security-Token']) {
+      const result = redactFreeformText(`${name}=${token}\ncontinuation_token=${token}`).redacted;
+      expect(result).toContain(`${name}=[REDACTED]`);
+      expect(result).toContain(`continuation_token=${token}`);
+    }
+  });
+
   it('still redacts core PII and specific secrets', () => {
     expect(redactFreeformText('email alice@example.com').redactionsCount).toBeGreaterThanOrEqual(1);
     expect(redactFreeformText('SSN 123-45-6789').redactionsCount).toBeGreaterThanOrEqual(1);

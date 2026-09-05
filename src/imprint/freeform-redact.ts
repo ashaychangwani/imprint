@@ -27,7 +27,8 @@ const FREEFORM_POLICIES: PolicyName[] = [
   Policies.BITBUCKET_TOKEN,
   Policies.AWS_ACCESS_KEY,
   Policies.AWS_SECRET_KEY,
-  Policies.AWS_SESSION_TOKEN,
+  // AWS_SESSION_TOKEN matches arbitrary 100+ character base64 payloads.
+  // Session credentials are handled by their field names below instead.
   Policies.AZURE_STORAGE_CONNECTION_STRING,
   Policies.DIGITALOCEAN_TOKEN,
   Policies.HEROKU_API_KEY,
@@ -131,6 +132,9 @@ const PROTECTED_PATTERNS = [
 const CONTEXTUAL_PROTECTED_SECRET_RE =
   /(\b(?:authorization|proxy-authorization)\b["']?\s*[:=]\s*["']?(?:bearer\s+)?|\bbearer\s+|\b(?:oauth(?:2)?(?:[_ -]?access)?[_ -]?token|access[_ -]?token)\b["']?\s*[:=]\s*["']?)([0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}|[0-9a-f]{40})(?=["'\s,;&)}\]]|$)/gi;
 
+const CONTEXTUAL_SESSION_SECRET_RE =
+  /(\b(?:aws[_-]?session[_-]?token|sessionToken|x-amz-security-token)\b["']?\s*[:=]\s*["']?)([A-Za-z0-9/+=_-]+)/gi;
+
 const REDACTOR = createRedactum({
   policies: FREEFORM_POLICIES,
   replacement: () => '[REDACTED]',
@@ -154,13 +158,15 @@ export function redactFreeformText(text: string): FreeformRedaction {
   }
 
   let contextualRedactions = 0;
-  const contextuallyRedacted = text.replace(
-    CONTEXTUAL_PROTECTED_SECRET_RE,
-    (_match, prefix: string) => {
+  const contextuallyRedacted = text
+    .replace(CONTEXTUAL_SESSION_SECRET_RE, (_match, prefix: string) => {
       contextualRedactions++;
       return `${prefix}[REDACTED]`;
-    },
-  );
+    })
+    .replace(CONTEXTUAL_PROTECTED_SECRET_RE, (_match, prefix: string) => {
+      contextualRedactions++;
+      return `${prefix}[REDACTED]`;
+    });
 
   const protectedRanges = collectProtectedRanges(contextuallyRedacted);
   if (protectedRanges.length === 0) {

@@ -93,6 +93,8 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 > [!TIP]
 > Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Credentials and PII are redacted automatically before anything reaches the LLM.
 
+Long encoded API values are not treated as AWS session credentials merely because of their length; explicitly named session credentials remain redacted.
+
 For every teach, a master agent accounts for the complete discovered operation
 set. Focused advisors review tool boundaries and parameters, focused planners
 map one tool at a time, and focused compilers build one tool at a time. The

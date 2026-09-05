@@ -69,7 +69,7 @@ src/imprint/
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
 ├── redact.ts            Credential / PII scrub
-├── freeform-redact.ts   Supplemental free-form PII/secret detection (requests plus framing-aware Flight responses; generic catch-alls excluded)
+├── freeform-redact.ts   Supplemental free-form PII/secret detection (generic catch-alls excluded; AWS session credentials require field context, not base64 length)
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
