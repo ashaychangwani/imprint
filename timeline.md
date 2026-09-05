@@ -5027,3 +5027,18 @@ exposed the blank dates; comparing the URL encoding with the recording fixed
 the field and yielded actual prices. No runtime or prompt was changed during
 this run, and no shipped solution was supplied. About 28 minutes remain for
 compilation and verification; research proof is not a compiled-tool pass.
+
+## 2026-09-05 14:12 PDT — Flights completes all five MVP tools
+
+Run `18df9d36-56ee-46a9-a712-95dd02f1a6b6` completed before its 90-minute
+deadline. Both location tools, Search, Calendar and Booking were published.
+The saved journal confirms passed contract and live checks for all five, plus
+both Search-to-Booking input bindings. Independent completion review passed.
+Five optional parameter suggestions are saved for a later finesse pass.
+This proves the scoped MVP, not every possible parameter or trip mode.
+
+The default audit immediately stopped because Claude subscription access is
+disabled, grading zero calls. It also discovered 13 tools from mixed older
+outputs. Start the real audit with Codex against an isolated copy of only
+this run's five published tools. Original artifacts remain unchanged, and no
+shipped examples are included. Hotels waits for this Flights validation.
