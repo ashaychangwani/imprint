@@ -248,6 +248,12 @@ the sent document navigation, while `recordingResponseRequestSeq` cites the
 background request whose response is returned. Navigation is not an implicit pre-step: it must be a declared
 workflow request and remains subject to the normal contract and live checks.
 
+Document provenance is not a literal destination allowlist. The final
+parameterized URL may be derived from recorded Referers, navigation events,
+links, or request data even when no Document row contains that exact URL.
+Keep the recorded document as supporting provenance and require live evidence
+for the derived destination; do not reject the route solely for that absence.
+
 Apply the same check to promised outputs. Before accepting or repairing a
 producer plan, verify that its declared result response actually exposes every
 value required by its outgoing chain edges. Rendered page text does not expose

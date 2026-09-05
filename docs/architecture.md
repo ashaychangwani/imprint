@@ -22,6 +22,9 @@ producer/consumer evidence, not just two standalone successes.
 Output repairs include the current validation metadata even in retained
 conversations. Identity mismatches name the exact field, expected value, and
 returned value so agents do not have to rediscover an opaque run identifier.
+Document provenance is not a destination allowlist. Recorded Referers, events,
+links, and request data may support a parameter-derived URL absent from Document
+rows; a live check must establish that it returns the intended response.
 
 ## Data flow
 

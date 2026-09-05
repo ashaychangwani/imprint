@@ -3293,6 +3293,9 @@ describe('navigation network response recording provenance', () => {
       { seq: 11, timestamp: 1.1, type: 'navigation', detail: 'https://example.test/results' },
       { seq: 25, timestamp: 3.5, type: 'navigation', detail: 'https://example.test/later' },
     ];
+    const navigation = workflow.requests[0];
+    if (!navigation) throw new Error('missing fixture navigation');
+    navigation.url = 'https://example.test/results?query=${param.query}';
     expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
 
     session.events = [];

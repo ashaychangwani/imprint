@@ -174,6 +174,10 @@ whose response the workflow returns. Replay provenance lists the navigation
 sequence followed by the distinct response sequence. Do not substitute one for
 the other.
 
+The document reference grounds the page, not every literal future URL. A
+parameterized destination may be derived from recorded Referers, navigation
+events, links, or request data and proved live without an exact Document row.
+
 `requestProvenance` maps only `workflow.requests`. A document load used solely
 to establish cookies or capture HTML/storage state belongs in top-level
 `workflow.bootstrap`; it does not receive an `artifactRequestIndex`. Name its

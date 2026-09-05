@@ -47,6 +47,11 @@ runtime fallback. When it is used, verify that the outer
 `recordingResponseRequestSeq` cites the selected background response. Do not
 demand exhaustive permutations or invent a generator.
 
+The document reference is provenance, not a URL allowlist. A derived destination
+can be grounded by recorded Referers, navigation events, links, or request data
+and proved live without its exact parameterized URL appearing as a Document row.
+Do not accept that absence alone as a reason the API route is unavailable.
+
 The artifact can supply `${generated.uuid}`, `${generated.epoch_ms}`,
 `${generated.epoch_s}`, `${generated.iso8601}`, and `${generated.nonce}`, and a
 request transform can implement an evidence-supported time/random computation.

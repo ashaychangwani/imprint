@@ -349,6 +349,13 @@ runtime does not decide which background response is meaningful. If the page is
 used only to mint cookies or capture state for a later direct API call, keep it
 in `workflow.bootstrap` instead.
 
+Recorded provenance identifies supporting evidence, not a URL allowlist. The
+exact parameterized destination need not appear as a recorded Document request.
+A recorded document can ground the page while recorded Referers, navigation
+events, links, or request data ground a derived destination. Use current public
+parameters to construct it, cite the supporting sequences, and test it. Absence
+of the final URL as a Document row alone does not rule out this API route.
+
 The request-transform contract is exact. The module must export a named
 function called `transform` with this signature:
 

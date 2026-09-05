@@ -1195,6 +1195,11 @@ The response example and live `occurrence` are independent. A fresh navigation
 can jump directly to a state reached later in the recording; do not change a
 proven live occurrence merely to match the example's position in that recording.
 
+The document reference is supporting provenance, not a literal URL allowlist.
+Build current destinations from evidence-backed parameters, Referers, events,
+links, or request data and verify them live. The exact generated destination
+need not have its own Document row in the recording.
+
 `capability` declares the minimum mechanism that can produce a required missing
 capture, so it affects which existing runtime transports are eligible. It does
 not infer the capture's meaning, choose a teaching strategy, or mint state.

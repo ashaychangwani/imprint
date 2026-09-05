@@ -115,6 +115,8 @@ new research when the actual strategy changes.
 The final reviewer receives the same human scope and checks requested tool
 connections rather than requiring explicitly excluded operations.
 If an agent mistypes run metadata, repair feedback supplies the exact current values.
+Recorded page references support generated API-navigation URLs; the final URL
+need not appear literally in the recording, but must be grounded and live-tested.
 
 Every teach is fresh and stays in the foreground until it reaches a terminal
 result. There are no resume, phase-window, primary-tool, or partial-selection

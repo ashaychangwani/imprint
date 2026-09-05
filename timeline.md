@@ -4867,3 +4867,20 @@ Fresh Flights run `915dc9e2-ad5b-4173-a75e-4236677322cf` started at 06:35 PDT wi
 the same combined recording, candidate-only checkpoint, and explicit five-tool
 plus Search-to-Booking requirement. It has a 90-minute hard deadline; evaluate
 real progress at 60 minutes. No old research or generated solution was supplied.
+
+## 2026-09-05 06:35–07:10 PDT — Stop unsupported playbook fallback
+
+Run `915dc9e2-ad5b-4173-a75e-4236677322cf` proved the two location calls, but
+Search, Calendar and Booking research rejected the page-generated API path.
+The researchers claimed that the exact parameterized destination needed its own
+recorded Document row. The master accepted that claim and selected playbooks.
+Stopped the run before those fallbacks compiled because they conflict with the
+user's Flights requirement and prior fresh runs had demonstrated the API route.
+
+The runtime already permits generated destinations. Clarified the researcher,
+master, planner, compiler and reviewer prompts: document references ground the
+page but do not restrict future destinations to literal recorded URLs. Referers,
+events, links and request data may ground a derived destination, which still
+requires a live test. Added a neutral recording-response provenance test with
+a parameterized destination absent from the recording. No runtime strategy or
+site-specific code changed. Focused tests: 182 pass; lint and type checking pass.
