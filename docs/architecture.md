@@ -37,6 +37,10 @@ sent. Otherwise the reviewer judges the tool's general promised output for
 the actual inputs, rather than borrowing another case's expected location,
 date, item, or price. This applies equally to research-baseline and chain calls.
 Value-bearing result evidence remains separate from factual check receipts.
+Baseline review requires a passed contract and the exact passed live or chain
+receipt being reviewed. A separate failed standalone call does not prevent
+reviewing a successful chain call. It remains a completion failure to repair;
+reviewing the chain does not overwrite or waive it.
 
 ## Data flow
 

@@ -929,10 +929,10 @@ const BaselineMvpInputSchema = BaselineMvpReviewInputSchema.superRefine((input, 
     issue(ctx, ['snapshot'], 'missing current execution proof');
     return;
   }
-  for (const check of ['contract', 'live'] as const) {
-    if (!proof.receipts.some((receipt) => receipt.check === check && receipt.status === 'passed')) {
-      issue(ctx, ['snapshot'], `${tool.id}: ${check} must be passed`);
-    }
+  if (
+    !proof.receipts.some((receipt) => receipt.check === 'contract' && receipt.status === 'passed')
+  ) {
+    issue(ctx, ['snapshot'], `${tool.id}: contract must be passed`);
   }
   const result = input.resultEvidence.payload;
   if (result.toolId !== tool.id)

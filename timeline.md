@@ -4990,3 +4990,24 @@ was stopped by the host because the master-added second search request was
 absent from Search's own research graph, although Booking research had proved
 that stage. The master is revising the split between Search and Booking and
 retaining the location tools. This is not yet a successful complete teach.
+
+## 2026-09-05 12:44 PDT — Review the successful call without hiding another failure
+
+Run `1c513a18-eb8f-4c86-af9e-a07b17ef52be` ended after about 84 minutes with
+both location tools, Search and Calendar published. Booking's standalone call
+failed, but its later compiled Search-to-Booking call passed the execution
+check in about five seconds. This is not yet a semantic approval of Booking.
+The host crashed before that review: it required a passed standalone call
+even when the result being reviewed was a successful chain call.
+
+Remove that contradictory prerequisite. Keep the passed contract and exact
+passed result receipt requirement. The failed standalone call stays visible
+and still requires repair before completion; no success is fabricated or
+failure waived. This is a site-neutral review-input fix, not a tool change.
+Hotels remains on hold until all five Flights tools and their connection work.
+
+Validation: 120 focused agent-contract tests pass, including successful chain
+review after a failed standalone call, continued rejection of that failed call,
+and continued completion failure until repair. Lint, type checking, dependency
+checks, website build and desktop/mobile inspection pass. Full suite: 1,903
+pass and one unchanged process-cleanup stress test fails; not fully green.

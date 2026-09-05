@@ -1331,46 +1331,75 @@ describe('prompts and pre-plan discovery', () => {
     expect(completionPrompt).toContain('a supplied `count` of zero');
   });
 
-  it('shows the baseline reviewer every member of the exact grouped chain call', async () => {
-    const firstEdge = at(edges, 0);
-    const input: BaselineMvpReviewInput = {
-      run: currentRun,
-      recordingIndex,
-      currentPlan,
-      snapshot,
-      toolId: detailTool.id,
-      resultEvidence: completionResultEvidence(
-        detailTool,
-        detailProof,
-        {
-          preview: '{"item_id":"item-1","variant_id":"variant-1"}',
-          shape: 'object{item_id:string,variant_id:string}',
-          count: null,
+  it.each(['passed', 'failed'] as const)(
+    'reviews a grouped chain result when standalone live is %s',
+    async (liveStatus) => {
+      const firstEdge = at(edges, 0);
+      const currentProof = structuredClone(detailProof);
+      const liveReceipt = matching(currentProof.receipts, ({ check }) => check === 'live');
+      liveReceipt.status = liveStatus;
+      liveReceipt.facts = facts(liveStatus);
+      const currentSnapshot = CurrentExecutionSnapshotSchema.parse(
+        projection(snapshot.ref.path, { ...snapshot.payload, tools: [searchProof, currentProof] }),
+      );
+      const input: BaselineMvpReviewInput = {
+        run: currentRun,
+        recordingIndex,
+        currentPlan,
+        snapshot: currentSnapshot,
+        toolId: detailTool.id,
+        resultEvidence: completionResultEvidence(
+          detailTool,
+          currentProof,
+          {
+            preview: '{"item_id":"item-1","variant_id":"variant-1"}',
+            shape: 'object{item_id:string,variant_id:string}',
+            count: null,
+          },
+          'Return the selected item and variant.',
+          firstEdge.id,
+        ),
+      };
+      const output = baselineMvpOutput(input);
+      let requestPayload: unknown;
+      await requestBaselineMvpReview(input, {
+        analyzer: {
+          async analyze(_system, payload) {
+            requestPayload = payload;
+            return { text: JSON.stringify(output) };
+          },
         },
-        'Return the selected item and variant.',
-        firstEdge.id,
-      ),
-    };
-    const output = baselineMvpOutput(input);
-    let requestPayload: unknown;
-    await requestBaselineMvpReview(input, {
-      analyzer: {
-        async analyze(_system, payload) {
-          requestPayload = payload;
-          return { text: JSON.stringify(output) };
-        },
-      },
-    });
-    expect(
-      (requestPayload as { input: { baseline: { chainInvocationEdgeIds: string[] } } }).input
-        .baseline.chainInvocationEdgeIds,
-    ).toEqual(edges.map(({ id }) => id).sort());
-    const reviewerPrompt = prompt('master-teach-baseline-mvp-review.md');
-    expect(reviewerPrompt).toContain('`chainInvocationEdgeIds`');
-    expect(reviewerPrompt).toContain('complete group');
-    expect(reviewerPrompt).toContain('another group');
-    expect(reviewerPrompt).toContain('has not\ninferred');
-  });
+      });
+      expect(
+        (requestPayload as { input: { baseline: { chainInvocationEdgeIds: string[] } } }).input
+          .baseline.chainInvocationEdgeIds,
+      ).toEqual(edges.map(({ id }) => id).sort());
+      if (liveStatus === 'failed') {
+        expect(
+          mechanicalProofFailures(currentPlan.payload, currentSnapshot, detailTool.id),
+        ).toContain(`${detailTool.id}: live must be passed`);
+        const failedLiveInput = {
+          ...input,
+          resultEvidence: completionResultEvidence(detailTool, currentProof, {
+            preview: '{}',
+            shape: 'object',
+            count: 0,
+          }),
+        };
+        expect(() =>
+          parseBaselineMvpReviewOutput(
+            JSON.stringify(baselineMvpOutput(failedLiveInput)),
+            failedLiveInput,
+          ),
+        ).toThrow('baseline MVP review requires a passed current result receipt');
+      }
+      const reviewerPrompt = prompt('master-teach-baseline-mvp-review.md');
+      expect(reviewerPrompt).toContain('`chainInvocationEdgeIds`');
+      expect(reviewerPrompt).toContain('complete group');
+      expect(reviewerPrompt).toContain('another group');
+      expect(reviewerPrompt).toContain('has not\ninferred');
+    },
+  );
 
   it('fails closed on stale baseline evidence while preserving a bounded repair reason', () => {
     const input = baselineMvpInput();
