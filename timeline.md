@@ -4804,3 +4804,10 @@ and desktop/mobile inspection pass. Hotels' newest original by `startedAt` is
 June 4 at 21:20 UTC (155 requests). Filename sorting incorrectly ranks an older
 prefixed recording first; the next teach explicitly selects the June 4 file.
 That separate selector defect is recorded in TODOS.
+
+Full validation passed: 1,894 tests, lint, type checking, dependency and circular
+checks. The user clarified that Hotels must wait until all Flights tools reach
+a usable verified MVP, including the Search-to-Booking chain. Hotels was not
+started. Fresh Flights run `23f58f7d-7ac2-4900-97c6-50f8415aa904` started at 04:13
+PDT on `cd68a6d`, with the same explicitly combined recording and candidate-only
+checkpoint. Research and builds start fresh; the hard timeout remains 90 minutes.
