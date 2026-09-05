@@ -5118,3 +5118,18 @@ on `86b8de1`, with the same June 4 recording and no prior candidate/research
 checkpoint or generated solution. Review at 15:58; hard deadline 16:28 PDT.
 Disk space is tight again (665 MiB), so watch for storage errors as well as
 artifact failures; do not turn them into semantic diagnoses.
+
+## 2026-09-05 15:47 PDT — Restart Hotels after disk recovery
+
+Run `f99cdadb-b5e0-466a-a67f-b054b9683de9` exited with code 1 during its
+compiler repair around 15:27. Its log has no terminal explanation and its
+journal still says active. The machine had about 140 MiB free; this is a
+suspected contributor, not an established cause. Keep the run untouched.
+Its first compiled empty hotel result had correctly failed the core review.
+
+The user restored space, and a fresh check confirmed about 16 GiB free.
+Start `a2846e61-4c51-447e-8692-c991dd8b8b5c` on the same `86b8de1` code and
+same June 4 recording, without old research or generated artifacts. The first
+launch could not find Bun through env; the explicit installed Bun path and
+its bin directory in PATH started successfully. No code change was needed.
+Review at 16:47 PDT; hard deadline 17:17 PDT. Continue watching disk space.
