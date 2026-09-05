@@ -2602,69 +2602,23 @@ function resolveRecordedNetworkResponse(
       failure: `workflow request index ${requestIndex} navigation.networkResponse references recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq}, but that recorded response does not exist`,
     };
   }
-  const nextRecordingBoundary = session.narration
-    .filter((entry) => entry.seq > outerRequestSeq && entry.text.startsWith('[Recording from '))
-    .sort((a, b) => a.seq - b.seq)[0]?.seq;
-  const navigationEvents = session.events
-    .filter(
-      (event) =>
-        event.type === 'navigation' &&
-        event.seq > outerRequestSeq &&
-        (nextRecordingBoundary === undefined || event.seq < nextRecordingBoundary),
-    )
-    .sort((a, b) => a.seq - b.seq);
-  const nextNavigationSeq = navigationEvents[1]?.seq;
-  const scopeEndSeq = Math.min(
-    nextRecordingBoundary ?? Number.POSITIVE_INFINITY,
-    nextNavigationSeq ?? Number.POSITIVE_INFINITY,
-  );
+  // The cited response is an offline example, not a position in the live
+  // response stream. A generated navigation can jump directly to a state that
+  // the recording reached after several searches or in another session.
   if (
-    matcher.recordingResponseRequestSeq < outerRequestSeq ||
-    matcher.recordingResponseRequestSeq >= scopeEndSeq
+    !declared.url.includes(matcher.urlIncludes) ||
+    (matcher.method && declared.method.toLowerCase() !== matcher.method.toLowerCase()) ||
+    (matcher.resourceType &&
+      declared.resourceType.toLowerCase() !== matcher.resourceType.toLowerCase())
   ) {
     return {
-      failure: `workflow request index ${requestIndex} navigation.networkResponse recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq} falls outside the recorded navigation scope that starts at recordingRequestSeq ${outerRequestSeq}`,
+      failure: `workflow request index ${requestIndex} navigation.networkResponse recorded response seq ${declared.seq} does not match the declared URL/method/resource type`,
     };
   }
-  const matches = session.requests
-    .slice(outerIndex)
-    .filter((recorded) => {
-      if (recorded.seq >= scopeEndSeq) return false;
-      if (!recorded.response || !recorded.url.includes(matcher.urlIncludes)) return false;
-      if (matcher.method && recorded.method.toLowerCase() !== matcher.method.toLowerCase()) {
-        return false;
-      }
-      if (
-        matcher.resourceType &&
-        recorded.resourceType.toLowerCase() !== matcher.resourceType.toLowerCase()
-      ) {
-        return false;
-      }
-      return true;
-    })
-    .sort((left, right) => left.seq - right.seq);
-  if (matches.length === 0) {
-    return {
-      failure: `workflow request index ${requestIndex} navigation.networkResponse has no matching recorded response in the navigation scope that starts at recordingRequestSeq ${outerRequestSeq}`,
-    };
-  }
-  const occurrence = matcher.occurrence ?? 1;
-  const selected = matches[occurrence - 1];
-  if (!selected) {
-    return {
-      failure: `workflow request index ${requestIndex} navigation.networkResponse occurrence ${occurrence} has no matching recorded response in its navigation scope (found ${matches.length})`,
-    };
-  }
-  if (selected.seq !== matcher.recordingResponseRequestSeq) {
-    return {
-      failure: `workflow request index ${requestIndex} navigation.networkResponse occurrence ${occurrence} selects recorded response seq ${selected.seq}, not declared recordingResponseRequestSeq ${matcher.recordingResponseRequestSeq}`,
-    };
-  }
-  return { recorded: selected };
+  return { recorded: declared };
 }
 
-/** Factual, site-neutral validation that offline response evidence obeys the
- * same scoped matcher and occurrence declared for live CDP navigation. */
+/** Validate the explicitly cited offline example independently of live ordering. */
 export function networkResponseRecordingFailures(workflow: Workflow, session: Session): string[] {
   return workflow.requests.flatMap((request, index) => {
     if (!request.navigation?.networkResponse) return [];

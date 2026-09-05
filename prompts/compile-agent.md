@@ -1186,6 +1186,9 @@ These two recorded origins stay separate. The workflow request's top-level
 whose recorded response body/status/headers stand in for that live result
 during offline rendering. Copy both exact sequences from evidence; never use
 the background request sequence as the navigation request's provenance.
+The response example and live `occurrence` are independent. A fresh navigation
+can jump directly to a state reached later in the recording; do not change a
+proven live occurrence merely to match the example's position in that recording.
 
 `capability` declares the minimum mechanism that can produce a required missing
 capture, so it affects which existing runtime transports are eligible. It does

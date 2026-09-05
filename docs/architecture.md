@@ -159,7 +159,10 @@ completed body. The workflow keeps two exact recording origins: the outer
 `recordingRequestSeq` identifies the document navigation being sent, while
 `networkResponse.recordingResponseRequestSeq` identifies the background
 request whose recorded response supplies body, status, and headers during
-offline checks. It does not decide which background call is semantically
+offline checks. That explicit example is independent of the live occurrence:
+it may come from a later navigation or another combined session. Offline checks
+validate the cited response and endpoint, without requiring its recorded order
+to match a fresh page load. It does not decide which background call is semantically
 meaningful, and the capability does not automatically change a tool's rung or
 share browser state with another tool.
 

@@ -3242,20 +3242,18 @@ describe('navigation network response recording provenance', () => {
     return { session, workflow };
   }
 
-  it('validates URL, method, resource type, scoped occurrence, and both recorded sequences', () => {
+  it('validates the cited response matcher and sequences independently of live occurrence', () => {
     const { session, workflow } = fixture();
     expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
 
     const matcher = workflow.requests[0]?.navigation?.networkResponse;
     if (!matcher || !workflow.requests[0]) throw new Error('bad fixture');
     matcher.recordingResponseRequestSeq = 15;
-    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
-      'selects recorded response seq 20',
-    );
+    expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
     matcher.recordingResponseRequestSeq = 20;
     matcher.urlIncludes = '/missing';
     expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
-      'no matching recorded response',
+      'does not match the declared URL/method/resource type',
     );
     matcher.urlIncludes = '/api/results';
     matcher.method = 'GET';
@@ -3265,17 +3263,20 @@ describe('navigation network response recording provenance', () => {
     expect(networkResponseRecordingFailures(workflow, session)).not.toEqual([]);
     matcher.resourceType = 'XHR';
     matcher.occurrence = 3;
-    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
-      'occurrence 3',
-    );
+    expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
     matcher.occurrence = 2;
+    matcher.recordingResponseRequestSeq = 999;
+    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
+      'that recorded response does not exist',
+    );
+    matcher.recordingResponseRequestSeq = 20;
     workflow.requests[0].recordingRequestSeq = 999;
     expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
       'outer recordingRequestSeq 999 does not exist',
     );
   });
 
-  it('does not accept response evidence from a later navigation or combined recording', () => {
+  it('accepts an explicit response example from a later navigation or combined recording', () => {
     const { session, workflow } = fixture();
     const matcher = workflow.requests[0]?.navigation?.networkResponse;
     const later = session.requests.find((request) => request.seq === 30);
@@ -3292,9 +3293,7 @@ describe('navigation network response recording provenance', () => {
       { seq: 11, timestamp: 1.1, type: 'navigation', detail: 'https://example.test/results' },
       { seq: 25, timestamp: 3.5, type: 'navigation', detail: 'https://example.test/later' },
     ];
-    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
-      'falls outside the recorded navigation scope',
-    );
+    expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
 
     session.events = [];
     session.narration = [
@@ -3304,13 +3303,16 @@ describe('navigation network response recording provenance', () => {
         text: '[Recording from 2026-08-30 00:00] https://example.test/later',
       },
     ];
-    expect(networkResponseRecordingFailures(workflow, session).join('\n')).toContain(
-      'falls outside the recorded navigation scope',
-    );
+    expect(networkResponseRecordingFailures(workflow, session)).toEqual([]);
   });
 
   it('cross-references captures and referenced regexes against the selected response', () => {
     const { session, workflow } = fixture();
+    // Live captures the first new response; offline reads the explicitly chosen
+    // later recorded example, including its headers and response-derived state.
+    const matcher = workflow.requests[0]?.navigation?.networkResponse;
+    if (!matcher) throw new Error('bad fixture');
+    matcher.occurrence = 1;
     expect(crossReferenceCaptures(workflow, session).failures).toEqual([]);
     expect(crossReferenceReferencedStateCaptures(workflow, session).failures).toEqual([]);
 
@@ -3465,7 +3467,7 @@ describe('compare_rendered_requests compile tool', () => {
       expect(invalid?.isError).toBe(true);
       expect(JSON.parse(invalid?.result ?? '{}')).toMatchObject({
         state: 'invalid_recording_response_provenance',
-        failures: [expect.stringContaining('not declared recordingResponseRequestSeq 30')],
+        failures: [expect.stringContaining('recorded response seq 30 does not match')],
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });

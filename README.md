@@ -118,7 +118,8 @@ For an API operation that only the page can construct, a workflow navigation
 may explicitly select one matching live background response and return its body
 to the parser. The teaching agent derives that matcher from recording evidence;
 the runtime does not guess which request matters or turn the capability into a
-site rule. Playbooks remain the final fallback.
+site rule. The recorded response used for offline checks is separate from the
+response order in a fresh live call. Playbooks remain the final fallback.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.

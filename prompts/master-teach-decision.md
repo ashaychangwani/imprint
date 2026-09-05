@@ -223,7 +223,10 @@ to reproduce. When the page must construct one result request, an agent may set
 `navigation.networkResponse:{urlIncludes,recordingResponseRequestSeq,method?,resourceType?,occurrence?}`;
 the mechanically selected completed response body becomes the navigation
 request's raw result and can feed the parser or a later declared request. The
-runtime counts occurrence by matching request-start order within the recorded navigation scope. The runtime does not infer the matcher or semantic meaning. Use this site-neutral
+runtime counts occurrence within the fresh live navigation. The explicitly cited
+recorded response is an offline example; its position in the recording does not
+set the live occurrence, and it may come from another recorded navigation.
+The runtime does not infer the matcher or semantic meaning. Use this site-neutral
 route only after cheaper direct API constructions cannot reproduce page-owned
 transport. Keep its two origins exact: the outer `recordingRequestSeq` cites
 the sent document navigation, while `recordingResponseRequestSeq` cites the

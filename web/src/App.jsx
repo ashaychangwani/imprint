@@ -415,7 +415,7 @@ export default function App() {
             <div className="proof-copy">
               <span className="kicker">Product proof</span>
               <h2 id="proof-title">Two replays are better than one brittle script.</h2>
-              <p>Each taught tool compiles to a network workflow whenever the recorded operation supports one; a DOM playbook is only the final fallback. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When a page must construct the data request itself, an API workflow can explicitly collect its matching background response through CDP.</p>
+              <p>Each taught tool compiles to a network workflow whenever the recorded operation supports one; a DOM playbook is only the final fallback. When HTTP can mint cookies or CSRF state, Imprint stays on fetch. When a page must construct the data request itself, an API workflow can explicitly collect its matching background response through CDP. Recorded examples support offline checks without forcing fresh calls to repeat the recording’s request order.</p>
             </div>
             <div className="artifact-stack" aria-label="Generated artifacts">
               <article className="artifact"><small>Fast path</small><h3>workflow.json</h3><p>Structured API replay with named state captures for low-latency tasks and cron jobs.</p></article>

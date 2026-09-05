@@ -4692,3 +4692,21 @@ chosen recording example from the live occurrence counter and preserve factual
 checks that the cited response exists and matches the endpoint. No runtime or
 prompt change was made during this diagnostic. The scratch report and runnable
 artifacts are in `/tmp/imprint-manual-compile-pggaC9`.
+
+## 2026-09-05 — Separate recorded examples from live response order
+
+Removed the compile check that counted live response occurrences within a
+recorded navigation or combined-session boundary. Offline checks now use the
+response explicitly cited by the agent. Both recorded references must exist,
+the cited response must have a body/status record, and its URL, method, and
+resource type must agree with the matcher. Live response selection is unchanged.
+The master and compiler prompts now explain this distinction directly.
+
+The two scratch workflows that previously failed the recording-order check now
+pass it unchanged. All 64 compile-tool tests pass, including a neutral fixture
+where the first live response uses a later recorded example and its captures.
+Formatting/lint, type checking, and the website build pass. A fresh Flights
+teach will reuse only the candidate checkpoint and the same combined recording;
+research and compilation will start fresh, with a 90-minute limit and a human
+judgment review at 60 minutes. The scratch implementations are not supplied to
+the teaching agents.
