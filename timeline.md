@@ -5238,7 +5238,7 @@ optional breadth may wait, but values that are already returned must mean what
 their field names claim. Do not introduce a runtime URL/price classifier. Also
 retain the distinction between requested inputs and server-confirmed output.
 
-### September 5, 17:23 PDT — Clarify correctness, without a new runtime rule
+### September 5, 17:21 PDT — Clarify correctness, without a new runtime rule
 
 Updated the existing compiler and MVP reviewer guidance: inspect actual values,
 do not treat broad pattern matches as established meanings, and do not excuse
@@ -5247,3 +5247,44 @@ to the master, which chooses repair or deferral of a genuinely optional field.
 Updated the matching documentation and website. All 121 focused agent tests,
 lint, type checking, dependency checks and website build pass. Desktop and mobile
 layouts were inspected. This focused check does not claim a new full-suite pass.
+
+Fresh run `736df731-7839-41e8-a51b-4174454be314` started at 17:21 on
+`d37d32e`, using only the same June 4 recording. By 17:41 it had completed one
+published search MVP and independent completion review. The baseline reviewer
+rejected two empty results before accepting nine hotel matches. This is not
+yet independent proof of reliable output or parameter behavior.
+
+At 17:42, started the separate audit using only this run's published tool in
+`/tmp/imprint-hotels-values-audit-mMDRcF`. No previous generated tools or examples
+were mixed into the audit. Log: `/tmp/imprint-hotels-values-audit.log`.
+
+### September 5, 17:47 PDT — Hotels improves to 77.8%, adults still unresolved
+
+The independent audit graded four calls correct and one broken, plus three
+working parameters and one broken: seven correct units out of nine. Nothing
+was excluded. Destination and both dates worked in these tests. The four-adult
+call echoed four at the top level but returned two in each hotel's stay data.
+This remains below the requested approximate 80% target, and the core input
+failure should not be dismissed just because the score is close.
+
+The generated request expresses the stay as natural-language search text. The
+parser labels an unlabeled stay-array position as adults and can fall back to
+the input. Therefore the audit establishes contradictory output, but inspection
+alone does not yet prove whether the request ignored occupancy, the parser
+mislabeled the field, or both. Investigate that distinction before another fix.
+The previous image-URL price corruption was not reported in this audit.
+
+### September 5, 17:54 PDT — Research overstated its guest-count proof
+
+The saved researcher conversation contains one test, with two adults, followed
+by a proven handoff. It says finding an adult-count value of two proves the
+changed guest count reached the search request. There was no live contrast
+demonstrating that this field responds to a guest-count change. The compiler
+later labels a matching array position as adults. This explains the unsupported
+handoff, but does not settle whether that source position actually means adults.
+
+The existing prompt asks for a materially different core-input set, but a
+different destination/date set alone can leave another core mapping untested.
+Keep the correction focused on evidence quality: choose discriminating values
+for claimed core mappings and distinguish verified mappings from assumptions.
+Do not add a host-enforced test count or a Hotels-specific occupancy rule.
