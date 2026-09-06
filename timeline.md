@@ -5760,3 +5760,25 @@ The parser also labels currency USD without deriving it from the response;
 the current audit does not validate that label across locales. No artifact
 was edited to obtain this score. Flights remains at its original 88.9% audit.
 Stop the completed run's monitor rather than continuing to poll finished work.
+
+### September 6, 16:21 PDT — Start repeatability runs with token accounting
+
+At the user's request, start fresh Flights discovery and compilation on the
+same September 4 combined recording, without the old candidate checkpoint.
+Keep the requested scope: locations, search, calendar grid, and booking.
+Code and prompts remain at `2f277b7`. Outputs go into a clean isolated home
+under `/tmp/imprint-repeatability-P2oX4B`, leaving installed working tools
+untouched. Flights audit, then fresh Hotels teach and audit, will follow
+sequentially. Each teach has a 90-minute limit and a progress assessment at
+60 minutes. No example solutions are given to teaching agents.
+
+A temporary local receiver captures existing tracing events, including model
+and token counts, without changing runtime code or enabling prompt/body
+capture. Its decoded records are in that directory's `spans.jsonl`; the first
+triage usage event was received successfully. Count uncached input, cache
+reads, cache writes, and output without double-counting parent totals. Report
+teach and audit costs separately, mark missing counts unknown, and preserve
+failed attempts. Prices will be API-equivalent estimates, not subscription
+invoices, using current official model rates and applicable long-input rates.
+The five-minute monitor will manage the sequential runs and report material
+progress and final results. Initial free disk space was 4.4 GiB.
