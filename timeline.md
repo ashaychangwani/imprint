@@ -5442,3 +5442,29 @@ website build and desktop/mobile inspection pass. Full suite: 1,907 passed and
 the existing process-cleanup stress test failed; do not claim the suite green.
 Fresh teach validation is pending: disk is only about 1.3 GiB free and Chrome
 has already reported cache-creation failures. No user data was deleted.
+
+### September 6, 04:24 PDT — Start fresh validation after user says proceed
+
+Started fresh Hotels run `ef943a0f-a174-4b28-8c9c-a848a83c87e5` on `1dc502b`
+using the explicitly selected June 4, 21:20 recording. No earlier research,
+compiled artifacts, or example solutions were supplied. Disk recovered to
+2.2 GiB, still tight; use normal logging and monitor space and browser errors.
+The run has a 90-minute deadline and a progress review at 60 minutes. This tests
+whether the final reviewer now sees earlier rejected results rather than only
+successful execution receipts. Discovery has started; success is not yet proven.
+
+### September 6, 04:37 PDT — Partial research exposed incomplete repair feedback
+
+The fresh run stopped before planning. Research correctly recognized that its
+destination searches returned data but the dates and guest count still defaulted.
+Its partial answer omitted the complete candidate, test reference and proof-gap
+list. The validator reported the missing candidate, then returned early, hiding
+the other missing fields. The one allowed repair fixed the first omission but
+failed on the previously hidden test-reference requirement.
+
+Changed validation to report independent handoff omissions together. No new
+requirements, retry loops, site rules or automatic evidence selection were added.
+A neutral regression reproduces the incomplete output and proves all missing
+fields reach the repair turn, which can then return a valid partial handoff.
+All 166 focused tests, lint, types and dependency checks pass. The previous
+semantic-history fix was not exercised because compilation was never reached.

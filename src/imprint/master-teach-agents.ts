@@ -371,6 +371,16 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
         issue(ctx, ['missingProof'], 'blocked research must state its factual blocker in reason');
       return;
     }
+    // Report independent handoff omissions together, before candidate validation
+    // can return early. The agent gets one repair turn, not one per missing field.
+    if (output.action === 'partial' || output.action === 'proven') {
+      if (!output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], `${output.action} research must cite its exact test`);
+      if (output.action === 'partial' && !output.missingProof)
+        issue(ctx, ['missingProof'], 'partial research requires the exact missing proof');
+      if (output.action === 'proven' && output.missingProof)
+        issue(ctx, ['missingProof'], 'proven research cannot have missing proof');
+    }
     const candidate = output.candidate;
     if (!candidate) {
       issue(ctx, ['candidate'], `${output.action} research requires a complete candidate`);
@@ -450,10 +460,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
         issue(ctx, ['missingProof'], 'a new test cannot claim a settled proof gap');
       return;
     }
-    if (!output.basedOnObservationId) {
-      issue(ctx, ['basedOnObservationId'], `${output.action} research must cite its exact test`);
-      return;
-    }
+    if (!output.basedOnObservationId) return;
     const observation = input.observations.find(({ id }) => id === output.basedOnObservationId);
     if (!observation) {
       issue(ctx, ['basedOnObservationId'], 'unknown API-research observation');
@@ -467,10 +474,6 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       );
     if (observation.candidateSha256 !== apiResearchCandidateSha256(candidate))
       issue(ctx, ['candidate'], `${output.action} candidate differs from the tested request`);
-    if (output.action === 'partial' && !output.missingProof)
-      issue(ctx, ['missingProof'], 'partial research requires the exact missing proof');
-    if (output.action === 'proven' && output.missingProof)
-      issue(ctx, ['missingProof'], 'proven research cannot have missing proof');
   });
 }
 function validateFocusedPlannerEdges(

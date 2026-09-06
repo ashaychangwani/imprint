@@ -69,6 +69,10 @@ by this path; this remains a separate verification limitation.
 Planner guidance makes this limitation explicit and asks it to select a coherent
 first case that challenges weak core evidence, not simply repeat research inputs.
 Any remaining required gap stays explicit for the master; optional breadth waits.
+Research handoff validation reports independent missing fields before returning
+on an absent candidate. Its single repair turn therefore sees missing candidate,
+observation reference and proof gaps together, not one newly revealed error per
+attempt. Exact tested-candidate matching remains unchanged.
 Final review receives a compact history of baseline semantic reviews, including
 inputs, reasons, plan revisions and immutable build/receipt/review references.
 Transport success does not erase a rejected result. The reviewer decides whether

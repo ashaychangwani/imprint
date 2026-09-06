@@ -1947,6 +1947,44 @@ describe('prompts and pre-plan discovery', () => {
     );
     expect(JSON.stringify(followUpTurn)).not.toContain('toolId');
 
+    const incompleteHandoff = JSON.stringify({
+      binding: output.binding,
+      action: 'partial',
+      candidateSha256: observation.candidateSha256,
+      reason: 'The response works, but the required limit is not yet proven.',
+    });
+    for (const diagnostic of [
+      'Unrecognized key',
+      'partial research requires a complete candidate',
+      'partial research must cite its exact test',
+      'partial research requires the exact missing proof',
+    ]) {
+      expect(() => parseApiResearchOutput(incompleteHandoff, input)).toThrow(diagnostic);
+    }
+    let repairCalls = 0;
+    const partial = {
+      ...output,
+      action: 'partial' as const,
+      missingProof: ['The required limit is not yet proven.'],
+    };
+    expect(
+      await requestApiResearchStep(input, {
+        provider: 'codex-cli',
+        analyzer: {
+          async analyze(_system, payload) {
+            repairCalls += 1;
+            if (repairCalls === 1) return { text: incompleteHandoff };
+            const feedback = JSON.stringify(payload);
+            expect(feedback).toContain('partial research requires a complete candidate');
+            expect(feedback).toContain('partial research must cite its exact test');
+            expect(feedback).toContain('partial research requires the exact missing proof');
+            return { text: JSON.stringify(partial) };
+          },
+        },
+      }),
+    ).toEqual(partial);
+    expect(repairCalls).toBe(2);
+
     const invalidModeCandidate = structuredClone(candidate);
     const invalidModeRequest = invalidModeCandidate.workflow.requests[0];
     if (!invalidModeRequest) throw new Error('test candidate has no request');

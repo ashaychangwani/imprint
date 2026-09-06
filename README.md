@@ -137,6 +137,8 @@ Live verification uses the planner's selected test inputs, not a replacement
 with the research baseline; the proven backend remains reusable.
 The planner chooses that first live case to challenge weak core evidence;
 additional unexecuted cases are not claimed as coverage.
+Research handoff repair reports independent missing fields together, so one
+repair turn can correct the candidate, test reference, and remaining proof gaps.
 Final review also sees prior semantic rejections and their actual inputs, so a
 later passing baseline does not silently erase an unresolved core failure.
 MVP reviewers check returned values against their claimed meaning: optional
