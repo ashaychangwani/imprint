@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Agents inspect saved live results on demand without repeating requests. Repair feedback and prior result rejections stay visible. Unresolved operations remain counted even with no planned tools. Optional breadth can wait; core failures cannot.',
+    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Agents inspect saved live results on demand and trace returned values through the checked parser. Input echoes are not proof. Repair feedback, prior rejections and unresolved operations stay visible. Optional breadth can wait; core failures cannot.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {

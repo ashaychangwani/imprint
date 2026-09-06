@@ -955,6 +955,8 @@ const BaselineMvpInputSchema = BaselineMvpReviewInputSchema.superRefine((input, 
     issue(ctx, ['snapshot'], 'missing current execution proof');
     return;
   }
+  if (input.resultDerivation && !same(input.resultDerivation.buildRef, proof.currentBuildRef))
+    issue(ctx, ['resultDerivation', 'buildRef'], 'parser evidence belongs to another build');
   if (
     !proof.receipts.some((receipt) => receipt.check === 'contract' && receipt.status === 'passed')
   ) {
@@ -1010,7 +1012,11 @@ function baselineMvpOutputSchema(input: BaselineMvpReviewInput) {
         ({ ref }) => refKey(ref) === refKey(input.resultEvidence.payload.resultReceiptRef),
       );
     const authorized = new Set(
-      [input.resultEvidence.ref, ...(resultReceipt ? [resultReceipt.ref] : [])].map(refKey),
+      [
+        input.resultEvidence.ref,
+        ...(resultReceipt ? [resultReceipt.ref] : []),
+        ...(input.resultDerivation ? [input.resultDerivation.artifactRef] : []),
+      ].map(refKey),
     );
     const cited = new Set(output.evidenceRefs.map(refKey));
     if (!cited.has(refKey(input.resultEvidence.ref)))
@@ -1083,6 +1089,7 @@ function baselineMvpReviewerPromptInput(input: BaselineMvpReviewInput) {
     throw new Error('validated baseline MVP chain invocation is unavailable');
   return BaselineMvpReviewerPromptInputSchema.parse({
     binding,
+    ...(input.resultDerivation ? { resultDerivation: input.resultDerivation } : {}),
     intendedOperation: {
       toolName: tool.candidate.toolName,
       description: tool.candidate.description,

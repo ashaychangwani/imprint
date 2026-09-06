@@ -81,6 +81,13 @@ slice or searches literal text in that saved result; no network call or candidat
 edit occurs. Initial prompts keep compact previews, while retained follow-ups can
 inspect HTML attributes, embedded state or JSON beyond those prefixes. This does
 not automatically expose intermediate responses or a page behind a captured XHR.
+The baseline reviewer also receives a bounded copy of the parser referenced by
+the exact checked build, read from its immutable artifact manifest. This is
+evidence for tracing returned values, not a code-quality review or a host field
+classifier. The reviewer decides whether the actual result supports the core
+promise independently of copied inputs. Audit guidance distinguishes parameter
+effects from input echoes and ordinary variation between calls; an identical-input
+control may help, but the runtime does not mandate a new testing quota.
 Final review receives a compact history of baseline semantic reviews, including
 inputs, reasons, plan revisions and immutable build/receipt/review references.
 Transport success does not erase a rejected result. The reviewer decides whether

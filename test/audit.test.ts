@@ -1049,6 +1049,9 @@ describe('audit prompt construction', () => {
     expect(prompt).toContain('A single unchanged comparison is not enough for conditional inputs');
     expect(prompt).toContain('An empty result is not automatically broken');
     expect(prompt).toContain('Preserve that ambiguity for the compiler or human reviewer');
+    expect(prompt).toContain('Echoed inputs, including fields labeled `applied` or `effective`');
+    expect(prompt).toContain('repeat the baseline as a control when useful');
+    expect(prompt).toContain('A changed list by itself is not proof of an unrelated parameter');
     expect(prompt).toContain('at most one recovery authentication call');
     expect(prompt).toContain('classify any later `AUTH_EXPIRED` result as `infra`');
   });

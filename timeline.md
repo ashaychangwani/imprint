@@ -5552,3 +5552,22 @@ Diagnostic logs: `/tmp/imprint-hotels-live-text-occupancy-check.log` and
 `/tmp/imprint-hotels-live-text-occupancy-labels.log`. Diagnostic Chrome closed;
 no teach or audit is running. Next investigate why review accepted an input echo
 and noisy ordering as proof, before another compile. No site-specific policy.
+
+### September 6, 05:56 PDT — Give result review the missing value-origin evidence
+
+The baseline reviewer received only parsed output and was explicitly told not
+to inspect code. It therefore saw fields named `applied` but not that they copied
+caller parameters. Added a bounded parser-source projection from the exact
+checked build's immutable manifest, with build/artifact references and an explicit
+truncation flag. The agent may trace value origins, not review code quality or
+invent server mismatches. Runtime does not classify fields or forbid echoes.
+
+Audit instructions also allowed list changes to stand in for parameter effects.
+Clarified that echoed inputs and noisy ordering are not sufficient evidence;
+agents may use a repeated baseline as a control when useful, without a runtime
+quota. A neutral controller test proves current parser evidence reaches review;
+the prompt-projection test verifies delivery and rejects another build's source.
+All 230 focused research, controller, agent and audit tests pass, along with
+lint, type checks, dependency checks and desktop/mobile website validation.
+The new parser artifact may be cited as supplied evidence; no hidden citation
+requirement was introduced. Fresh teach validation follows this checkpoint.

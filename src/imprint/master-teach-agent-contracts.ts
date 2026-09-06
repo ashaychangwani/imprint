@@ -612,6 +612,12 @@ export type CompletionToolResultEvidence = z.infer<typeof CompletionToolResultEv
  * mechanically verified build is a credible usable MVP. The richer host view
  * is validated before the analyzer receives the focused projection below.
  */
+const ResultDerivationSchema = strictObject({
+  buildRef: ContentAddressedRefSchema,
+  artifactRef: ContentAddressedRefSchema,
+  source: utf8Text(0, 16_000),
+  truncated: z.boolean(),
+});
 export const BaselineMvpReviewInputSchema = strictObject({
   run: CurrentPlanBindingSchema,
   recordingIndex: RecordingIndexSchema,
@@ -619,6 +625,7 @@ export const BaselineMvpReviewInputSchema = strictObject({
   snapshot: CurrentExecutionSnapshotSchema,
   toolId: PromptToolIdSchema,
   resultEvidence: CompletionToolResultEvidenceSchema,
+  resultDerivation: ResultDerivationSchema.optional(),
 });
 export type BaselineMvpReviewInput = z.infer<typeof BaselineMvpReviewInputSchema>;
 const BaselineMvpReviewBindingSchema = CurrentPlanBindingSchema.extend({
@@ -631,6 +638,7 @@ const BaselineMvpReviewBindingSchema = CurrentPlanBindingSchema.extend({
 }).strict();
 export const BaselineMvpReviewerPromptInputSchema = strictObject({
   binding: BaselineMvpReviewBindingSchema,
+  resultDerivation: ResultDerivationSchema.optional(),
   intendedOperation: strictObject({
     toolName: SemanticToolCandidateSchema.shape.toolName,
     description: SemanticToolCandidateSchema.shape.description,

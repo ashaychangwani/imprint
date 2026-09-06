@@ -4722,6 +4722,48 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('gives the MVP reviewer parser source from the exact checked build', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const source =
+        'export function extract(raw, context) { return { applied: context.params, items: raw.items }; }';
+      let reviews = 0;
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-parser-origin',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: (input) => {
+          reviews += 1;
+          expect(input.resultDerivation?.source).toBe(source);
+          expect(input.resultDerivation?.truncated).toBe(false);
+          const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
+          expect(input.resultDerivation?.buildRef).toEqual(proof?.currentBuildRef);
+          return baselineMvpReview(input, 'revision_required');
+        },
+      });
+      await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: syntheticSessionPath(root),
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          compileFocusedTool: async (input) => {
+            if (!base.compileFocusedTool) throw new Error('missing fixture compiler');
+            const compiled = await base.compileFocusedTool(input);
+            compiled.workflow.parserModule = './parser.ts';
+            writeFileSync(compiled.workflowPath, JSON.stringify(compiled.workflow));
+            writeFileSync(join(compiled.toolDir, 'parser.ts'), source);
+            return compiled;
+          },
+        },
+      );
+      expect(reviews).toBe(1);
+    });
+  });
+
   it('counts unresolved discoveries when the reviewed plan contains no tools', async () => {
     await withTemporaryImprintHome(async (root) => {
       const base = lifecycleFailureFixture({

@@ -142,6 +142,8 @@ repair turn can correct the candidate, test reference, and remaining proof gaps.
 Blocked terminal counts include unresolved discoveries even when no tool was planned.
 Researchers can inspect or search bounded portions of retained live results,
 including HTML attributes and embedded state, without repeating the API call.
+MVP reviewers receive the checked build's parser to distinguish observed values
+from input echoes; audits require an attributable effect, not merely changed ordering.
 Final review also sees prior semantic rejections and their actual inputs, so a
 later passing baseline does not silently erase an unresolved core failure.
 MVP reviewers check returned values against their claimed meaning: optional

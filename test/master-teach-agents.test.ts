@@ -1316,6 +1316,22 @@ describe('prompts and pre-plan discovery', () => {
       query: 'fixture query',
     });
     expect(requestPayload.validationContext.binding).toEqual(baselineMvpBinding(input));
+    input.resultDerivation = {
+      buildRef: output.binding.currentBuildRef,
+      artifactRef: { path: 'objects/parser.ts', sha256: sha('a') },
+      source:
+        'export function extract(raw, context) { return { applied: context.params, items: raw.items }; }',
+      truncated: false,
+    };
+    output.evidenceRefs.push(input.resultDerivation.artifactRef);
+    await requestBaselineMvpReview(input, { analyzer });
+    expect((seen[1] as { input: { resultDerivation: unknown } }).input.resultDerivation).toEqual(
+      input.resultDerivation,
+    );
+    input.resultDerivation.buildRef = { ...output.binding.currentBuildRef, sha256: sha('9') };
+    await expect(requestBaselineMvpReview(input, { analyzer })).rejects.toThrow(
+      'parser evidence belongs to another build',
+    );
   });
 
   it('does not let an empty-allowed case weaken a retrieval MVP promise', () => {

@@ -114,6 +114,7 @@ import {
   recordingIndexFromSession,
 } from './master-teach-prompt-projections.ts';
 import {
+  ArtifactManifestRecordSchema,
   type FreshTeachBootstrapObject,
   FreshTeachJournal,
   FreshTeachJournalStateSchema,
@@ -5685,6 +5686,26 @@ export async function runFreshMasterTeach(
             if (!disposition) {
               reportProgress(opts, `reviewing the core result for ${tool.candidate.toolName}`);
               const current = currentPlanProjection(activeJournal);
+              const proof = activeJournal
+                .currentExecutionSnapshot()
+                .payload.tools.find(({ toolId }) => toolId === tool.id);
+              const build = proof ? activeJournal.readBuild(proof.currentBuildRef) : undefined;
+              const manifest = build
+                ? ArtifactManifestRecordSchema.parse(
+                    activeJournal.readJson(build.artifactManifestRef),
+                  )
+                : undefined;
+              const workflow = build
+                ? (activeJournal.readJson(build.workflowRef) as Workflow)
+                : undefined;
+              const parser = workflow?.parserModule
+                ? manifest?.files.find(
+                    ({ path }) => path === workflow.parserModule?.replace(/^\.\//, ''),
+                  )
+                : undefined;
+              const parserSource = parser
+                ? Buffer.from(activeJournal.readBytes(parser.artifactRef)).toString('utf8')
+                : undefined;
               const review = await deps.requestBaselineMvpReview(
                 {
                   run: current.binding,
@@ -5693,6 +5714,16 @@ export async function runFreshMasterTeach(
                   snapshot: activeJournal.currentExecutionSnapshot(),
                   toolId: tool.id,
                   resultEvidence,
+                  ...(proof && parser && parserSource !== undefined
+                    ? {
+                        resultDerivation: {
+                          buildRef: proof.currentBuildRef,
+                          artifactRef: parser.artifactRef,
+                          source: utf8Prefix(parserSource, 16_000),
+                          truncated: Buffer.byteLength(parserSource, 'utf8') > 16_000,
+                        },
+                      }
+                    : {}),
                 },
                 agents,
               );
