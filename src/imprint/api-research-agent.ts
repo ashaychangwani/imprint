@@ -1,5 +1,5 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type BackendAttemptFact,
@@ -135,18 +135,30 @@ function renderedHtmlText(value: string): string | undefined {
   return text ? `[rendered HTML text]\n${text}` : undefined;
 }
 
-function preview(value: unknown, credentialValues: Record<string, string> = {}): string {
+function resultText(value: unknown, credentialValues: Record<string, string> = {}): string {
   let serialized: string;
   try {
     serialized = typeof value === 'string' ? value : JSON.stringify(value);
   } catch {
     serialized = String(value);
   }
-  const factualPreview = renderedHtmlText(serialized ?? '') ?? serialized ?? '';
   const values = new Map(
     Object.entries(credentialValues).map(([name, value]) => [value, `\${credential.${name}}`]),
   );
-  return boundedPreview(redactFreeformText(factualPreview, values).redacted);
+  return redactFreeformText(serialized ?? '', values).redacted;
+}
+
+function preview(value: unknown, credentialValues: Record<string, string> = {}): string {
+  const text = resultText(value, credentialValues);
+  return boundedPreview(renderedHtmlText(text) ?? text);
+}
+
+function retainedResultPath(toolDir: string, observationId: string): string {
+  return pathJoin(
+    toolDir,
+    'live-results',
+    `${createHash('sha256').update(observationId).digest('hex')}.txt`,
+  );
 }
 
 function resultFact(
@@ -320,6 +332,7 @@ export async function researchApiMvpCall(input: {
     ...(input.previousProgress?.observation ? [input.previousProgress.observation] : []),
   ].filter((observation, index, all) => all.findIndex(({ id }) => id === observation.id) === index);
   let proposedBlockReason: string | undefined;
+  let resultInspection: ApiResearchInput['resultInspection'];
   const researchInputsChanged =
     input.previousProgress?.researchInputsSha256 !== apiResearchInputsSha256(input.tool);
   let retainedTurnDelta: ApiResearchRetainedTurnDelta | undefined = input.followUp
@@ -353,6 +366,7 @@ export async function researchApiMvpCall(input: {
       tool: input.tool,
       evidence,
       observations,
+      ...(resultInspection ? { resultInspection } : {}),
       requestCatalog,
       requestCatalogTruncated:
         requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
@@ -370,6 +384,30 @@ export async function researchApiMvpCall(input: {
       retainedTurnDelta,
     );
     retainedTurnDelta = undefined;
+    resultInspection = undefined;
+    if (decision.action === 'inspect_result') {
+      const query = decision.resultQuery;
+      if (!query) throw new Error('API researcher returned no result query');
+      const observation = observations.find(({ id }) => id === query.observationId);
+      if (observation?.resultTextLength === undefined)
+        throw new Error('API researcher requested unavailable result text');
+      const text = readFileSync(retainedResultPath(input.toolDir, observation.id), 'utf8');
+      const match =
+        query.search === undefined ? query.offset : text.indexOf(query.search, query.offset);
+      const offset = match < 0 ? query.offset : match;
+      const slice = match < 0 ? '' : text.slice(offset, offset + query.length);
+      resultInspection = {
+        observationId: observation.id,
+        offset,
+        totalCharacters: text.length,
+        text: slice,
+        nextOffset:
+          match < 0 || offset + slice.length >= text.length ? null : offset + slice.length,
+        ...(query.search === undefined ? {} : { matchFound: match >= 0 }),
+      };
+      retainedTurnDelta = { kind: 'result_inspection', resultInspection };
+      continue;
+    }
     if (decision.action === 'catalog') {
       if (!requestCatalogPage?.hasMore || !input.loadNextRequestCatalogPage) {
         throw new Error('API researcher requested another catalog page when none is available');
@@ -499,6 +537,16 @@ export async function researchApiMvpCall(input: {
         requestComparisons,
         result: resultFact(observed.result, observed.credentialValues),
       };
+      if (observed.result.ok) {
+        const text = resultText(observed.result.data, observed.credentialValues);
+        const resultDir = pathJoin(input.toolDir, 'live-results');
+        mkdirSync(resultDir, { recursive: true });
+        writeFileSync(retainedResultPath(input.toolDir, observation.id), text, {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+        observation.resultTextLength = text.length;
+      }
       observations.push(observation);
       retainedTurnDelta = { kind: 'observation', latestObservation: observation };
     } finally {

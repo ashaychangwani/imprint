@@ -75,6 +75,12 @@ observation reference and proof gaps together, not one newly revealed error per
 attempt. Exact tested-candidate matching remains unchanged.
 When the reviewed plan has no tools, the blocked terminal still counts its
 unresolved discovered operations; an empty build schedule does not mean zero gaps.
+Research stores each successful final result under its local `live-results/`
+directory with known typed credentials replaced. `inspect_result` reads a bounded
+slice or searches literal text in that saved result; no network call or candidate
+edit occurs. Initial prompts keep compact previews, while retained follow-ups can
+inspect HTML attributes, embedded state or JSON beyond those prefixes. This does
+not automatically expose intermediate responses or a page behind a captured XHR.
 Final review receives a compact history of baseline semantic reviews, including
 inputs, reasons, plan revisions and immutable build/receipt/review references.
 Transport success does not erase a rejected result. The reviewer decides whether

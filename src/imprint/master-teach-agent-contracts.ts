@@ -174,6 +174,7 @@ const PreparedRequestComparisonSchema = strictObject({
 });
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
+  resultTextLength: z.number().int().nonnegative().optional(),
   candidateSha256: PromptShaSchema,
   executionMechanism: utf8Text(1, 128),
   backendAttempts: z.custom<BackendAttemptFact[]>().default([]),
@@ -277,6 +278,14 @@ export const ApiResearchInputSchema = strictObject({
    * authority for the next candidate. */
   previousProgress: z.lazy(() => ApiResearchHandoffSchema).optional(),
   blockReview: strictObject({ proposedReason: Reason }).optional(),
+  resultInspection: strictObject({
+    observationId: PromptIdSchema,
+    offset: z.number().int().nonnegative(),
+    totalCharacters: z.number().int().nonnegative(),
+    text: utf8Text(0, 8_000),
+    nextOffset: z.number().int().nonnegative().nullable(),
+    matchFound: z.boolean().optional(),
+  }).optional(),
 });
 export type ApiResearchInput = z.infer<typeof ApiResearchInputSchema>;
 const ApiResearchBindingSchema = strictObject({
@@ -287,7 +296,13 @@ const ApiResearchBindingSchema = strictObject({
 });
 export const ApiResearchOutputSchema = strictObject({
   binding: ApiResearchBindingSchema,
-  action: z.enum(['catalog', 'inspect', 'test', 'proven', 'partial', 'blocked']),
+  action: z.enum(['catalog', 'inspect', 'inspect_result', 'test', 'proven', 'partial', 'blocked']),
+  resultQuery: strictObject({
+    observationId: PromptIdSchema,
+    offset: z.number().int().nonnegative().default(0),
+    length: z.number().int().min(1).max(2_000).default(2_000),
+    search: utf8Text(1, 256).optional(),
+  }).optional(),
   candidate: ApiResearchCandidateSchema.optional(),
   basedOnObservationId: PromptIdSchema.optional(),
   missingProof: ApiResearchMissingProofSchema.optional(),

@@ -5495,3 +5495,35 @@ the existing count of unresolved discoveries, already used by other completion
 paths. A neutral end-to-end test keeps two discoveries unresolved with no tools
 and checks both the returned status and saved terminal report. This is only an
 honest-reporting fix; it cannot make the unproven API behavior work.
+
+### September 6, 05:18 PDT — Confirm useful live evidence is outside the preview
+
+A separate read-only browser diagnostic loaded the ordinary hotel search page;
+it returned about 3.28 MB of HTML with 342 links, including 129 links carrying
+encoded search state. No example code was used and no teaching artifact changed.
+The researcher receives a 12 KB result preview; HTML is converted to visible
+text, dropping link attributes and scripts. Per-request raw previews retain only
+the first 4 KB. There is no on-demand live-result inspection action comparable
+to its recorded-request lookup. This establishes an evidence-access limitation,
+not proof that any particular link solves date or occupancy control. The last
+researcher requested captured XHR responses, not the full page, so this does not
+prove it tried and lost those links. Next investigate a small, site-neutral way
+to inspect retained live response content without another network call or a
+whole-page context dump. Diagnostic browser closed; no teach is running.
+
+### September 6, 05:26 PDT — Add on-demand inspection of saved live results
+
+Added `inspect_result`: an agent-selected literal search or bounded text slice
+from an earlier successful final result. It preserves HTML attributes and
+embedded state, replaces only known typed credentials, and makes no network
+request. Saved result text survives a master follow-up. Initial prompts remain
+compact; agents must deliberately request a document if their previous test only
+returned an XHR body. No site-specific field, URL, interpretation or strategy
+was added. The neutral test covers evidence beyond the preview, credentials,
+unknown IDs, bounds, absent matches, paging and reuse across a follow-up with
+exactly one API call. All 180 focused tests, static checks, website build and
+desktop/mobile inspections pass. Fresh live validation is still pending.
+
+Full suite: 1,909 passed and the existing hostile process-cleanup stress test
+failed again. Do not describe the full suite as green. The new research tests
+passed. The process-test file then passed separately: 14 passed, zero failed.

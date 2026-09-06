@@ -563,6 +563,148 @@ describe('focused API research', () => {
     }
   });
 
+  it('inspects retained live text beyond the preview without another API call, including a follow-up', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-text-'));
+    const candidate = apiCandidate('text');
+    const html = `<!doctype html><html><script>${'padding'.repeat(4_000)}</script><a href="/search?state=fixture-state">Results</a><input value="fixture-password"><script>fixture-hidden-state</script>${'é'.repeat(3_000)}</html>`;
+    let calls = 0;
+    let turns = 0;
+    try {
+      const first = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          runApiTool: async () => {
+            calls += 1;
+            return {
+              executionMechanism: 'fetch',
+              result: { ok: true, data: html },
+              credentialValues: { password: 'fixture-password' },
+            };
+          },
+          requestStep: async (input, _agent, delta) => {
+            turns += 1;
+            if (turns === 1)
+              return { binding, action: 'test', candidate, reason: 'Get the fixture response.' };
+            const observation = input.observations[0];
+            if (!observation) throw new Error('missing observation');
+            const query = {
+              binding,
+              action: 'inspect_result',
+              resultQuery: { observationId: observation.id, search: 'href=' },
+              reason: 'Inspect an attribute beyond the preview.',
+            };
+            if (turns === 2) {
+              expect(observation.result.preview).not.toContain('fixture-state');
+              for (const resultQuery of [
+                { observationId: 'unknown' },
+                { observationId: observation.id, offset: (observation.resultTextLength ?? 0) + 1 },
+                { observationId: observation.id, length: 2_001 },
+              ])
+                expect(() =>
+                  parseApiResearchOutput(JSON.stringify({ ...query, resultQuery }), input),
+                ).toThrow();
+              return parseApiResearchOutput(JSON.stringify(query), input);
+            }
+            expect(delta?.kind).toBe('result_inspection');
+            if (turns === 3) {
+              expect(input.resultInspection?.offset).toBeGreaterThan(12_000);
+              expect(input.resultInspection?.text).toContain('state=fixture-state');
+              expect(input.resultInspection?.text).toContain('fixture-hidden-state');
+              expect(input.resultInspection?.text).toContain('${credential.password}');
+              expect(input.resultInspection?.text).not.toContain('fixture-password');
+              expect(Buffer.byteLength(input.resultInspection?.text ?? '')).toBeLessThanOrEqual(
+                8_000,
+              );
+              return parseApiResearchOutput(
+                JSON.stringify({
+                  ...query,
+                  resultQuery: { observationId: observation.id, search: 'absent-marker' },
+                }),
+                input,
+              );
+            }
+            expect(input.resultInspection).toMatchObject({
+              matchFound: false,
+              text: '',
+              nextOffset: null,
+            });
+            return {
+              binding,
+              action: 'partial',
+              candidate,
+              basedOnObservationId: observation.id,
+              missingProof: ['Fixture meaning still needs review.'],
+              reason: 'Retain the response for follow-up.',
+            };
+          },
+        },
+      });
+      let followUpTurns = 0;
+      await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        previousProgress: {
+          toolName: tool.candidate.toolName,
+          researchInputsSha256: first.researchInputsSha256,
+          status: 'partial',
+          summary: first.summary,
+          candidate,
+          observation: first.observation,
+          missingProof: ['Fixture meaning still needs review.'],
+        },
+        followUp: {
+          masterDirection: 'Inspect the saved response.',
+          missingProof: ['Read retained text.'],
+          relevantRequestSeqs: [],
+          siblingResearch: [],
+        },
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          runApiTool: async () => {
+            throw new Error('Inspection must not make another API call');
+          },
+          requestStep: async (input) => {
+            followUpTurns += 1;
+            if (followUpTurns === 1)
+              return parseApiResearchOutput(
+                JSON.stringify({
+                  binding,
+                  action: 'inspect_result',
+                  resultQuery: { observationId: first.observation.id, offset: 0, length: 15 },
+                  reason: 'Read the opening text.',
+                }),
+                input,
+              );
+            expect(input.resultInspection?.text).toBe('<!doctype html>');
+            expect(input.resultInspection?.nextOffset).toBe(15);
+            return {
+              binding,
+              action: 'proven',
+              candidate,
+              basedOnObservationId: first.observation.id,
+              reason: 'The fixture evidence is now inspected.',
+            };
+          },
+        },
+      });
+      expect(calls).toBe(1);
+      expect(turns).toBe(4);
+      expect(followUpTurns).toBe(2);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects a proven handoff that differs from the cited tested bytes', () => {
     const tested = apiCandidate('tested');
     const changed = apiCandidate('changed');
