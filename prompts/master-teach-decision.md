@@ -82,8 +82,16 @@ hold the first compile. For every true partial tool that remains in
 researcher a precise question,
 copy the missing proof, name only sibling public tool names whose handoffs are
 relevant, and select at most 256 exact recording request sequences that may
-resolve it. You may also follow up a proven or blocked result when the complete
-set exposes a concrete cross-tool contradiction. Do not ask for the whole
+resolve it. A research status of `proven` is the researcher's conclusion, not
+independent proof of every claimed mapping. Compare the tested inputs and
+observations with the accepted core promise. You may follow up a proven result
+for missing evidence or a contradiction within that single tool, as well as
+cross-tool contradictions; do not wait for compilation to expose it. Explain
+the specific unsupported inference, preserve the working request, and ask the
+retained researcher for evidence that distinguishes it from a default or
+coincidental match. Do not require optional breadth or repeat tests whose
+relevant meaning is already established. A blocked result may likewise need
+follow-up when other evidence contradicts its conclusion. Do not ask for the whole
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.

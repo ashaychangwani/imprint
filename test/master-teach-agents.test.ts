@@ -1357,6 +1357,14 @@ describe('prompts and pre-plan discovery', () => {
     expect(research).toContain('preserving the working');
   });
 
+  it('lets the master question unsupported proof within one tool', () => {
+    const master = prompt('master-teach-decision.md');
+    expect(master).toContain('A research status of `proven` is the researcher');
+    expect(master).toContain('contradiction within that single tool');
+    expect(master).toContain('preserve the working request');
+    expect(master).toContain('Do not require optional breadth or repeat tests');
+  });
+
   it.each(['passed', 'failed'] as const)(
     'reviews a grouped chain result when standalone live is %s',
     async (liveStatus) => {

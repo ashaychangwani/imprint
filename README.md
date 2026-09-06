@@ -131,6 +131,8 @@ Research uses a small contrasting core-input check before claiming parameter
 mappings are proven; optional parameter breadth remains deferred.
 That contrast must distinguish claimed mappings from defaults; changing one
 input does not prove the others, and unproven mappings return for follow-up.
+The master reviews that evidence even when research labels itself proven;
+missing proof within one tool can return to its retained researcher.
 MVP reviewers check returned values against their claimed meaning: optional
 breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint

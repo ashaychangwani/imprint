@@ -59,6 +59,9 @@ The contrast should distinguish each claimed core mapping from a default or
 coincidental match. One changed input does not prove all inputs. Researchers
 preserve the working request and identify unresolved mappings for focused
 follow-up rather than declaring an unsupported full contract proven.
+The master treats the research status as a conclusion to review, not an
+automatic approval. Missing evidence inside one tool can trigger a focused
+follow-up just like a cross-tool contradiction, preserving the working request.
 Baseline reviewers inspect visible values, not only recognizable names or a
 non-empty collection. Contradictory returned fields require repair; optional
 breadth does not excuse incorrect data. Compilers treat broad pattern searches

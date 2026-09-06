@@ -5298,3 +5298,62 @@ Unresolved mappings return as partial evidence with the working request intact.
 Several inputs may change together; no runtime call count or site rule was added.
 Updated README, architecture and website. All 122 focused tests, lint, types,
 dependency checks and website build pass; desktop/mobile visuals checked.
+
+Fresh run `6648acb3-8810-4853-af58-ae3799b13c6a` started at 17:59 on
+`c129126`. Research returned partial first, then continued before compilation.
+The compiled Los Angeles call returned no hotels and was correctly rejected.
+The master repair call then encountered provider-process interruptions and
+the run ended failed after its deadline; the journal update is 19:44 PDT.
+No tool was published. A delayed heartbeat carried an older timestamp, so an
+initial suspicion of an early timeout was withdrawn after checking the host
+clock. No timeout-code defect is established by this run.
+
+### September 5, 21:36 PDT — Same guest-count failure reproduced
+
+Fresh unchanged-code retry `077dbf30-4319-418e-be4c-c18202f15c66` ran from
+21:19 to about 21:29 and published one tool. Its isolated audit at
+`/tmp/imprint-hotels-mapping-audit-z5IjGh` again scored 77.8%: destination and
+dates passed, but four adults returned records labeled for two. No exclusions.
+The latest prompt change has not solved the issue. Do not simply rerun for a
+better score or keep adding instructions without stronger diagnosis.
+
+The new research transcript confirms the updated prompt was delivered. It
+tested separate date/guest query keys, noticed dates were ignored, then moved
+the inputs into natural-language search text. The second test used two adults
+and was declared proven. Its comparison was against the recording's claimed
+one-adult example, not a live contrast that distinguished two from a default.
+The unresolved question remains whether occupancy encoding, field meaning,
+or both are wrong. Investigate that concretely before another teach change.
+
+### September 5, 22:58 PDT — Monitoring resumed; inspect request behavior directly
+
+The user asked to continue, explicitly forbidding site-specific runtime and
+prompt changes. Started a new monitor. A separate read-only diagnostic used
+Imprint's existing CDP navigation transport, keeping one browser for two calls.
+Both natural-language expressions (two adults and four adults) left the rendered
+page showing two near the search controls. This was observed before invoking
+the generated parser, pointing toward the request not applying occupancy.
+The scratch raw-response decoder did not locate stay arrays, so that part of
+the diagnostic is inconclusive; do not count it as proof of a response path.
+No generated artifact, runtime or prompt was changed by this diagnostic.
+Log: `/tmp/imprint-hotels-occupancy-diagnostic.log`.
+
+### September 5, 23:04 PDT — Master review guidance is too deferential
+
+The master prompt calls proven handoffs a factual starting point and explicitly
+mentions revisiting them for cross-tool contradictions. It does not equally
+emphasize challenging unsupported proof inside one tool. Here a researcher
+claimed all four inputs proven from one matching result, and the master accepted
+that claim. This is a general supervision gap, not a Hotels-specific rule to add.
+The intended correction is to distinguish the researcher's status from evidence
+and allow focused follow-up for a missing core mapping within a single tool.
+
+### September 5, 23:09 PDT — Let the master challenge single-tool proof
+
+Updated only the existing master review guidance, with matching docs and website:
+the researcher status is a conclusion to review, not independent proof. Missing
+core evidence within one tool can go back to its retained researcher without
+discarding its working request. Avoid optional breadth and redundant tests.
+No site-specific instruction or runtime gate was added. All 123 focused agent
+tests, lint, types, dependency checks and website build pass; desktop and mobile
+were inspected. Live validation must still demonstrate whether this helps.
