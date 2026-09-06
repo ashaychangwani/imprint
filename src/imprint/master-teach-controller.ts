@@ -5637,7 +5637,7 @@ export async function runFreshMasterTeach(
           return writeTerminalResult({
             status: 'blocked',
             readyTools: 0,
-            nonReadyTools: 0,
+            nonReadyTools: unresolvedCandidateCoverage(currentPlan).length,
             runRoot,
             message: 'No discovered operation currently has an evidence-backed tool plan.',
           });

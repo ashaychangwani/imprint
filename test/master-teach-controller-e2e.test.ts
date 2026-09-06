@@ -4722,6 +4722,65 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('counts unresolved discoveries when the reviewed plan contains no tools', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-no-supported-tools',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: syntheticSessionPath(root),
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 5_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (input) => {
+            const desiredPlan = initialDesiredPlan(input);
+            desiredPlan.tools = [];
+            desiredPlan.buildWaves = [];
+            desiredPlan.chainEdges = [];
+            for (const coverage of desiredPlan.candidateCoverage) {
+              coverage.plannedToolIds = [];
+              coverage.unresolvedReason = 'The available fixture evidence is insufficient.';
+              coverage.excludedReason = null;
+            }
+            return MasterDecisionOutputSchema.parse({
+              binding: input.current?.run ?? input.discovery.run,
+              outcome: 'accepted',
+              reason: 'Keep both discovered operations explicitly unresolved.',
+              recallToolNames: [],
+              desiredPlan,
+            });
+          },
+          requestCompletionReview: async (input) => {
+            expect(input.terminalIntent).toBe('blocked');
+            return CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'The empty plan honestly preserves unresolved discoveries.',
+              findings: [],
+              toolResultReviews: [],
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'The fixture evidence supports this unresolved state.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            });
+          },
+        },
+      );
+      expect(terminal).toMatchObject({ status: 'blocked', readyTools: 0, nonReadyTools: 2 });
+      expect(readJson(join(terminal.runRoot, 'terminal.json'))).toEqual(terminal);
+    });
+  });
+
   it('finishes once as partial when a reviewed MVP remains beside an unresolved operation', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];

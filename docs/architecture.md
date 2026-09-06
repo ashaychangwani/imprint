@@ -73,6 +73,8 @@ Research handoff validation reports independent missing fields before returning
 on an absent candidate. Its single repair turn therefore sees missing candidate,
 observation reference and proof gaps together, not one newly revealed error per
 attempt. Exact tested-candidate matching remains unchanged.
+When the reviewed plan has no tools, the blocked terminal still counts its
+unresolved discovered operations; an empty build schedule does not mean zero gaps.
 Final review receives a compact history of baseline semantic reviews, including
 inputs, reasons, plan revisions and immutable build/receipt/review references.
 Transport success does not erase a rejected result. The reviewer decides whether

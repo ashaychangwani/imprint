@@ -5468,3 +5468,30 @@ A neutral regression reproduces the incomplete output and proves all missing
 fields reach the repair turn, which can then return a valid partial handoff.
 All 166 focused tests, lint, types and dependency checks pass. The previous
 semantic-history fix was not exercised because compilation was never reached.
+
+### September 6, 04:58 PDT — Handoff works, Hotels still unresolved
+
+Fresh run `702091a1-a42d-4c77-b22a-6a950741be42` on `4087620` ran about
+18 minutes and ended blocked, without publishing any tool. Its partial research
+reached the master, which sent it back twice for more evidence. Research found
+working destination searches but could not demonstrate requested dates or
+occupancy. It tested direct recorded requests with changed inputs and a current
+destination token, then examined the second recorded response as a possible
+dependency. Those attempts did not establish the required controls. This is not
+proof that a working API is impossible or that every discovery path was exhausted.
+
+Unlike the earlier false success, the master kept those core gaps explicit and
+did not ship the destination-only subset. The final reviewer accepted the empty,
+explicitly unresolved plan. No compiler or baseline result reviewer ran, so the
+semantic-rejection-history fix still lacks live exercise. The terminal's
+`0 ready, 0 blocked` wording is misleading with one unresolved discovery; the
+overall blocked status and reason were visible. Preserve this run for diagnosis
+rather than launching an unchanged retry. Disk stayed around 2.1 GiB free.
+
+### September 6, 05:05 PDT — Correct the empty-plan terminal count
+
+The empty-plan exit hard-coded zero non-ready tools. Replaced that number with
+the existing count of unresolved discoveries, already used by other completion
+paths. A neutral end-to-end test keeps two discoveries unresolved with no tools
+and checks both the returned status and saved terminal report. This is only an
+honest-reporting fix; it cannot make the unproven API behavior work.
