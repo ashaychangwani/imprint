@@ -5527,3 +5527,28 @@ desktop/mobile inspections pass. Fresh live validation is still pending.
 Full suite: 1,909 passed and the existing hostile process-cleanup stress test
 failed again. Do not describe the full suite as green. The new research tests
 passed. The process-test file then passed separately: 14 passed, zero failed.
+
+### September 6, 05:48 PDT — Fast compile, audit passed, direct guest check failed
+
+Fresh run `d3d57aab-536d-4249-a5ac-3f2995bf1aba` on `9ee9a00` started
+05:28 and published one search tool about ten minutes later. The researcher
+used saved-result inspection twice, then found a natural-language request whose
+returned page showed the requested dates. Planning chose a different city,
+three-night stay and three adults; the result reviewer approved eighteen hotels.
+Its decision and actual test inputs reached final review through the new history.
+
+Independent audit `/tmp/imprint-hotels-live-text-audit-ZasZQ0` reported 100%:
+six calls and four parameters, no excluded tests. Do not treat that score as
+proven correctness. The generated parser's `applied` fields copy caller inputs.
+The auditor credited those echoes and changing inventory/order as guest-count
+proof. A separate check used the unchanged generated request transform for one
+and four adults: both rendered search controls showed two. A further exact
+four-adult check returned the requested October 13–15 date controls, but the
+Adults control had `aria-valuenow="2"`. Thus dates worked in that check while
+occupancy did not, despite the successful teach and audit. The original audit
+report is preserved unchanged. No generated artifact was patched.
+
+Diagnostic logs: `/tmp/imprint-hotels-live-text-occupancy-check.log` and
+`/tmp/imprint-hotels-live-text-occupancy-labels.log`. Diagnostic Chrome closed;
+no teach or audit is running. Next investigate why review accepted an input echo
+and noisy ordering as proof, before another compile. No site-specific policy.
