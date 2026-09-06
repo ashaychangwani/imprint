@@ -5740,3 +5740,23 @@ published tool in `/tmp/imprint-hotels-server-echo-audit-x3nZbF`. The audit
 will test the remaining parameters separately; its score is not yet known.
 Log: `/tmp/imprint-hotels-server-echo-audit.log`. No generated tool was
 manually repaired, and no teach overlaps the audit.
+
+### September 6, 09:07 PDT — Narrow Hotels MVP passes independent parameter audit
+
+The isolated audit finished in 2 minutes 19 seconds: 100%, seven correct
+units and zero broken (four calls plus three parameters), with no exclusions.
+Seattle returned 17 properties; changing only destination returned 21 Portland
+properties. Separate check-in and checkout changes returned 18 properties
+with the corresponding changed stay dates. Reading the unchanged parser
+confirmed that stay dates come from returned hotel records, not caller inputs
+or the echoed query. Original report remains in
+`/tmp/imprint-hotels-server-echo-audit-x3nZbF/google-hotels/.audit-report.json`.
+
+The first call took roughly 72 seconds including warm-up; subsequent calls
+took roughly 9–10 seconds according to audit events. This is a working narrow
+MVP, not full Hotels coverage: adults, rooms, additional operations, broader
+locales/currencies, and all possible dates are not established by these tests.
+The parser also labels currency USD without deriving it from the response;
+the current audit does not validate that label across locales. No artifact
+was edited to obtain this score. Flights remains at its original 88.9% audit.
+Stop the completed run's monitor rather than continuing to poll finished work.
