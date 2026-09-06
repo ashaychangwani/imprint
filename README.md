@@ -149,6 +149,7 @@ After live failures, the master can return an unchanged tool to its retained
 researcher with the actual failure evidence, then replan only the affected tool.
 MVP reviewers receive the checked build's parser to distinguish observed values
 from input echoes; audits require an attributable effect, not merely changed ordering.
+Server-returned query text is also an echo, not proof of applied settings.
 Final review also sees prior semantic rejections and their actual inputs, so a
 later passing baseline does not silently erase an unresolved core failure.
 MVP reviewers check returned values against their claimed meaning: optional

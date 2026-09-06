@@ -22,6 +22,12 @@ actual failed check. Reassess any earlier claim that the new observation
 contradicts; an earlier `proven` label is not proof against later evidence.
 Preserve useful request work and investigate the master's missing proof before
 returning a revised handoff. Parser-only repairs remain the compiler's job.
+Server-returned echoes are still echoes: finding a requested attribute in a
+returned query string or search-box text does not show it affected the results.
+For example, `query: "blue large shirts"` is not evidence that the returned
+products are blue or large. Ground the claim in returned record attributes or
+independently observed effective settings; otherwise name that mapping as
+unproven. A response's provenance alone does not establish its meaning.
 
 On the first pass, inspect all supplied focused evidence and the selected public
 tool boundary. When those facts are sufficient, propose one complete

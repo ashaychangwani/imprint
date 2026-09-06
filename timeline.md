@@ -5692,3 +5692,25 @@ this distinction in the existing review/research/compiler guidance, with neutral
 evidence examples, not a runtime classifier. Investigate the warm-state mismatch
 as a separate observation; this check does not yet identify whether navigation
 timing or website state handling caused it. No teach or audit is currently active.
+
+### September 6, 07:55 PDT — Distinguish a server echo from an applied setting
+
+Clarified the existing researcher, compiler and MVP-review instructions with
+one site-neutral catalog example: a returned query saying "blue large shirts"
+does not establish the returned products' color or size. The agents must use
+actual returned attributes or independently observed settings for that claim.
+This adds no runtime classifier, testing quota, or site-specific policy. The
+137 focused prompt/research tests pass, along with lint, type checks, dependency
+checks and the website build and desktop/mobile visual checks. Full tests
+finished with 1,911 passing and one failing in 95 seconds: the same previously
+observed process-cleanup stress test. No runtime implementation changed here.
+
+Read-only navigation diagnosis used the unchanged generated transform again.
+The warm call still showed the previous November dates ten seconds after the
+October navigation. In a fresh browser, the same October request left date
+controls blank both immediately and ten seconds later. Thus neither extra
+waiting nor a fresh browser established the requested settings in these checks.
+This does not identify every cause, but does not support a blanket runtime
+delay or browser reset as the fix. Both diagnostic browsers were closed; no
+generated files were changed. Log:
+`/tmp/imprint-hotels-reopen-navigation-timing.log`.

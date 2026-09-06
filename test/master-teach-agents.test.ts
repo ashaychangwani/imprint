@@ -1370,6 +1370,15 @@ describe('prompts and pre-plan discovery', () => {
     expect(research).toContain('Changing one input does not prove the others');
     expect(research).toContain('no fixed call count is required');
     expect(research).toContain('name that mapping as unproven and return `partial`');
+    for (const name of [
+      'master-teach-api-researcher.md',
+      'master-teach-baseline-mvp-review.md',
+      'compile-agent.md',
+    ]) {
+      const guidance = prompt(name);
+      expect(guidance.toLowerCase()).toContain('server-returned echoes');
+      expect(guidance).toContain('blue large shirts');
+    }
     expect(research).toContain('preserving the working');
   });
 

@@ -25,6 +25,14 @@ price. Report the concrete field and contradiction as `revision_required`;
 the master decides whether to repair it or defer a genuinely optional field.
 Do not claim evidence for fields beyond a truncated preview. Requested inputs
 repeated in output are not independent proof that the server honored them.
+This includes server-returned echoes: a query string, request summary, URL, or
+search-box text may originate in the response yet still repeat what the caller
+asked for. Extracting attributes from that text does not establish applied
+settings. For example, a catalog response with `query: "blue large shirts"`
+does not prove its returned products are blue or large. Look for returned
+product attributes or independently observed effective settings. If the core
+claim rests only on query text, report the missing proof, not success and not
+an invented mismatch.
 
 When supplied, `resultDerivation` is the current build's parser source, with its
 saved artifact reference and an explicit truncation flag. Use it only to trace

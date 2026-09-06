@@ -479,6 +479,8 @@ The public teaching path is one fresh foreground controller:
 
 The agents own semantic decisions: tool boundaries, parameters, request
 sequences, dependencies, authentication, and API-versus-playbook strategy. The
+review distinguishes applied settings from both caller-side and server-returned
+query echoes; a response can repeat a request without honoring it. The
 controller only performs mechanical work: validates the plan and wave ordering,
 runs focused jobs and checks, tracks what became stale after a revision, and
 reports the terminal outcome.
