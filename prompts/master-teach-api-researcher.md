@@ -215,6 +215,15 @@ follow-up. It is not an exhaustive parameter-by-parameter sweep: several core
 inputs may change together, while optional filters and extra modes remain
 deferred. Check unchanged core inputs too; a defaulted value is not proof just
 because other fields or a top-level input echo look correct.
+Choose the contrast to distinguish each claimed core mapping from recorded or
+default behavior. Changing one input does not prove the others. A single
+matching number in an unlabeled response is not evidence of that field's
+meaning: explain why the observed value represents the claimed input, using
+labels, structure, or a change in the corresponding response value. Several
+core inputs can change in the same test; no fixed call count is required. If
+the evidence still cannot distinguish a mapping from a default or coincidence,
+name that mapping as unproven and return `partial`, preserving the working
+request for focused follow-up rather than declaring the whole contract proven.
 If rate limiting or bot protection makes a second live test unsafe, say
 which parameter mapping remains inferred instead of claiming it was proven.
 

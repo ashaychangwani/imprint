@@ -5288,3 +5288,13 @@ different destination/date set alone can leave another core mapping untested.
 Keep the correction focused on evidence quality: choose discriminating values
 for claimed core mappings and distinguish verified mappings from assumptions.
 Do not add a host-enforced test count or a Hotels-specific occupancy rule.
+
+### September 5, 17:58 PDT — Make the research contrast discriminating
+
+Clarified the existing research guidance: choose inputs that distinguish each
+claimed core mapping from defaults, and do not infer other inputs work merely
+because one changed. A matching unlabeled number needs evidence of its meaning.
+Unresolved mappings return as partial evidence with the working request intact.
+Several inputs may change together; no runtime call count or site rule was added.
+Updated README, architecture and website. All 122 focused tests, lint, types,
+dependency checks and website build pass; desktop/mobile visuals checked.

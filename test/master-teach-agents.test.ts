@@ -1349,6 +1349,14 @@ describe('prompts and pre-plan discovery', () => {
     expect(prompt('compile-agent.md')).toContain('repeat the same guessed mapping');
   });
 
+  it('asks research to distinguish claimed input effects from defaults', () => {
+    const research = prompt('master-teach-api-researcher.md');
+    expect(research).toContain('Changing one input does not prove the others');
+    expect(research).toContain('no fixed call count is required');
+    expect(research).toContain('name that mapping as unproven and return `partial`');
+    expect(research).toContain('preserving the working');
+  });
+
   it.each(['passed', 'failed'] as const)(
     'reviews a grouped chain result when standalone live is %s',
     async (liveStatus) => {

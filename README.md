@@ -129,6 +129,8 @@ Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
 Research uses a small contrasting core-input check before claiming parameter
 mappings are proven; optional parameter breadth remains deferred.
+That contrast must distinguish claimed mappings from defaults; changing one
+input does not prove the others, and unproven mappings return for follow-up.
 MVP reviewers check returned values against their claimed meaning: optional
 breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint

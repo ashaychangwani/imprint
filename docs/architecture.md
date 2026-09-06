@@ -55,6 +55,10 @@ claiming those mappings proven, rather than waiting for a repair follow-up.
 It checks returned meaning, including unchanged core values, not just input
 echoes. This is agent guidance, not a host-enforced call count or an exhaustive
 parameter sweep. Rate-limited uncertainty remains explicit for the master.
+The contrast should distinguish each claimed core mapping from a default or
+coincidental match. One changed input does not prove all inputs. Researchers
+preserve the working request and identify unresolved mappings for focused
+follow-up rather than declaring an unsupported full contract proven.
 Baseline reviewers inspect visible values, not only recognizable names or a
 non-empty collection. Contradictory returned fields require repair; optional
 breadth does not excuse incorrect data. Compilers treat broad pattern searches
