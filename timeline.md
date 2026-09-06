@@ -5611,3 +5611,30 @@ truncated, retains ordinary hidden state, and still excludes typed credentials.
 All 181 focused tests, lint, type checks, dependency checks and website build
 pass; desktop and mobile render checks passed. The full suite passed all 1,911
 tests with zero failures in 95 seconds. Fresh, unsteered teach validation follows.
+
+### September 6, 06:49–07:13 PDT — Handoff verified; post-compile research return path is missing
+
+Fresh, unsteered run `f22bb43d-de80-424a-8de2-3fc8a858fcaf` on `3e3487e`
+used the same explicit June 4 recording. The compiler's parser test actually
+loads `api-research-response.txt`, proving the new handoff is used. No tool was
+published, so no audit was started and the previous installed tool is not this
+run's output.
+
+Research claimed occupancy worked after testing two adults, which coincided
+with the default. The master chose a three-adult live check. Review rejected
+two returned adults, then an empty parser result, then caller-echoed adults.
+The final rejection was correct. The master recognized that the remaining
+failure needed new request evidence, not another parser-only edit, but sent it
+to planning. The planner proposed the same failed construction. The master
+then left the discovery unresolved and the terminal honestly reported zero
+ready, one blocked, after about 24 minutes.
+
+Code inspection found a missing return path: master output validation permits
+`researchFollowUps` only during pre-planning research review. After a live
+failure, `ensureCurrentImplementationPlans` reopens research only if the tool
+boundary no longer matches the earlier research. An unchanged boundary with
+disproved research therefore goes straight back to planning with the same old
+claim. Next make an explicit master-requested follow-up available after live
+failure, reuse the retained researcher, and pass the factual failure. Do not
+force a fake boundary edit or add a site-specific occupancy rule. The failed
+run stays read-only; validate any fix in a fresh run.
