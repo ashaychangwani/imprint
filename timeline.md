@@ -5659,3 +5659,36 @@ with 1,911 passing and one failing test in 92 seconds: the previously observed
 process-cleanup stress test. Its isolated file then passed all 14 tests in
 7.4 seconds. This is not an entirely green full-suite result.
 The failed live Hotels run has not been resumed or modified.
+
+### September 6, 07:27–07:52 PDT — Teach approval contradicted by audit and actual controls
+
+Fresh unsteered run `0ac4c114-a9d0-4a85-8847-9bf7a5996f3a` on `b27ed6e`
+published one search tool after about 17 minutes. The first review rejected
+caller-echoed occupancy. The compiler then extracted adults and rooms from a
+query string inside the server response, and review accepted this as independent
+proof. The new return-to-research path was not exercised in this run. The
+research evidence files were correctly excluded from published artifacts.
+
+Independent isolated audit `/tmp/imprint-hotels-reopen-audit-yXQh3a` failed at
+41.7%: five correct and seven broken units, seven calls, five parameters, zero
+exclusions. Location and checkout worked in its comparisons; check-in stayed
+unchanged, and adults/rooms had no observed effect. A one-adult call also retained
+the preceding call's checkout date. Keep this report unchanged, not a guessed
+infrastructure waiver.
+
+After the audit ended, a separate read-only check used the exact unchanged
+generated request transform. Four adults/two rooms with November 10–13 returned
+the requested dates but an Adults control with value 2. A second call in that
+same browser requested October 11–14 and still showed November 10–13. Room
+controls were not exposed by this diagnostic, so their actual UI state was not
+independently established. The calls took 33.5 seconds cold and 2.6 seconds warm;
+the diagnostic browser was closed. Log:
+`/tmp/imprint-hotels-reopen-controls-check.log`. No generated artifact was edited.
+
+The approval failure is semantic: a server can repeat user-written query text
+without applying it. Parser source was available to the reviewer and explicitly
+regex-extracted occupancy from that query, not effective settings. Next clarify
+this distinction in the existing review/research/compiler guidance, with neutral
+evidence examples, not a runtime classifier. Investigate the warm-state mismatch
+as a separate observation; this check does not yet identify whether navigation
+timing or website state handling caused it. No teach or audit is currently active.
