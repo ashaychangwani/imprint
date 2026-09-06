@@ -78,6 +78,16 @@ Require evidence that a current producer result actually works as the consumer
 input. The master chooses how to align their supported MVPs; do not invent an
 edge or silently waive the requested connection because no edge was declared.
 
+`semanticReviewHistory` contains prior result-review decisions, their actual
+inputs, and immutable build/receipt/review references. These are distinct from
+transport receipts: an HTTP success can still have a rejected semantic result.
+Compare prior contradictions with the current public promise and evidence.
+Changing to an easier passing test is not evidence that a previously failing
+core input was repaired. Request revision when that contradiction remains
+unsupported. Historical failure alone is not a veto: accept a demonstrated
+repair or an explicit, supported scope revision, and explain your reasoning.
+Do not revive unrelated obsolete failures or demand optional breadth.
+
 Check required public input usability, not optional parameter breadth: can a
 caller obtain the required values without the private recording or research
 transcript? Look for ordinary inputs, a demonstrated available producer or

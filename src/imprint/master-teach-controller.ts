@@ -5086,6 +5086,7 @@ function createParameterFinesseLane(input: {
 }
 
 function completionInput(input: {
+  semanticReviewHistory?: CompletionReviewInput['semanticReviewHistory'];
   userGuidance?: string;
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
@@ -5166,6 +5167,7 @@ function completionInput(input: {
     currentPlan: current.projection,
     snapshot: input.journal.currentExecutionSnapshot(),
     history: input.journal.receiptHistoryProjection(),
+    semanticReviewHistory: [...(input.semanticReviewHistory ?? [])],
     evidence: input.evidence,
     ...(toolResultEvidence ? { toolResultEvidence } : {}),
     claims,
@@ -5267,6 +5269,7 @@ function completionToolResultEvidenceFor(
 }
 
 async function requestIndependentReview(input: {
+  semanticReviewHistory?: CompletionReviewInput['semanticReviewHistory'];
   userGuidance?: string;
   journal: FreshTeachJournal;
   discoveryInput: ToolSelectionAdvisorInput;
@@ -5570,6 +5573,7 @@ export async function runFreshMasterTeach(
       >
     >();
     const attemptedRepairStates = new Set<string>();
+    const semanticReviewHistory: NonNullable<CompletionReviewInput['semanticReviewHistory']> = [];
     const revisionContext = (): MasterRevisionContext => ({
       journal: activeJournal,
       discoveryInput: planned.discoveryInput,
@@ -5623,6 +5627,7 @@ export async function runFreshMasterTeach(
           discoveryInput: planned.discoveryInput,
           evidence: planned.discoveryEvidence,
           terminalIntent: 'blocked',
+          semanticReviewHistory,
           agent: agents,
           deps,
         });
@@ -5698,6 +5703,16 @@ export async function runFreshMasterTeach(
               };
               mvpDispositionByResult.set(key, disposition);
               const reviewRef = activeJournal.storeJson(review);
+              semanticReviewHistory.push({
+                toolName: tool.candidate.toolName,
+                planRevision: review.binding.planRevision,
+                buildRef: review.binding.currentBuildRef,
+                resultReceiptRef: resultEvidence.payload.resultReceiptRef,
+                reviewRef,
+                invocationParameters: resultEvidence.payload.invocationParameters,
+                status: review.status,
+                reason: review.reason,
+              });
               writeJsonAtomic(
                 pathJoin(
                   runRoot,
@@ -5819,6 +5834,7 @@ export async function runFreshMasterTeach(
         discoveryInput: planned.discoveryInput,
         evidence: partialEvidence?.evidence ?? planned.discoveryEvidence,
         terminalIntent,
+        semanticReviewHistory,
         ...(partialEvidence ? { unresolvedEvidenceRefs: partialEvidence.failureRefs } : {}),
         liveByToolId,
         chainByEdgeId,

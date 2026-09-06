@@ -4090,8 +4090,17 @@ describe('fresh foreground master controller end to end', () => {
               },
             });
           },
-          requestCompletionReview: async (reviewInput) =>
-            CompletionReviewOutputSchema.parse({
+          requestCompletionReview: async (reviewInput) => {
+            expect(reviewInput.semanticReviewHistory?.map(({ status }) => status)).toEqual([
+              'revision_required',
+              'credible',
+            ]);
+            const [rejected, accepted] = reviewInput.semanticReviewHistory ?? [];
+            expect(rejected?.reason).toContain('does not demonstrate');
+            expect(rejected?.invocationParameters).toBeDefined();
+            expect(rejected?.buildRef.sha256).toMatch(/^sha256:/);
+            expect(rejected?.reviewRef.sha256).not.toBe(accepted?.reviewRef.sha256);
+            return CompletionReviewOutputSchema.parse({
               binding: reviewInput.run,
               verdict: 'passed',
               summary: 'Build B passed its own checks and demonstrates the fixture operation.',
@@ -4109,11 +4118,12 @@ describe('fresh foreground master controller end to end', () => {
                 reason: 'The supplied evidence supports the claim.',
                 evidenceRefs: claim.evidenceRefs,
               })),
-            }),
+            });
+          },
         },
       );
 
-      expect(terminal.status).toBe('completed');
+      expect(terminal).toMatchObject({ status: 'completed' });
       expect(terminal.readyTools).toBe(1);
       expect(terminal.nonReadyTools).toBe(0);
       expect(sawBuildAFinding).toBe(true);

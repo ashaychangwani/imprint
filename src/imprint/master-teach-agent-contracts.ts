@@ -669,6 +669,20 @@ export const CompletionReviewInputSchema = strictObject({
   claims: z.array(ClaimSchema),
   /** Optional until the controller has captured a bounded result projection. */
   toolResultEvidence: z.array(CompletionToolResultEvidenceSchema).optional(),
+  semanticReviewHistory: z
+    .array(
+      strictObject({
+        toolName: Short,
+        planRevision: z.number().int().nonnegative(),
+        buildRef: ContentAddressedRefSchema,
+        resultReceiptRef: ContentAddressedRefSchema,
+        reviewRef: ContentAddressedRefSchema,
+        invocationParameters: ScalarParameterValuesSchema.optional(),
+        status: z.enum(['credible', 'revision_required']),
+        reason: Short,
+      }),
+    )
+    .optional(),
 });
 export type CompletionReviewInput = z.infer<typeof CompletionReviewInputSchema>;
 const FindingSchema = strictObject({

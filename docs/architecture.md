@@ -69,6 +69,11 @@ by this path; this remains a separate verification limitation.
 Planner guidance makes this limitation explicit and asks it to select a coherent
 first case that challenges weak core evidence, not simply repeat research inputs.
 Any remaining required gap stays explicit for the master; optional breadth waits.
+Final review receives a compact history of baseline semantic reviews, including
+inputs, reasons, plan revisions and immutable build/receipt/review references.
+Transport success does not erase a rejected result. The reviewer decides whether
+new evidence repairs the contradiction or an explicit scope revision addresses
+it; historical failures are not automatic runtime vetoes.
 Baseline reviewers inspect visible values, not only recognizable names or a
 non-empty collection. Contradictory returned fields require repair; optional
 breadth does not excuse incorrect data. Compilers treat broad pattern searches

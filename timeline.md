@@ -5402,3 +5402,43 @@ no site-specific examples, host-generated tests or mandatory test quota were add
 Extra unexecuted cases must not be claimed as coverage. All 166 focused tests,
 static checks, website build and both viewport inspections pass. Fresh validation
 will now test this guidance together with the actual input-override fix.
+
+### September 6, 00:57 PDT — Verification caught the defect, repair still wrong
+
+Fresh run `875b031a-0b36-4bae-97cf-ddfbfa39e138` on `1b3ede1` finished in
+about 59 minutes. The planner chose three adults; execution honored it and the
+reviewer repeatedly rejected two-adult results. This validates the input-override
+fix, not the generated tool. The master eventually chose a two-adult passing
+case. The generated request changed to structured travel state without any
+external solution supplied.
+
+Independent audit `/tmp/imprint-hotels-planned-proof-audit-KkKR5R` scored
+44.4%: four correct and five broken units, no exclusions. The new parser labels
+the array entry after the stay dates as adults. Across audit cases that value
+tracked two, three, or six nights, not the requested guest count. This strongly
+indicates a mislabeled duration; the audit's phrasing that the server applied
+that adult count is not independently established. No working occupancy fix is
+proven. Preserve the failed output and diagnose rather than reroll immediately.
+Disk is about 1.4 GiB free; Chrome cache errors occurred and the user was warned.
+
+### September 6, 01:11 PDT — Fix the final review's missing semantic history
+
+User requested introspection and a fix. The compiler inferred meaning from its
+own request encoding, then labeled a stay-duration value as adults. The master
+eventually switched back to an easier passing case. I spent too long revising
+wording without checking the final review's evidence pipeline.
+
+The final reviewer received historical transport receipts but not the earlier
+semantic rejections saved separately under mvp-reviews. Added a compact history
+of those decisions, with actual inputs, reasons and saved build/receipt/review
+references, to both completion-review paths. The reviewer now evaluates whether
+earlier contradictions were repaired; an easier passing test is not proof.
+Historical failure is not an automatic runtime veto, and supported scope changes
+remain the agent's decision. No site-specific instruction or classifier added.
+
+The neutral end-to-end regression proves a rejection survives into final review
+after a later passing build. All 166 focused tests, lint, types, dependency checks,
+website build and desktop/mobile inspection pass. Full suite: 1,907 passed and
+the existing process-cleanup stress test failed; do not claim the suite green.
+Fresh teach validation is pending: disk is only about 1.3 GiB free and Chrome
+has already reported cache-creation failures. No user data was deleted.
