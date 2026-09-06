@@ -5714,3 +5714,29 @@ This does not identify every cause, but does not support a blanket runtime
 delay or browser reset as the fix. Both diagnostic browsers were closed; no
 generated files were changed. Log:
 `/tmp/imprint-hotels-reopen-navigation-timing.log`.
+
+### September 6, 08:00–09:00 PDT — Research repair worked; narrower output awaits audit
+
+Fresh unsteered Hotels run `2cffa611-c3eb-4782-9281-cde8f2e664f0` on
+`b570864` finished after about 56 minutes and published `search_hotels`.
+It exposes destination, check-in date, and check-out date only. Adults and
+rooms were removed after research could not demonstrate that they worked.
+This is reduced coverage, not proof that the whole recording is supported.
+
+The new route from failed verification back to the same researcher was used.
+Research corrected an earlier interpretation: a returned number described
+the number of nights, not adults. Controlled occupancy changes did not prove
+the requested settings were applied. This also shows the first review's
+specific adult-count mismatch was mistaken, although its rejection of
+unsupported occupancy was appropriate. Later reviews accepted Denver hotel
+records with server-returned February 16–19, 2027 stay dates.
+
+A remaining time sink is that review sees a short result preview: one repair
+was requested because the preview hid the relevant stay dates. No new rule
+or site-specific fix was added for that issue in this run.
+
+At 09:00 PDT, started an independent audit using only a copy of the newly
+published tool in `/tmp/imprint-hotels-server-echo-audit-x3nZbF`. The audit
+will test the remaining parameters separately; its score is not yet known.
+Log: `/tmp/imprint-hotels-server-echo-audit.log`. No generated tool was
+manually repaired, and no teach overlaps the audit.
