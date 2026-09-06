@@ -5571,3 +5571,43 @@ All 230 focused research, controller, agent and audit tests pass, along with
 lint, type checks, dependency checks and desktop/mobile website validation.
 The new parser artifact may be cited as supplied evidence; no hidden citation
 requirement was introduced. Fresh teach validation follows this checkpoint.
+
+### September 6, 05:58–06:35 PDT — API Hotels MVP published, but audit finds a price-format defect
+
+Fresh run `63e7f256-325b-469b-b7da-8f5e8ed5569b` on `d44b01c` used the
+explicit June 4 recording without old research, examples, or steering. It
+published one API search tool that also returns filter metadata, using plain
+fetch. The selected live call took about 1.3 seconds. Location, check-in,
+check-out and currency are exposed; guest count is not. The first parser returned
+no hotels. Review correctly rejected it and returned repairs to the same
+compiler conversation. Some later repairs were wasted because the review's
+2 KB preview hid relevant output; the compiler eventually added a compact
+summary. This visibility problem remains a separate follow-up, not a reason
+to waive missing evidence.
+
+Independent isolated audit `/tmp/imprint-hotels-parser-origin-audit-vaIHKZ`
+finished at about 06:43 PDT: 77.8%, seven correct and two broken units across
+five calls and four parameters, with no exclusions. Location and dates worked.
+EUR prices became null because the generated parser recognizes dollar-formatted
+prices only. The original report stays unchanged. No generated artifact was
+hand-edited. This is not yet the requested greater-than-80% result, and absent
+guest control remains an explicit breadth limitation.
+
+### September 6, 06:47 PDT — Pass the research response to the compiler
+
+The researcher had already obtained valid EUR-priced results, but the compiler
+handoff copied only the request files and a written summary. The actual selected
+live response was retained in the research directory, outside the compiler's
+normal file-reading workspace. The compiler therefore lacked the obvious local
+fixture for checking its parser against that successful call.
+
+Added a small file handoff: the selected observation and full saved response are
+copied into the compiler workspace and named in its plan. The compiler is told
+to use these for offline parser tests, alongside the recording. These files
+are not shipped runtime dependencies. No currency rule, site-specific prompt,
+new API call, or compulsory parameter-testing quota was added. A neutral test
+checks that the selected response survives a research follow-up, is not
+truncated, retains ordinary hidden state, and still excludes typed credentials.
+All 181 focused tests, lint, type checks, dependency checks and website build
+pass; desktop and mobile render checks passed. The full suite passed all 1,911
+tests with zero failures in 95 seconds. Fresh, unsteered teach validation follows.

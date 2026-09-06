@@ -455,7 +455,10 @@ The public teaching path is one fresh foreground controller:
    its dependencies, the completed research handoffs, and the exact artifact
    contract.
 9. A fresh focused compiler builds that tool. Independent tools in the same
-   master-authored wave may compile in parallel.
+   master-authored wave may compile in parallel. The selected research call's
+   input/observation file and full retained response are copied into its local
+   workspace for offline parser tests. These evidence files are not published
+   runtime dependencies; the compiler need not repeat the live call to read them.
 10. The controller records contract, replay, live, and producer-consumer results
    as factual receipts. A playbook replay check is not applicable, not a
     failure. A backend message that a request completed describes transport only;

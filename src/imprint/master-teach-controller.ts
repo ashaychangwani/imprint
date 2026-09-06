@@ -22,6 +22,7 @@ import {
   ApiResearchBlockedError,
   type ApiResearchOutcome,
   type ApiResearchResult,
+  copyApiResearchEvidence,
   researchApiMvpCall,
 } from './api-research-agent.ts';
 import {
@@ -1774,6 +1775,9 @@ async function compileFocusedToolWithShippedAgent(input: {
       }
     }
   }
+  const researchEvidence = input.apiResearchDir
+    ? copyApiResearchEvidence(input.apiResearchDir, input.stagingDir)
+    : undefined;
   const toolPlan = JSON.stringify(
     {
       tool: input.tool,
@@ -1785,6 +1789,7 @@ async function compileFocusedToolWithShippedAgent(input: {
               instruction:
                 'Preserve the tested request construction. Focus on the parser, offline tests, integration case, and Imprint packaging. Change the request only if the accepted plan or artifact mechanics make the handoff impossible; report that exact contradiction to the master.',
               summary: input.apiResearchSummary,
+              ...(researchEvidence ? { evidenceFiles: researchEvidence } : {}),
             },
           }
         : {}),

@@ -142,6 +142,9 @@ repair turn can correct the candidate, test reference, and remaining proof gaps.
 Blocked terminal counts include unresolved discoveries even when no tool was planned.
 Researchers can inspect or search bounded portions of retained live results,
 including HTML attributes and embedded state, without repeating the API call.
+Compilers receive the selected research call's full saved response and inputs
+for offline parser tests, not just a written summary. This evidence stays out of
+published runtime artifacts.
 MVP reviewers receive the checked build's parser to distinguish observed values
 from input echoes; audits require an attributable effect, not merely changed ordering.
 Final review also sees prior semantic rejections and their actual inputs, so a

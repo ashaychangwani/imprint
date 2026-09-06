@@ -1,5 +1,12 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type BackendAttemptFact,
@@ -159,6 +166,32 @@ function retainedResultPath(toolDir: string, observationId: string): string {
     'live-results',
     `${createHash('sha256').update(observationId).digest('hex')}.txt`,
   );
+}
+
+/** Copy only the selected observation, not another tool's or attempt's evidence. */
+export function copyApiResearchEvidence(
+  researchDir: string,
+  compilerDir: string,
+):
+  | {
+      observationFile: string;
+      responseFile: string;
+    }
+  | undefined {
+  const observationPath = pathJoin(researchDir, 'api-research.json');
+  if (!existsSync(observationPath)) return undefined;
+  const { observation } = JSON.parse(readFileSync(observationPath, 'utf8')) as {
+    observation: ApiResearchObservation;
+  };
+  const responsePath = retainedResultPath(researchDir, observation.id);
+  if (!existsSync(responsePath)) return undefined;
+  const files = {
+    observationFile: 'api-research.json',
+    responseFile: 'api-research-response.txt',
+  };
+  copyFileSync(observationPath, pathJoin(compilerDir, files.observationFile));
+  copyFileSync(responsePath, pathJoin(compilerDir, files.responseFile));
+  return files;
 }
 
 function resultFact(

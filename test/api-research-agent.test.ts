@@ -2,7 +2,11 @@ import { describe, expect, it } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ApiResearchBlockedError, researchApiMvpCall } from '../src/imprint/api-research-agent.ts';
+import {
+  ApiResearchBlockedError,
+  copyApiResearchEvidence,
+  researchApiMvpCall,
+} from '../src/imprint/api-research-agent.ts';
 import {
   type ApiResearchCandidate,
   ApiResearchHandoffSchema,
@@ -700,6 +704,23 @@ describe('focused API research', () => {
       expect(calls).toBe(1);
       expect(turns).toBe(4);
       expect(followUpTurns).toBe(2);
+      const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-research-handoff-'));
+      try {
+        const files = copyApiResearchEvidence(toolDir, compilerDir);
+        expect(files).toBeDefined();
+        if (!files) throw new Error('Selected research evidence was not copied');
+        const copied = readFileSync(join(compilerDir, files.responseFile), 'utf8');
+        expect(copied.startsWith('<!doctype html>')).toBe(true);
+        expect(copied.length).toBeGreaterThan(12_000);
+        expect(copied).toContain('fixture-hidden-state');
+        expect(copied).not.toContain('fixture-password');
+        const selected = JSON.parse(readFileSync(join(compilerDir, files.observationFile), 'utf8'));
+        expect(selected.observation.id).toBe(first.observation.id);
+        expect(selected.decision.candidate.parameterValues).toEqual(candidate.parameterValues);
+        expect(selected.decision.action).toBe('proven');
+      } finally {
+        rmSync(compilerDir, { recursive: true, force: true });
+      }
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }
