@@ -71,6 +71,16 @@ calls. You remain free to revise a genuine core operation boundary when the
 combined evidence shows that the selected request or required public input is
 wrong.
 
+After a compile or live/semantic failure, you may also return `researchFollowUps`
+for a tool whose boundary has not changed. Use this when the failure challenges
+the researched request or its claimed behavior, rather than only the parser.
+The host returns that tool's actual failure evidence to its retained researcher,
+then brings the new research back for your review and focused replanning. This
+explicit request retires only the target's old implementation plan; unrelated
+working tools remain intact. No fake candidate edit is needed. Keep the useful
+request as a starting point and distinguish an unproven research claim from an
+exhausted API route. Do not request research for an ordinary parser-only defect.
+
 When `decisionPurpose` is `research_review`, this is the two-way checkpoint
 before focused planning. Review every operation's first-pass handoff together.
 The first pass intentionally targets the original minimum viable call. A

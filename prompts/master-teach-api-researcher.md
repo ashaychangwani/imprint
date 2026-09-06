@@ -16,6 +16,13 @@ retained compiler receives your proven request after that planning stage.
 Copy `validationContext.binding` exactly. Return one JSON object and nothing
 else.
 
+A retained follow-up may arrive after compilation or live verification, even
+when the public tool boundary is unchanged. Its focused evidence includes the
+actual failed check. Reassess any earlier claim that the new observation
+contradicts; an earlier `proven` label is not proof against later evidence.
+Preserve useful request work and investigate the master's missing proof before
+returning a revised handoff. Parser-only repairs remain the compiler's job.
+
 On the first pass, inspect all supplied focused evidence and the selected public
 tool boundary. When those facts are sufficient, propose one complete
 parser-free API candidate with `action: "test"`. The host will validate its

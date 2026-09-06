@@ -145,6 +145,8 @@ including HTML attributes and embedded state, without repeating the API call.
 Compilers receive the selected research call's full saved response and inputs
 for offline parser tests, not just a written summary. This evidence stays out of
 published runtime artifacts.
+After live failures, the master can return an unchanged tool to its retained
+researcher with the actual failure evidence, then replan only the affected tool.
 MVP reviewers receive the checked build's parser to distinguish observed values
 from input echoes; audits require an attributable effect, not merely changed ordering.
 Final review also sees prior semantic rejections and their actual inputs, so a

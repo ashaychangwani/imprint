@@ -5575,6 +5575,121 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
+  it('returns a live failure to retained research without changing the tool boundary', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const promotionBatches: string[][] = [];
+      let rejected = false;
+      let researchedAgain = false;
+      let requestedFreshTest = false;
+      const plannerCalls: string[] = [];
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-post-live-research',
+        events,
+        promotionBatches,
+        requestBaselineMvpReview: (input) => {
+          if (input.toolId === CONSUMER_ID && !rejected) {
+            rejected = true;
+            return {
+              ...baselineMvpReview(input, 'revision_required'),
+              reason: 'The returned variant is the default, not the requested variant.',
+            };
+          }
+          return credibleBaselineMvpReview(input);
+        },
+      });
+      const baseMaster = base.requestMasterDecision;
+      const basePlanner = base.requestFocusedPlan;
+      if (!baseMaster || !basePlanner) throw new Error('fixture roles missing');
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: syntheticSessionPath(root),
+          noInteractive: true,
+          maxDurationMs: 10_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (input, agent, options) => {
+            if (!input.verificationFindings) return baseMaster(input, agent, options);
+            const output = {
+              binding: input.current?.run,
+              outcome: 'revised',
+              reason:
+                'Return the disproved request claim to research, retaining the tool boundary.',
+              recallToolNames: [],
+              desiredPlan: desiredFromCurrent(input),
+              researchFollowUps: [
+                {
+                  toolName: CONSUMER_NAME,
+                  instruction: 'Investigate the wrong default variant in the actual live result.',
+                  missingProof: ['The requested variant must appear in returned data.'],
+                  relevantToolNames: [],
+                  relevantRequestSeqs: [2],
+                },
+              ],
+            };
+            return requestValidatedMasterDecision(input, {
+              analyzer: { analyze: async () => ({ text: JSON.stringify(output) }) },
+            });
+          },
+          requestApiResearchStep: async (input, _agent, delta) => {
+            const decision = await fixtureApiResearchStep(input);
+            if (!input.followUp) return decision;
+            expect(input.tool.id).toBe(CONSUMER_ID);
+            expect(input.previousProgress?.status).toBe('proven');
+            expect(input.previousProgress?.researchInputsSha256).toBe(
+              apiResearchInputsSha256(input.tool),
+            );
+            expect(JSON.stringify(input.evidence)).toContain('The returned variant is the default');
+            if (!requestedFreshTest) {
+              expect(delta?.kind).toBe('master_follow_up');
+              requestedFreshTest = true;
+              return { ...decision, action: 'test' as const, basedOnObservationId: undefined };
+            }
+            researchedAgain = true;
+            return { ...decision, reason: 'New observation proves the requested variant.' };
+          },
+          requestFocusedPlan: async (input, agent) => {
+            plannerCalls.push(input.tool.id);
+            if (input.tool.id === CONSUMER_ID && rejected) {
+              expect(researchedAgain).toBe(true);
+              expect(JSON.stringify(input.apiResearch)).toContain('New observation proves');
+            }
+            return basePlanner(input, agent);
+          },
+          requestCompletionReview: async (input) =>
+            CompletionReviewOutputSchema.parse({
+              binding: input.run,
+              verdict: 'passed',
+              summary: 'The repaired consumer and unchanged producer are verified.',
+              findings: [],
+              toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                toolId: result.payload.toolId,
+                ...(result.payload.chainEdgeId ? { chainEdgeId: result.payload.chainEdgeId } : {}),
+                status: 'credible',
+                reason: 'Current fixture result.',
+                evidenceRefs: [result.ref],
+              })),
+              claimDispositions: input.claims.map((claim) => ({
+                claimId: claim.id,
+                status: 'supported',
+                reason: 'Current fixture proof.',
+                evidenceRefs: claim.evidenceRefs,
+              })),
+            }),
+        },
+      );
+      expect(terminal.status).toBe('completed');
+      expect(researchedAgain).toBe(true);
+      expect(plannerCalls.filter((id) => id === PRODUCER_ID)).toHaveLength(1);
+      expect(plannerCalls.filter((id) => id === CONSUMER_ID)).toHaveLength(2);
+      expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(1);
+      expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(2);
+      expect(promotionBatches.filter((names) => names.includes(PRODUCER_NAME))).toHaveLength(1);
+    });
+  });
+
   it('returns changed-boundary partial research to the same researcher before replanning', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root, true);

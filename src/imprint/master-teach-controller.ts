@@ -2453,6 +2453,7 @@ async function researchSelectedOperations(input: {
   toolIds?: ReadonlySet<string>;
   followUps?: readonly ApiResearchFollowUpDirective[];
   previousHandoffs?: readonly ApiResearchHandoff[];
+  verificationEvidenceByToolName?: ReadonlyMap<string, PromptEvidenceEntry[]>;
 }): Promise<PrePlanApiResearch> {
   const evidenceByTool = focusedEvidenceForPlan({
     plan: input.plan,
@@ -2486,6 +2487,16 @@ async function researchSelectedOperations(input: {
             })
           : evidenceByTool.get(sourceTool.id);
         if (!evidence) throw new Error(`API research evidence is missing for "${sourceTool.id}"`);
+        const failureEntries = input.verificationEvidenceByToolName?.get(
+          sourceTool.candidate.toolName,
+        );
+        if (failureEntries?.length) {
+          const payload = { entries: [...evidence.payload.entries, ...failureEntries] };
+          evidence = PromptEvidenceProjectionSchema.parse({
+            ref: addBootstrap(input.seeds, jsonRef(payload)),
+            payload,
+          });
+        }
         evidenceByTool.set(sourceTool.id, evidence);
         const { implementationPlan: _implementationPlan, ...tool } = sourceTool;
         const requiredLinks = apiResearchRequiredLinks(input.plan, sourceTool);
@@ -4544,6 +4555,18 @@ function revisionEvidenceRefs(
   ]);
 }
 
+function desiredPlanAfterResearchRequest(decision: MasterDecision): DesiredTeachingPlan {
+  const targets = new Set((decision.researchFollowUps ?? []).map(({ toolName }) => toolName));
+  return {
+    ...decision.desiredPlan,
+    tools: decision.desiredPlan.tools.map((tool) => {
+      if (!targets.has(tool.candidate.toolName)) return tool;
+      const { implementationPlan: _previousPlan, ...needsPlanning } = tool;
+      return needsPlanning;
+    }),
+  };
+}
+
 async function requestRepairRevision(
   context: MasterRevisionContext,
   findings: PromptEvidenceProjection,
@@ -4573,7 +4596,7 @@ async function requestRepairRevision(
     if (!toolId) throw new Error(`recall references missing public tool name "${toolName}"`);
     return toolId;
   });
-  const revision = context.journal.revisePlan(decision.desiredPlan, {
+  const revision = context.journal.revisePlan(desiredPlanAfterResearchRequest(decision), {
     expectedRevision: current.plan.revision,
     forceRecompileToolIds,
     decision: planDecision(
@@ -4587,7 +4610,20 @@ async function requestRepairRevision(
   return { decision, revision };
 }
 
-async function ensureCurrentImplementationPlans(context: MasterRevisionContext): Promise<void> {
+async function ensureCurrentImplementationPlans(
+  context: MasterRevisionContext,
+  requestedFollowUps: readonly ApiResearchFollowUpDirective[] = [],
+  findings?: PromptEvidenceProjection,
+): Promise<void> {
+  let pendingFollowUps = requestedFollowUps;
+  const verificationEvidenceByToolName = new Map<string, PromptEvidenceEntry[]>();
+  if (findings) {
+    rememberLatestFailureEvidence(
+      context.journal.currentPlan(),
+      findings,
+      verificationEvidenceByToolName,
+    );
+  }
   const reviewedProposalStates = new Set<string>();
   for (;;) {
     if (Date.now() >= context.runDeadline.deadlineMs) {
@@ -4600,6 +4636,8 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
     const researchReviewToolIds = missingToolIds.filter((toolId) => {
       const tool = current.plan.tools.find(({ id }) => id === toolId);
       if (!tool || tool.strategy?.kind !== 'api') return false;
+      if (pendingFollowUps.some(({ toolName }) => toolName === tool.candidate.toolName))
+        return true;
       const result = context.apiResearchResults.get(toolId);
       if (result && apiResearchCoversToolBoundary(tool, result)) return false;
       return true;
@@ -4608,6 +4646,8 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
       const freshResearchToolIds = researchReviewToolIds.filter((toolId) => {
         const tool = current.plan.tools.find(({ id }) => id === toolId);
         if (!tool) return false;
+        if (pendingFollowUps.some(({ toolName }) => toolName === tool.candidate.toolName))
+          return true;
         const handoff = context.apiResearch.find(
           ({ toolName }) => toolName === tool.candidate.toolName,
         );
@@ -4618,29 +4658,53 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
         );
       });
       const researchSeeds = new Map<string, FreshTeachBootstrapObject>();
-      const firstPass =
-        freshResearchToolIds.length > 0
-          ? await researchSelectedOperations({
-              plan: current.plan,
-              run: context.discoveryInput.run,
-              recordingIndex: context.discoveryInput.recordingIndex,
-              triagedSession: context.triagedSession,
-              independent: context.independent,
-              seeds: researchSeeds,
-              stagingRoot: context.stagingRoot,
-              agent: context.agent,
-              deps: context.deps,
-              runDeadline: context.runDeadline,
-              signal: context.signal,
-              report: context.report,
-              toolIds: new Set(freshResearchToolIds),
-            })
-          : {
-              evidenceByTool: new Map<string, PromptEvidenceProjection>(),
-              handoffs: [],
-              resultsByToolId: new Map<string, ApiResearchResult>(),
-            };
+      const firstPass: PrePlanApiResearch = {
+        evidenceByTool: new Map(),
+        handoffs: [],
+        resultsByToolId: new Map(),
+      };
+      const directedIds = pendingFollowUps.flatMap(({ toolName }) =>
+        current.plan.tools
+          .filter((tool) => tool.candidate.toolName === toolName)
+          .map(({ id }) => id),
+      );
+      // Preserve the master's causal order and give each later researcher the
+      // preceding sibling's new handoff. Undirected first passes stay parallel.
+      const researchBatches = [
+        freshResearchToolIds.filter((id) => !directedIds.includes(id)),
+        ...directedIds.map((id) => [id]),
+      ].filter((ids) => ids.length > 0);
+      for (const toolIds of researchBatches) {
+        const updatedNames = new Set(firstPass.handoffs.map(({ toolName }) => toolName));
+        const update = await researchSelectedOperations({
+          plan: current.plan,
+          run: context.discoveryInput.run,
+          recordingIndex: context.discoveryInput.recordingIndex,
+          triagedSession: context.triagedSession,
+          independent: context.independent,
+          seeds: researchSeeds,
+          stagingRoot: context.stagingRoot,
+          agent: context.agent,
+          deps: context.deps,
+          runDeadline: context.runDeadline,
+          signal: context.signal,
+          report: context.report,
+          toolIds: new Set(toolIds),
+          followUps: pendingFollowUps,
+          previousHandoffs: [
+            ...context.apiResearch.filter(({ toolName }) => !updatedNames.has(toolName)),
+            ...firstPass.handoffs,
+          ],
+          verificationEvidenceByToolName,
+        });
+        firstPass.handoffs.push(...update.handoffs);
+        for (const [id, evidence] of update.evidenceByTool)
+          firstPass.evidenceByTool.set(id, evidence);
+        for (const [id, result] of update.resultsByToolId)
+          firstPass.resultsByToolId.set(id, result);
+      }
       const replacedNames = new Set(firstPass.handoffs.map(({ toolName }) => toolName));
+      pendingFollowUps = [];
       const combinedHandoffs = [
         ...context.apiResearch.filter(({ toolName }) => !replacedNames.has(toolName)),
         ...firstPass.handoffs,
@@ -4757,7 +4821,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
     };
     const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
     const decisionRef = context.journal.storeJson(decision);
-    context.journal.revisePlan(decision.desiredPlan, {
+    context.journal.revisePlan(desiredPlanAfterResearchRequest(decision), {
       expectedRevision: current.plan.revision,
       decision: planDecision(
         context.deps.now(),
@@ -4767,6 +4831,7 @@ async function ensureCurrentImplementationPlans(context: MasterRevisionContext):
         evidenceRefs,
       ),
     });
+    pendingFollowUps = decision.researchFollowUps ?? [];
   }
 }
 
@@ -5619,7 +5684,11 @@ export async function runFreshMasterTeach(
       for (const toolId of revision.recompileToolIds) {
         revisionGuidanceByToolId.set(toolId, repairDecision.reason);
       }
-      await ensureCurrentImplementationPlans(revisionContext());
+      await ensureCurrentImplementationPlans(
+        revisionContext(),
+        repairDecision.researchFollowUps,
+        findings,
+      );
       plannedTools = activeJournal.currentPlan().tools.length;
     };
 

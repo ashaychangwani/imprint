@@ -5638,3 +5638,24 @@ claim. Next make an explicit master-requested follow-up available after live
 failure, reuse the retained researcher, and pass the factual failure. Do not
 force a fake boundary edit or add a site-specific occupancy rule. The failed
 run stays read-only; validate any fix in a fresh run.
+
+### September 6, 07:18–07:26 PDT — Let the master return failed claims to research
+
+Implemented an explicit post-check research request using the existing
+`researchFollowUps` action. The master can now use it after execution or during
+repair planning without changing the tool boundary. The target's old
+implementation plan is retired, its actual failure facts travel to the retained
+researcher, and the new research returns for master review and focused planning.
+Multiple requested follow-ups keep the master's order and see earlier siblings'
+updated results. No runtime rule decides whether a claim needs research.
+
+A neutral end-to-end test rejects one consumer result, sends that unchanged
+consumer back to research with the exact failure, obtains another observation,
+replans and recompiles the consumer, and completes. The successful producer is
+planned, compiled and published only once. All 182 focused tests pass; the final
+agent/controller rerun passes 169 tests. Lint, type checks, dependency checks,
+website build, and desktop/mobile visual checks pass. The full suite finished
+with 1,911 passing and one failing test in 92 seconds: the previously observed
+process-cleanup stress test. Its isolated file then passed all 14 tests in
+7.4 seconds. This is not an entirely green full-suite result.
+The failed live Hotels run has not been resumed or modified.

@@ -1442,8 +1442,16 @@ function masterOutputSchema(input: MasterDecisionInput) {
     if (input.phase === 'discovery' && output.recallToolNames.length > 0)
       issue(ctx, ['recallToolNames'], 'initial discovery cannot recall an existing tool');
     const researchFollowUps = output.researchFollowUps ?? [];
-    if (researchFollowUps.length > 0 && input.decisionPurpose !== 'research_review')
-      issue(ctx, ['researchFollowUps'], 'research follow-ups belong to pre-planning review');
+    if (
+      researchFollowUps.length > 0 &&
+      input.decisionPurpose !== 'research_review' &&
+      !input.current?.snapshot
+    )
+      issue(
+        ctx,
+        ['researchFollowUps'],
+        'research follow-ups require research review or a current execution snapshot',
+      );
     if (input.decisionPurpose === 'research_review' && output.recallToolNames.length > 0)
       issue(ctx, ['recallToolNames'], 'research review directs researchers, not compilers');
     const currentToolNames = new Set(
