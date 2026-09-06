@@ -62,6 +62,10 @@ follow-up rather than declaring an unsupported full contract proven.
 The master treats the research status as a conclusion to review, not an
 automatic approval. Missing evidence inside one tool can trigger a focused
 follow-up just like a cross-tool contradiction, preserving the working request.
+The standalone live check executes the planner's first live case with its exact
+inputs and expectation. Research may supply the proven backend, but no longer
+overwrites that case's inputs. Additional planned live cases are not yet executed
+by this path; this remains a separate verification limitation.
 Baseline reviewers inspect visible values, not only recognizable names or a
 non-empty collection. Contradictory returned fields require repair; optional
 breadth does not excuse incorrect data. Compilers treat broad pattern searches

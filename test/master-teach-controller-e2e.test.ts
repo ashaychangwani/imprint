@@ -2015,7 +2015,7 @@ describe('fresh foreground master controller end to end', () => {
   });
 
   it.each(['recorded-item', 'researcher-item'])(
-    'verifies researched inputs %s without borrowing another case expectation',
+    'honors planned live inputs over research baseline %s while retaining its backend',
     async (researchedItem) => {
       await withTemporaryImprintHome(async (root) => {
         const recordingPath = syntheticSessionPath(root);
@@ -2095,17 +2095,8 @@ describe('fresh foreground master controller end to end', () => {
               if (input.toolId === CONSUMER_ID && !input.resultEvidence.payload.chainEdgeId) {
                 reviewedConsumerCase = input.resultEvidence.payload.verificationCaseId;
                 expect(input.resultEvidence.payload.invocationParameters).toEqual({
-                  item_id: researchedItem,
+                  item_id: 'synthetic-item',
                 });
-                if (researchedItem === 'researcher-item') {
-                  const consumer = input.currentPlan.payload.tools.find(
-                    ({ id }) => id === CONSUMER_ID,
-                  );
-                  if (!consumer) throw new Error('consumer missing');
-                  expect(input.resultEvidence.payload.expectedResult).toBe(
-                    consumer.candidate.expectedOutput,
-                  );
-                }
               }
               if (input.toolId === CONSUMER_ID && input.resultEvidence.payload.chainEdgeId) {
                 expect(input.resultEvidence.payload.invocationParameters).toEqual({
@@ -2134,13 +2125,11 @@ describe('fresh foreground master controller end to end', () => {
               backend,
             })),
         ).toEqual([
-          { parameters: { item_id: researchedItem }, backend: 'cdp-replay' },
+          { parameters: { item_id: 'synthetic-item' }, backend: 'cdp-replay' },
           { parameters: { item_id: 'item-1' }, backend: 'cdp-replay' },
         ]);
-        expect(reviewedConsumerCase).toBe(
-          researchedItem === 'recorded-item' ? `replay_${CONSUMER_ID}` : 'invocation_baseline',
-        );
-        expect(calls.some(({ parameters }) => parameters.item_id === 'synthetic-item')).toBe(false);
+        expect(reviewedConsumerCase).toBe(`live_${CONSUMER_ID}`);
+        expect(calls.some(({ parameters }) => parameters.item_id === researchedItem)).toBe(false);
       });
     },
   );

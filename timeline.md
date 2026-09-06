@@ -5357,3 +5357,36 @@ discarding its working request. Avoid optional breadth and redundant tests.
 No site-specific instruction or runtime gate was added. All 123 focused agent
 tests, lint, types, dependency checks and website build pass; desktop and mobile
 were inspected. Live validation must still demonstrate whether this helps.
+
+### September 5, 23:29 PDT — Master wording did not resolve the defect
+
+Fresh `2b6b99d1-b07c-4482-bb90-a548d0972f05` completed one tool in roughly
+twelve minutes on `74bc44a`. Its isolated audit in
+`/tmp/imprint-hotels-master-review-audit-Tc9Qnd` again scored 77.8% with the
+same guest-count failure, and no excluded results. Research still called a
+two-adult response proof of all mappings. Do not claim this prompt fix worked.
+Pause repeated full teaches while investigating the verification setup: the
+independent audit repeatedly catches a core defect that teach's own evidence
+reviews do not. More wording alone has not been sufficient.
+
+### September 5, 23:37 PDT — Verification execution has a separate limitation
+
+`runLiveCheck` prefers research parameters over the planner's live-case inputs;
+its helper selects only the first live case. Thus a planner choosing stronger
+inputs can have them replaced by the old research baseline. The latest plan
+itself chose only the same two-adult case, so this override did not cause that
+specific miss. Keep the two issues separate: inadequate agent-selected tests,
+and a runtime execution path that does not faithfully honor stronger plans.
+The site-neutral direction is to execute agent-selected verification inputs
+faithfully, with factual receipts; the host must not invent semantic tests.
+
+### September 5, 23:43 PDT — Honor planned live inputs
+
+Removed the research-input override from live checking. The planner's first live
+case now supplies both inputs and expected result; research still supplies its
+proven backend. Replay cases with identical inputs cannot substitute their
+expectation for this live case. Updated the neutral end-to-end test to prove
+the exact call and review identity, plus docs and website. All 42 controller
+end-to-end tests, lint, types, dependency checks and website build pass; both
+viewport layouts inspected. Multiple-live-case execution remains unresolved;
+do not claim this alone fixes the repeated Hotels guest-count failure.

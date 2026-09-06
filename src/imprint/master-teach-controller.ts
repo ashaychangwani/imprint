@@ -3321,12 +3321,9 @@ async function runLiveCheck(input: {
   maxDurationMs?: number;
   apiResearch?: ApiResearchResult;
 }): Promise<UnboundLiveCheckResult> {
-  const parameters =
-    input.apiResearch?.parameters ?? liveVerificationParameters(input.implementation);
-  const verification = verificationForResearchParameters(input.implementation, parameters) ?? {
-    id: 'invocation_baseline',
-    expectedResult: input.tool.candidate.expectedOutput || input.tool.candidate.description,
-  };
+  const parameters = liveVerificationParameters(input.implementation);
+  const verification = input.implementation.verificationCases.find((test) => test.check === 'live');
+  if (!verification) throw new Error('implementation plan has no live verification case');
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
     const playbookPath = pathJoin(input.compiled.toolDir, 'playbook.yaml');
