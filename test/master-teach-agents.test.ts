@@ -1338,6 +1338,17 @@ describe('prompts and pre-plan discovery', () => {
     expect(baselinePrompt).toContain('does not prevent review of a successful chain result');
   });
 
+  it('distinguishes optional MVP breadth from incorrect returned values', () => {
+    const review = prompt('master-teach-baseline-mvp-review.md');
+    expect(review).toContain('incorrect returned values are not optional polish');
+    expect(review).toContain('Read the values, not just the field names');
+    expect(review).toContain('concrete field and contradiction as `revision_required`');
+    expect(review).toContain('Do not claim evidence for fields beyond a truncated preview');
+    expect(review).toContain('not independent proof that the server honored them');
+    expect(prompt('compile-agent.md')).toContain('type/regex matches locate candidates, not proof');
+    expect(prompt('compile-agent.md')).toContain('repeat the same guessed mapping');
+  });
+
   it.each(['passed', 'failed'] as const)(
     'reviews a grouped chain result when standalone live is %s',
     async (liveStatus) => {

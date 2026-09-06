@@ -129,6 +129,8 @@ Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
 Research uses a small contrasting core-input check before claiming parameter
 mappings are proven; optional parameter breadth remains deferred.
+MVP reviewers check returned values against their claimed meaning: optional
+breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint
 retries that exact delivery once on the same conversation and deadline.
 

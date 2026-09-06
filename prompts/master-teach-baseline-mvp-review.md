@@ -16,6 +16,16 @@ otherwise does not demonstrate the promised core operation. For
 the bounded `reason`; do not speculate about a fix. That factual reason is the
 master's repair handoff.
 
+Optional breadth may wait; incorrect returned values are not optional polish.
+Read the values, not just the field names or collection count. Compare the
+visible values with their claimed meaning and with each other. A recognizable
+record does not excuse contradictory fields elsewhere in that record. For
+example, an asset address labeled as a monetary amount does not demonstrate a
+price. Report the concrete field and contradiction as `revision_required`;
+the master decides whether to repair it or defer a genuinely optional field.
+Do not claim evidence for fields beyond a truncated preview. Requested inputs
+repeated in output are not independent proof that the server honored them.
+
 The intended operation and `expectedOutput` are the promise. Use
 `baseline.invocationParameters`, the inputs actually sent, when supplied.
 Do not substitute a different planned test's input or expected location, date,

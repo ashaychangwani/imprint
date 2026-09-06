@@ -5204,3 +5204,46 @@ all 134 tests together. Do not claim the full suite was fully green.
 Fresh Hotels run `636457ee-ee12-44fc-8eb1-f7f10bfda624` started at 16:45 PDT
 on `5f74e88`, same June 4 recording, no previous research or generated solution.
 Review at 17:45; hard deadline 18:15 PDT. Disk remains about 11 GiB free.
+
+### September 5, 17:08 PDT — Hotels finished, independent audit still fails
+
+Run `636457ee-ee12-44fc-8eb1-f7f10bfda624` published one search tool and
+passed completion review. An isolated audit of only that fresh tool scored
+40%: four correct parameter units and six broken calls, with nothing excluded.
+Image URLs were returned as price text and booking links. The generated parser
+searches broadly for strings that resemble prices and URLs instead of proving
+their meaning. Compilation and completion review missed this.
+
+The audit marked all four parameters working, but inspection adds an important
+caution: the parser echoes the requested adult count and can fill missing dates
+from inputs. Those echoes are not proof that the server honored the inputs.
+Result counts changed, but stronger response evidence is still needed. Do not
+call Hotels reliable or treat the parameter score as conclusive.
+
+Audit evidence: `/tmp/imprint-hotels-core-contrast-audit-TyKj4R/google-hotels/`.
+Preserve this failed output; diagnose the review evidence before changing more
+prompts. No generated artifact was manually patched. Disk is about 7.9 GiB free.
+
+### September 5, 17:16 PDT — The reviewer saw the incorrect prices
+
+The saved MVP review first rejected an empty collection correctly. After repair,
+it approved twelve records. Its supplied preview visibly contained image URLs
+in both price-text fields, yet its reason claimed the records included prices.
+This is not missing evidence or a hidden runtime check: the compiler made loose
+field mappings and the semantic reviewer accepted them. The preview was cut off
+later, but the incorrect price values were already visible before that cutoff.
+
+The next focused correction should clarify the existing MVP review instruction:
+optional breadth may wait, but values that are already returned must mean what
+their field names claim. Do not introduce a runtime URL/price classifier. Also
+retain the distinction between requested inputs and server-confirmed output.
+
+### September 5, 17:23 PDT — Clarify correctness, without a new runtime rule
+
+Updated the existing compiler and MVP reviewer guidance: inspect actual values,
+do not treat broad pattern matches as established meanings, and do not excuse
+incorrect returned fields as optional polish. The reviewer reports contradictions
+to the master, which chooses repair or deferral of a genuinely optional field.
+Updated the matching documentation and website. All 121 focused agent tests,
+lint, type checking, dependency checks and website build pass. Desktop and mobile
+layouts were inspected. This focused check does not claim a new full-suite pass.
