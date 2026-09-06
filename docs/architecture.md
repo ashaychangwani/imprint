@@ -66,6 +66,9 @@ The standalone live check executes the planner's first live case with its exact
 inputs and expectation. Research may supply the proven backend, but no longer
 overwrites that case's inputs. Additional planned live cases are not yet executed
 by this path; this remains a separate verification limitation.
+Planner guidance makes this limitation explicit and asks it to select a coherent
+first case that challenges weak core evidence, not simply repeat research inputs.
+Any remaining required gap stays explicit for the master; optional breadth waits.
 Baseline reviewers inspect visible values, not only recognizable names or a
 non-empty collection. Contradictory returned fields require repair; optional
 breadth does not excuse incorrect data. Compilers treat broad pattern searches

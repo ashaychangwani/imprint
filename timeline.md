@@ -5390,3 +5390,15 @@ the exact call and review identity, plus docs and website. All 42 controller
 end-to-end tests, lint, types, dependency checks and website build pass; both
 viewport layouts inspected. Multiple-live-case execution remains unresolved;
 do not claim this alone fixes the repeated Hotels guest-count failure.
+
+### September 5, 23:53 PDT — Explain the live case the planner actually controls
+
+Avoid a larger receipt redesign for now: naively adding live calls would replace
+the producer's current receipt and invalidate its consumers. The latest failed
+plan only selected one case anyway. Instead, explain that the first live case
+executes and ask the planner to choose coherent inputs that challenge weak core
+evidence rather than copy the research baseline. The agent chooses the values;
+no site-specific examples, host-generated tests or mandatory test quota were added.
+Extra unexecuted cases must not be claimed as coverage. All 166 focused tests,
+static checks, website build and both viewport inspections pass. Fresh validation
+will now test this guidance together with the actual input-override fix.

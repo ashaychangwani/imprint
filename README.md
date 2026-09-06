@@ -135,6 +135,8 @@ The master reviews that evidence even when research labels itself proven;
 missing proof within one tool can return to its retained researcher.
 Live verification uses the planner's selected test inputs, not a replacement
 with the research baseline; the proven backend remains reusable.
+The planner chooses that first live case to challenge weak core evidence;
+additional unexecuted cases are not claimed as coverage.
 MVP reviewers check returned values against their claimed meaning: optional
 breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint

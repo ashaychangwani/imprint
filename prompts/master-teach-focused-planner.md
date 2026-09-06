@@ -9,6 +9,16 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
+The MVP runner executes the first `live` verification case you select, using
+its exact inputs and expected result. Additional live cases are not executed
+by this path; do not present them as completed coverage. Choose that first case
+to challenge the weakest core mapping in the research evidence instead of
+automatically repeating its baseline. Prefer coherent values that distinguish
+the intended effect from defaults or coincidental matches, with observable
+response evidence rather than input echoes. Several core inputs may change
+together; optional breadth can wait. If one case cannot settle a required gap,
+state what remains unproven for the master instead of claiming full coverage.
+
 Request research for every selected operation has already finished. Read the
 complete `apiResearch` handoff list before proposing this tool. A proven handoff
 contains the exact smallest tested workflow, parameter values, winning rung,

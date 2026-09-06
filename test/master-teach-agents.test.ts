@@ -1365,6 +1365,14 @@ describe('prompts and pre-plan discovery', () => {
     expect(master).toContain('Do not require optional breadth or repeat tests');
   });
 
+  it('explains the executed live case so the planner can choose useful evidence', () => {
+    const planner = prompt('master-teach-focused-planner.md');
+    expect(planner).toContain('executes the first `live` verification case');
+    expect(planner).toContain('challenge the weakest core mapping');
+    expect(planner).toContain('do not present them as completed coverage');
+    expect(planner).toContain('state what remains unproven');
+  });
+
   it.each(['passed', 'failed'] as const)(
     'reviews a grouped chain result when standalone live is %s',
     async (liveStatus) => {
