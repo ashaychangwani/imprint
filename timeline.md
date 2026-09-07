@@ -6602,3 +6602,22 @@ is justified by the newly resolved booking gap and roughly 28 minutes left for
 compilation and verification. The half-hour target was missed. Grid identifier
 and window-width claims still need verification; independent audit and fresh
 repeats remain due. No code changed during this run.
+
+
+### 2026-09-07 17:48 UTC — Flights 8 completed; independent audit started
+
+Attempt 8 completed at 17:44:16 UTC after 82.2922 minutes: four ready, zero
+failed. The generated location, one-way search, seven-day grid, and booking
+tools passed MVP verification. The fresh search-to-booking chain also passed.
+Booking uses a six-field choice constructed from one search itinerary and
+captures provider fares/links through CDP in its own browser session. The grid
+compiler enforces seven inclusive days in each window. No malformed researcher
+handoff exercised the original recovery fix. The 30-minute target remains unmet.
+
+Usage: 12,453,189 input including 9,761,024 cached reads, 164,877 output, zero
+reported cache writes; all 64 usage spans reported tokens. Base API estimate
+$17.97; cumulative accounted estimate $139.99 including earlier failures.
+Independent audit 8 started at 17:46:07 UTC, PID 2992, same home-8, 45-minute
+timeout. Log/manifest use flights-audit-8 names in the experiment directory.
+The heartbeat and handoff now follow that audit. Do not claim repeatability or
+Hotels success from this result; audit and fresh repeats remain due.

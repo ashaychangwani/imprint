@@ -1,6 +1,6 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 09:23 PDT
+## Current continuation — 10:48 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, originally based only on remote
@@ -10,14 +10,17 @@ reporting and per-turn time facts (`6ca89ba`), then simpler early contract-gap
 handoffs and coordinated producer/consumer revisions. No site-specific runtime
 or prompt rules were added. All changes are committed locally; no MR or push.
 
-Fresh Flights attempt **8** started **16:21:58 UTC**, PID **72015**, home
+Fresh Flights attempt **8** completed **17:44:16 UTC**, after **82.2922
+minutes**, with all four tools published and the fresh search-to-booking chain
+verified. Teach PID 72015 exited. Implementation remains `1677b16`.
+Independent audit **8** started **17:46:07 UTC**, PID **2992**, using the same
 `/tmp/imprint-fresh-inputs-VYbJm1/home-8`. Verify process identity from
-`flights-teach-8-manifest.json`; log `flights-teach-8.log` in the same experiment
-directory. Exact combined recording and four-operation guidance below are
-unchanged. Target 16:51 UTC, assess 17:21, hard deadline about 17:51.
+`flights-audit-8-manifest.json`; log `flights-audit-8.log`, timeout 45 minutes.
+The audit outcome is pending. Grid windows are explicitly seven days;
+city-identifier claims and public parameters still need independent coverage.
 Trace collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-The task heartbeat `imprint-fresh-validation` follows the active experiment.
-Do not duplicate processes or resume any failed teach. Disk is about 28 GiB free.
+The heartbeat follows the audit. Do not duplicate processes or resume failed
+teaches. Disk is about 28 GiB free. Exact recordings and guidance remain below.
 
 Attempt 6 reached 90 minutes with three published tools; their independent
 audit passed 10 invocations plus six parameters (16/16). Grid verification
@@ -29,19 +32,19 @@ before planning, with no published tools. Late contract coordination consumed
 the available time. Neither attempt establishes full Flights success. The
 original malformed-handoff catch has not been exercised by these live runs.
 
-Accounting through attempt 7: nine teaches and four audits, including failures;
-base API estimate **$122.02** with cache/billing/interrupted-usage caveats in
+Accounting through attempt 8: ten teaches and four audits, including failures;
+base API estimate **$139.99** with cache/billing/interrupted-usage caveats in
 `docs/teach-validation-accounting-2026-09-07.md`. No raw evidence was deleted or
 provided to later teaching agents. Latest runtime suite: 1,929 passing tests;
 latest prompt checks: 182 focused tests plus final packaging check, lint, website
 build, desktop/mobile visual verification.
 
-Next: follow attempt 8, checking whether agents raise concrete contract gaps
-earlier and coordinate both ends while preserving fresh-call proof. Audit all
-published tools independently after full Flights success, then repeat Hotels
-sequentially on unchanged code and audit it. Repeated successes are still due.
-Keep deadline failures and unsupported scope explicit. Older sections below
-are historical snapshots; use this section and current timeline entries.
+Next: inspect the independent audit's actual invocation/parameter totals and
+any failed calls. After full Flights audit success, repeat Hotels sequentially
+on unchanged code and independently audit its narrow destination/date scope.
+Fresh repeated successes for both sites remain due. Keep deadline failures and
+unsupported scope explicit. Older sections below are historical snapshots;
+use this section and current timeline entries.
 
 ## Previous continuation — 05:53 PDT
 
