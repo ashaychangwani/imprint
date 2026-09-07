@@ -1,6 +1,54 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 16:33 PDT
+## Current continuation — 16:54 PDT
+
+Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
+branch `codex/imprint-master-v066-validation`, based only on remote `34a6235`.
+Latest implementation **`f022180`** adds two small general corrections:
+
+- Producer compilers receive current tested consumer construction for declared
+  links (`toolPlan.consumerResearch`), including exact candidate/test inputs and
+  observation identity. Unrelated or stale-boundary research, full response
+  bodies, and history are excluded. Agents interpret meaning; final chain proof
+  and compatible draft reuse are unchanged.
+- Compile/test browser idle cleanup waits until active global-pool calls finish.
+  Caller-owned calls do not arm global cleanup; callbacks check session identity.
+  Two synthetic overlap regressions failed before and passed after this fix.
+  This could explain the closed-CDP messages during overlapping research; it
+  does not establish that every earlier navigation failure had that cause.
+
+**1,934 tests / 6,136 assertions across 97 files passed**, plus lint, type
+checking, web build, and mobile/desktop visual checks. One prior full run had an
+intermittent process-cleanup assertion failure outside changed code; its focused
+rerun and the full rerun passed, logs retained, no matching test process left.
+All website previews are stopped. No push or MR.
+
+**Fresh Flights 12** started **23:53:42 UTC September 7**, PID **26817**, new
+`/tmp/imprint-fresh-inputs-VYbJm1/home-12`, implementation `f022180`. Verify
+`flights-teach-12-manifest.json` and log. Exact combined recording and original
+four-operation guidance unchanged; no prior tools, examples, or diagnostics
+supplied to its agents. Target **00:23:42 UTC September 8**, assess **00:53:42**,
+hard deadline about **01:23:42**. Collector PID **54899**, port **6438**, writes
+`spans-validation.jsonl`. Existing heartbeat follows this fresh run. Disk had
+**24.09 GiB** free at launch.
+
+Flights 11 remains a failed teach, three ready/booking not ready. Partial audit
+11 passed **19/19** graded units in **7.4647 minutes**, but excluded one cold
+grid navigation failure and one invalid date-order call. Booking was unavailable.
+Do not waive the cold failure or claim a full pass. Audit PID 20331 exited.
+Its raw report remains unchanged in `home-11/google-flights/.audit-report.json`.
+
+Accounting through audit 11: fourteen teaches/eight audits, **$196.99** base API
+equivalent, **937.33 minutes**; cache and interrupted-usage caveats retained.
+Latest attempt 12 is excluded until terminal accounting. Next: full Flights
+teach/audit success, fresh Hotels teach/audit on unchanged code, then repeated
+fresh successes for both. Original malformed-handoff catch has not been
+exercised; no repeated symlink failure. Monitor fresh same-record dependency
+values, declared machine representations, and browser overlap. Preserve all
+failed evidence; no deletion, old vNext changes, resumed teaches, or overlapping
+experiments. Warm successes and reliable cold execution remain unproven.
+
+## Previous continuation — 16:33 PDT
 
 Same validation worktree and branch; implementation **`43ab0c7`**, latest
 checkpoint before this note `e2a27e9`. No push or MR. Flights **11** failed at

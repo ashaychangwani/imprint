@@ -6962,3 +6962,12 @@ no matching test process remained, and the full rerun passed 1,934 tests / 6,136
 assertions across 97 files in 93.92 seconds. Initial test
 fixture type errors and import-order lint were fixed. Website build and mobile/
 desktop checks pass; previews are stopped. No fresh teach started during checks.
+
+
+## 2026-09-07 16:54 PDT — Fresh Flights 12 launched on f022180
+
+Fresh attempt 12 started 23:53:42 UTC, PID 26817, new isolated `home-12`,
+unchanged exact recording and four-operation guidance. No old tools/examples/
+diagnostics supplied to agents. Disk 24.09 GiB free, collector PID 54899 healthy.
+Target 00:23:42 UTC September 8, assess 00:53:42, hard deadline 01:23:42.
+The existing heartbeat follows this fresh validation. No push or MR.
