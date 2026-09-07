@@ -628,3 +628,13 @@ extract(rawResponse: unknown, context?: { params: Record<string, string | number
 - `context.responses` — all response bodies from the workflow chain (index 0 = first request).
 
 Use `params` when the parser needs a value the API doesn't echo back (e.g. the search term for constructing domain names from a TLD catalog). Use `responses` when the parser merges data from multiple chained requests.
+
+
+MCP error replies preserve completed backend attempts in execution order,
+including their outcomes, bounded error details, and durations. The final error
+remains the final rung's result; the preceding facts let the caller distinguish
+a navigation timeout from a later transport's inability to navigate. Calls
+interrupted by the audit deadline may still lack completed ladder history.
+Agents define each field of a serialized producer selection from its actual
+source and consumer wire representation, preserving machine identifiers apart
+from display labels. The runtime does not infer or convert those meanings.

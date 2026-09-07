@@ -17,7 +17,7 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { resolveLadder, runWithLadder } from './backend-ladder.ts';
+import { type BackendAttemptFact, resolveLadder, runWithLadder } from './backend-ladder.ts';
 import { TimeoutError, withTimeoutCleanup } from './concurrency.ts';
 import { createLog } from './log.ts';
 import { McpCdpSessions } from './mcp-cdp-sessions.ts';
@@ -357,7 +357,7 @@ function buildServer(
                   state: result.continuation,
                 })
               : undefined;
-          const text = formatToolError(result, continuationToken);
+          const text = formatToolError(result, continuationToken, attempts);
           return {
             isError: true,
             content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
@@ -394,9 +394,10 @@ function buildServer(
   return { server, closeCdpPool };
 }
 
-function formatToolError(
+export function formatToolError(
   result: Extract<ToolResult, { ok: false }>,
   continuationToken?: string,
+  attempts: readonly BackendAttemptFact[] = [],
 ): string {
   const lines = [`[${result.error}] ${result.message}`];
   if (result.error === 'STATE_MISSING' && result.missing?.length) {
@@ -409,6 +410,14 @@ function formatToolError(
   if (result.nextAction) lines.push(`  nextAction: ${result.nextAction}`);
   if (continuationToken) lines.push(`  continuation: ${JSON.stringify(continuationToken)}`);
   if (result.remediation) lines.push(`  → ${result.remediation}`);
+  if (attempts.length > 0) {
+    lines.push('Backend attempts:');
+    for (const attempt of attempts) {
+      lines.push(
+        `  - ${attempt.backend}: ${attempt.outcome} in ${attempt.durationMs}ms — ${attempt.detail}`,
+      );
+    }
+  }
   return lines.join('\n');
 }
 

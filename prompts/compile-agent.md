@@ -1113,6 +1113,13 @@ name, a copied recorded constant, or a test of only one side is not chain
 proof. If the evidence supports alternative bindings for one consumer
 parameter, the master chooses one; the runtime never ranks alternatives.
 
+For a serialized selection, spell out the source and wire representation of
+each constituent field. Keep machine identifiers distinct from display labels
+(for example, a catalog code and its product name); a shared field name or
+string type does not establish interchangeability. Pass the producer's returned
+selection unchanged into the consumer check, rather than rebuilding a more
+convenient test value by hand.
+
 ## WorkflowSchema Reference
 
 The complete schema your `workflow.json` must conform to (Zod definitions from `src/imprint/types.ts`):

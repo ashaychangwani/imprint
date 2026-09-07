@@ -204,6 +204,9 @@ response order in a fresh live call. Playbooks remain the final fallback.
 During research and compilation, request transforms can compute navigation
 targets and click actions from current inputs or earlier responses. The declared
 API response matcher stays fixed so live and offline checks select the same data.
+Dependent selections preserve the machine values required by the next tool.
+MCP failures include the completed backend attempts and timings, so a final
+fallback error does not hide an earlier navigation timeout.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.

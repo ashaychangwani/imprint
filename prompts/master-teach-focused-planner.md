@@ -377,6 +377,13 @@ nearby wire field is long or encoded, and never pair two candidate strings by
 proximity alone. The plan must explain how all sibling values come from the
 same producer record and match the consumer's required representation.
 
+For a serialized selection, spell out the source and wire representation of
+each constituent field. Keep machine identifiers distinct from display labels
+(for example, a catalog code and its product name); a shared field name or
+string type does not establish interchangeability. Plan the consumer check
+using the producer's unchanged returned selection, rather than a more
+convenient test value rebuilt by hand.
+
 All incoming edges for this consumer form one explicit consumer invocation.
 Use at most one producer binding for each consumer parameter. If the evidence
 offers alternative bindings, choose the best supported one; do not return

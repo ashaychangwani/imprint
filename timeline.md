@@ -6828,3 +6828,35 @@ all four published tools, 45-minute deadline. No code changed. Disk 25.17 GiB.
 Completed teach usage: 16,435,849 input (13,469,056 cache reads), 164,056 output,
 zero reported cache writes, $20.54 base API equivalent; one interrupted semantic
 span lacks usage. Cumulative recorded estimate $178.24 before audit 10.
+
+
+## 2026-09-07 14:55 PDT — Audit 10 failures explained; bounded corrections
+
+Independent audit 10 failed 8/15 units in 12.5306 minutes. Five valid calls
+passed, five failed; three parameter checks passed, two failed. One timeout
+was classified infrastructure, two invalid inputs were excluded, and four
+parameters were untestable. No valid booking call was possible because search
+never produced a selection. Keep the excluded timeout as unresolved evidence.
+A changed grid return date yielded one unrelated date pair; do not waive it.
+
+A two-call diagnostic on the unchanged search artifact reproduced the final
+navigation error while retaining every rung: CDP actually ran and timed out
+before the later fallback could not navigate. Cold CDP 91.182 s including
+setup; same-tool warm CDP 60.292 s, both failed. All private outputs retained
+and diagnostic browsers closed. MCP failure replies now include their existing
+completed backend history and durations instead of hiding earlier failures.
+Audit-deadline interruptions still may lack a completed ladder history.
+
+Saved search MVP output also contains a concrete contract mismatch: its
+serialized selection uses a carrier display name while the proven booking
+candidate encodes the corresponding machine code. The final chain correctly
+failed. Focused planning and compilation guidance now explicitly distinguishes
+machine identifiers from display labels within serialized selections and asks
+for unchanged producer output in consumer checks. No site-specific runtime or
+prompt logic, generated-artifact repair, or old evidence fed into teaching.
+
+114 focused tests / 419 assertions, lint, type checking, website build, and
+mobile/desktop visual checks pass. The initial lint formatting failure was
+fixed. Latest full runtime suite remains 1,930 tests from the preceding runtime
+revision. Audit usage adds $0.60; recorded cumulative base API equivalent is
+$178.84 with cache and interrupted-usage caveats. Fresh validation is next.

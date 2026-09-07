@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are thirteen teaches and six independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are thirteen teaches and seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 690 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 691 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -27,7 +27,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights teach 9 | Deadline: 2 ready; search failed, booking dropped | 90.00 | 13,509,129 | 11,733,504 | 0 | 164,139 | $15.08 |
 | Flights audit 9 | 12/13 correct; only two published tools | 4.88 | 360,143 | 326,400 | 0 | 3,060 | $0.33 |
 | Flights teach 10 | Deadline: 4 ready, both chain checks failed | 90.00 | 16,435,849 | 13,469,056 | 0 | 164,056 | $20.54 |
-| **Total** | **Includes failures/cancellations** | **827.33** | **138,888,976** | **113,569,792** | **0** | **1,576,630** | **$178.24** |
+| Flights audit 10 | 8/15 correct; booking untestable | 12.53 | 958,099 | 922,496 | 0 | 4,651 | $0.60 |
+| **Total** | **Includes failures/cancellations** | **839.86** | **139,847,075** | **114,492,288** | **0** | **1,581,281** | **$178.84** |
 
 ## Cost assumptions and completeness
 
@@ -43,7 +44,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-10 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The nineteen accounted traces contain 1,954 spans and nineteen completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-10 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty accounted traces contain 1,957 spans and twenty completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -107,4 +108,24 @@ Flights attempt 10 on `de8e789` published all four tools but failed at the
 waiting for the booking API response: 89.985 and 150.609 seconds including
 setup, with navigation waits of 60 and 120 seconds. Its final master decision
 was interrupted and has no reported usage. Individual MVP passes do not
-establish an end-to-end pass. Independent audit 10 is pending.
+establish an end-to-end pass. Independent audit 10 failed, as detailed below.
+
+
+Audit 10 failed at 8/15 units: five correct and five broken invocations, three
+working and two broken parameters. One search timeout was classified `infra`
+and excluded, two bad inputs were excluded, and four parameters were
+untestable. Booking had no valid producer selection; its empty-input probe was
+excluded and establishes no booking success. The grid's changed return date
+returned one non-requested pair; search never succeeded in this audit.
+
+The auditor called the repeated final navigation error a routing failure.
+A subsequent diagnostic on the unchanged artifacts established that CDP did
+run: it timed out waiting for the selected search API response before a later
+fallback returned its inability to navigate. The MCP reply had omitted this
+preceding attempt history. Two diagnostic calls took 91.698 / 60.785 seconds
+overall; their CDP rungs took 91.182 seconds cold including setup and 60.292
+seconds with the same tool's browser retained. Both failed. Rung states were
+separate, and browser contexts were closed afterward. These are host diagnostic
+calls with no LLM usage, not a replacement audit or measured warm success.
+Evidence: `diagnose-flights-10.ts`, `flights-10-diagnostic-{1,2}.json`, log and
+`flights-10-diagnostic-timings.json` in the private experiment directory.
