@@ -6766,3 +6766,14 @@ agent, and packaging checks pass: 205 tests, 1,058 assertions. Lint, website
 build, and desktop/mobile visual checks pass, no errors or overflow; the
 existing bundle warning remains. The task-owned preview stopped. The last
 full runtime suite passed 1,930 tests on 9d50dc4. Fresh validation is next.
+
+
+### 2026-09-07 19:57 UTC — Fresh Flights 10 started
+
+Committed the researcher capability correction as de8e789. Fresh attempt 10
+started 19:56:31 UTC, PID 51822, new home-10, exact combined recording and
+four-operation guidance. Logs/manifest use flights-teach-10 in the experiment
+directory. Target 20:26 UTC, assess 20:56, hard deadline 21:26. Collector PID
+54899 remains active; disk is about 25 GiB free. The handoff and heartbeat
+follow this run. No earlier artifact or diagnostic was supplied to teachers.
+Full Flights success, Hotels validation, and repeatability remain due.

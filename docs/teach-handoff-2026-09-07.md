@@ -1,15 +1,15 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 12:55 PDT
+## Current continuation — 12:57 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, based only on remote
 `origin/codex/imprint-master-v066` at `34a6235`. Latest tested runtime is
 **`9d50dc4`**, fixing repeated module imports through directory symlinks.
-A prompt-only correction now documents the already-supported navigation
+Latest implementation **`de8e789`** documents already-supported navigation
 transform overrides that the researcher signature omitted. Its 205 focused
 tests, lint, website build, and desktop/mobile checks pass. Full runtime suite
-last passed 1,930 tests. Commit the prompt correction, then start fresh Flights.
+last passed 1,930 tests. Fresh Flights 10 is running.
 No MR or push has been made.
 
 Flights attempt **9** failed at its 90-minute deadline with two ready/two not
@@ -27,7 +27,7 @@ returned no payload and its identical paced retry passed; count both. Its
 underlying intermittent cause remains unresolved. The audit took 4.883 minutes.
 Teach PID 13489 and audit PID 49798 have exited. Evidence remains in
 `/tmp/imprint-fresh-inputs-VYbJm1/home-9`, with flights-teach-9/flights-audit-9
-logs and manifests. Nothing is currently teaching or auditing.
+logs and manifests.
 
 Earlier Flights **8** passed all four tools and audit **24/24** on `1677b16`,
 but Hotels **3** was cancelled after 8.8645 minutes when its guest-count tests
@@ -35,10 +35,13 @@ hit the reproduced symlink loader defect. No occupancy support was proven.
 These different revisions and failures do not establish repeatability.
 
 Collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-Disk is about 27 GiB free. Update the heartbeat when fresh Flights 10 starts
-in new home-10 with the exact recording/four-operation guidance below. Target
-30 minutes, assess 60, hard limit 90. Never resume failed runs or feed old
-artifacts, examples, or diagnostics to teachers. Keep two-worker concurrency.
+Fresh **Flights teach 10** started **19:56:31 UTC**, PID **51822**, on
+`de8e789`, new `/tmp/imprint-fresh-inputs-VYbJm1/home-10`. Verify
+`flights-teach-10-manifest.json`; log `flights-teach-10.log`. Exact recording
+and four-operation guidance are unchanged. Target 20:26 UTC, assess 20:56,
+hard deadline about 21:26. The heartbeat follows this run. Disk is about 25 GiB
+free. Never resume failed runs or feed old artifacts, examples, or diagnostics
+to teachers. Keep two-worker concurrency and sequential teaches/audits.
 
 Accounting through audit 9: twelve teaches and six audits, including failures;
 base API estimate **$157.70**, with cache and interrupted-usage caveats in
