@@ -1,4 +1,4 @@
-import { copyFileSync, rmSync } from 'node:fs';
+import { copyFileSync, realpathSync, rmSync } from 'node:fs';
 import { dirname, extname, join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -13,12 +13,15 @@ let importCounter = 0;
  * artifact directory. The copy is removed after evaluation.
  */
 export async function importModuleFresh(modulePath: string): Promise<Record<string, unknown>> {
-  const extension = extname(modulePath) || '.js';
+  // Bun can fail to resolve later sibling copies through a cached directory
+  // symlink (for example /tmp on macOS). Use the physical path for both steps.
+  const resolvedPath = realpathSync(modulePath);
+  const extension = extname(resolvedPath) || '.js';
   const copyPath = join(
-    dirname(modulePath),
+    dirname(resolvedPath),
     `.imprint-import-${process.pid}-${Date.now()}-${importCounter++}${extension}`,
   );
-  copyFileSync(modulePath, copyPath);
+  copyFileSync(resolvedPath, copyPath);
   try {
     return (await import(pathToFileURL(copyPath).href)) as Record<string, unknown>;
   } finally {

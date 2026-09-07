@@ -6641,3 +6641,36 @@ prior artifacts. Log/manifest use hotels-teach-3 names in the experiment folder.
 Target 18:29 UTC, assess 18:59, hard deadline 19:29. Follow actual destination,
 stay-date, and any occupancy evidence; do not assume old output scopes passed.
 Fresh repeated successes for both sites remain required after this Hotels audit.
+
+
+### 2026-09-07 18:12 UTC — Hotels exposed a reproducible module loader defect
+
+Stopped Hotels attempt 3 with SIGINT at 18:08:28 UTC, after 8.8645 minutes,
+zero published tools. Its first fetch returned real hotel listings, but three
+subsequent adult-count contrasts failed before transport because the request
+transform was unavailable. The partial handoff reached the master, which
+requested another contrast; the local failure persisted. Occupancy remains
+unproven. Cancellation preserves all observations and the interrupted follow-up.
+
+A host reproduction found that Bun imports a fresh module once through a
+directory symlink, then cannot resolve later unique sibling copies. The same
+module imports repeatedly through its physical path. A synthetic regression
+with three source revisions and a sibling import fails on the old code.
+Canonicalizing the source path before creating and importing its sibling copy
+fixes the test without changing agent strategy or adding a site rule. This also
+explains the earlier private grid diagnostic's module-loading failure.
+
+Reported usage: 1,133,457 input including 852,864 cached reads, 14,276 output,
+zero reported writes, and one interrupted semantic call without usage. Base
+estimate $1.75; cumulative accounted estimate $142.30. The corrected loader
+requires fresh Flights and Hotels validation; no failed run will be resumed.
+
+
+Validation for the loader correction: 83 focused tests pass. The first full
+suite found a stale prompt-packaging assertion from the earlier contract-handoff
+change; updated its three expectations to the current advisory behavior.
+The final full suite passes 1,930 tests, 6,106 assertions across 97 files in
+95.53 seconds. Lint and type checking pass. Website build and desktop/mobile
+visual checks pass with no errors or overflow; the existing bundle-size warning
+remains. Test failures and screenshots use the private symlink-import/symlink
+prefixes. The task-owned website preview has stopped.

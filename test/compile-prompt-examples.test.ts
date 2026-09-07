@@ -185,14 +185,14 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('`${generated.nonce}`');
   expect(apiResearchPrompt).toContain('`${generated.uuid}`');
   expect(apiResearchPrompt).toMatch(/does not change\s+the accepted `requests` count/);
-  expect(apiResearchPrompt).toContain('`blocked` is exceptional');
+  expect(apiResearchPrompt).toContain('`blocked` is an advisory request for a master decision');
   expect(apiResearchPrompt).toContain('did not isolate any one field');
   expect(apiResearchPrompt).toContain('a generic landing page is a distinct hypothesis');
   expect(apiResearchPrompt).toMatch(
-    /If no comparison isolated the claimed field[\s\S]*return `test` instead/,
+    /Distinguish what your current\s+construction needs from what every possible implementation would need/,
   );
   expect(apiResearchPrompt).toContain('`blockReview.proposedReason`');
-  expect(apiResearchPrompt).toContain('validate your own conclusion');
+  expect(apiResearchPrompt).toContain('confirm the precise\nquestion for the master');
   expect(apiResearchPrompt).toContain('export function transform(');
   expect(apiResearchPrompt).toContain('responses: unknown[]');
   expect(apiResearchPrompt).toContain('params: Params = {}');

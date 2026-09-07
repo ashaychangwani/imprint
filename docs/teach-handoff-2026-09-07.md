@@ -1,14 +1,16 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 11:01 PDT
+## Current continuation — 11:13 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, originally based only on remote
-`origin/codex/imprint-master-v066` at `34a6235`. Latest implementation is
+`origin/codex/imprint-master-v066` at `34a6235`. Last live-tested implementation is
 **`1677b16`**: earlier bootstrap/browser lifecycle fixes, accurate deadline
 reporting and per-turn time facts (`6ca89ba`), then simpler early contract-gap
 handoffs and coordinated producer/consumer revisions. No site-specific runtime
-or prompt rules were added. All changes are committed locally; no MR or push.
+or prompt rules were added. A new general module-loader fix resolves physical paths before fresh imports;
+its 1,930 tests, lint, type checking, website build, and desktop/mobile
+checks pass. Fresh live validation remains due. No MR or push.
 
 Fresh Flights attempt **8** completed **17:44:16 UTC**, after **82.2922
 minutes**, with all four tools published and the fresh search-to-booking chain
@@ -19,15 +21,19 @@ Audit PID 2992 exited after 9.3943 minutes. Public grid windows are exactly seve
 days; airport-code contrasts passed, and teach MVP verification also used a
 Tokyo city identifier. Independent identifier breadth and warm timing remain due.
 
-Fresh **Hotels teach 3** started **17:59:36 UTC**, PID **5286**, using the exact
-June 4 recording below and new `/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-3`.
-No previous artifact or extra parameter instructions were supplied. Verify
-`hotels-teach-3-manifest.json`; log `hotels-teach-3.log`, timeout 90 minutes.
-Target 18:29 UTC, assess 18:59, hard deadline about 19:29. Watch destination/date
-semantics and any claimed guest support; only actual proof establishes scope.
+**Hotels teach 3** was cancelled at **18:08:28 UTC** after **8.8645 minutes**,
+zero published tools. Its first fetch returned listings, but later guest-count
+contrasts failed before transport because the module loader could not load a
+fresh transform through a directory symlink. This was reproduced with synthetic
+files and resolved by canonicalizing the physical path. The local patch needs
+fresh validation; never resume this cancelled run. Evidence stays in
+`/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-3`, with hotels-teach-3 log/manifest.
+PID 5286 has exited. Occupancy remains unproven.
+
 Trace collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-The heartbeat follows Hotels. Do not duplicate processes or resume failed
-teaches. Disk is about 27 GiB free. Exact recordings and Flights guidance remain below.
+No teach or audit is currently active; commit the validated fix, then
+launch fresh Flights in home-9 and update this section and the heartbeat.
+Disk is about 27 GiB free. Exact recordings and Flights guidance remain below.
 
 Attempt 6 reached 90 minutes with three published tools; their independent
 audit passed 10 invocations plus six parameters (16/16). Grid verification
@@ -39,18 +45,18 @@ before planning, with no published tools. Late contract coordination consumed
 the available time. Neither attempt establishes full Flights success. The
 original malformed-handoff catch has not been exercised by these live runs.
 
-Accounting through Flights audit 8: ten teaches and five audits, including failures;
-base API estimate **$140.55** with cache/billing/interrupted-usage caveats in
+Accounting through Hotels teach 3: eleven teaches and five audits, including failures;
+base API estimate **$142.30** with cache/billing/interrupted-usage caveats in
 `docs/teach-validation-accounting-2026-09-07.md`. No raw evidence was deleted or
-provided to later teaching agents. Latest runtime suite: 1,929 passing tests;
-latest prompt checks: 182 focused tests plus final packaging check, lint, website
-build, desktop/mobile visual verification.
+provided to later teaching agents. Latest full suite: 1,930 passing tests,
+including the symlink regression and updated prompt-packaging expectations.
+Lint, type checking, website build, and desktop/mobile visual checks pass.
 
-Next: monitor Hotels and independently audit its published tools. After a
-passing Hotels audit, freshly repeat Flights and Hotels on unchanged code and
-audit both. Two fresh successes per site on this revision are still due. Keep
-failures and unsupported scope explicit. Older sections below are historical
-snapshots; use this section and current timeline entries.
+Next: commit the module-loader fix, then freshly teach and independently
+audit Flights followed by Hotels on the corrected revision. Fresh repeated
+successes for both sites are still due. Measure warm calls separately and check
+advertised identifier breadth after sequential validation. Keep all failures
+and unsupported scope explicit. Older sections below are historical snapshots.
 
 ## Previous continuation — 05:53 PDT
 

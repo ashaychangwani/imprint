@@ -181,6 +181,9 @@ Researchers can return a concrete input or dependency gap for a master decision
 without exhausting transport permutations. The master coordinates affected
 producer outputs and consumer inputs together; fresh live proof is still required.
 
+Generated modules reload from their resolved filesystem paths, so repeated
+research tests also work when the teach directory is reached through a symlink.
+
 Semantic agents receive the current shared deadline and remaining time on each
 turn, including output repairs, so they can budget for compilation and live
 checks. Exhausting the run deadline is reported as a failed run; provider

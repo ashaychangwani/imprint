@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import type { SharedModuleSpec } from '../src/imprint/build-plan.ts';
 import {
@@ -46,6 +46,27 @@ function writeSession(dir: string, session: Session): string {
 }
 
 describe('importModuleFresh', () => {
+  it('loads successive edits through a directory symlink with sibling imports', async () => {
+    const dir = scratchDir('prereq-symlink-');
+    const target = pathJoin(dir, 'target');
+    const alias = pathJoin(dir, 'alias');
+    mkdirSync(target);
+    symlinkSync(target, alias, 'dir');
+    writeFileSync(pathJoin(target, 'helper.ts'), 'export const base = 10;\n');
+    try {
+      for (const revision of [1, 2, 3]) {
+        writeFileSync(
+          pathJoin(target, 'mod.ts'),
+          `import { base } from './helper.ts';\nexport const value = base + ${revision};\n`,
+        );
+        const module = await importModuleFresh(pathJoin(alias, 'mod.ts'));
+        expect(module.value).toBe(10 + revision);
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('sees edits to the same module path within one process (defeats bun stale .ts cache)', async () => {
     const dir = scratchDir('prereq-fresh-');
     try {

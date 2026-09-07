@@ -599,6 +599,11 @@ export function transform(
 
 The runtime calls `transform` before each outgoing request. The `responses` array contains previous response bodies from the workflow chain, enabling dynamic URL construction (e.g. building a domain list from search results for a batch status check). Return `{ skip: true }` to skip a conditional follow-up request, such as a pagination/detail call that is only needed for some parameter values.
 
+Fresh module imports resolve filesystem symlinks before creating and importing
+a unique sibling copy. This avoids Bun's stale module cache and repeated-import
+resolution failures through symlinked directories while preserving sibling
+imports. The temporary copy is removed after evaluation.
+
 The compile-agent writes this module when `stateHints` flag `query_param_changes_across_calls` — high-entropy query params that vary per call. It uses `search_response_body` to find the signing function in `.js` responses and replicates it.
 
 Example: a site that signs each request URL with a scheme computed in its `.js` (CRC32, HMAC, etc.) — the compile agent reads the signing function out of the bundle and replicates it in `request-transform.ts`.
