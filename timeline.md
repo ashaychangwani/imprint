@@ -6099,3 +6099,22 @@ with a small live contrast instead of trusting coincidentally equal numbers.
 Keep the MVP narrow rather than adding guessed parameters. Preserve this failed
 audit and start a fresh teach after any prompt/code correction. Flights repeat
 waits while this defect is investigated.
+
+## 2026-09-07 02:01 PDT — Teach agents get a concrete ambiguity example
+
+The saved researcher conclusion explicitly called an unlabeled two in a
+two-night/two-guest response independent proof of guest count. The later
+three-night/three-guest baseline repeated the same confounding. Existing
+instructions warned about guessed meanings but did not make this trap concrete.
+
+Added a neutral shipment example to research, compiler, and MVP reviewer
+prompts: carton count and total item count can coincide; choose evidence where
+the competing meanings differ. Reuse decisive evidence, ask the master for
+missing proof, or narrow an unsupported contract. No runtime rule, fixed call
+count, new schema, or generated-artifact edit was introduced. This is guidance,
+not proof of improved behavior until fresh validation succeeds.
+
+All 140 focused research/agent tests pass, including a prompt regression test;
+type checking and lint pass. Website build passes and desktop/mobile renders
+were inspected. README and architecture guidance match. Start a fresh Hotels
+teach with the same recording in `hotels-home-2`; preserve the failed first run.

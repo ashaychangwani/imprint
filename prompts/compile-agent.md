@@ -666,6 +666,15 @@ Assertions should reference real values derived from narration, exact recording 
 
 4b. **A source position proves where a value came from, not what it means.** An unlabeled number matching one requested input is not enough to name it after that input. Use neighboring labels, multiple recorded examples, or a focused contrasting observation to establish the meaning. Broad recursive searches and type/regex matches locate candidates, not proof of their meaning or ownership by a particular record. Inspect the final parsed records field by field against the source; do not let a test merely repeat the same guessed mapping as its expected answer. For the MVP, omit optional output fields whose meaning is still uncertain instead of adding confident labels. If the accepted core contract requires the field, explain the uncertainty to the master so research can resolve it; never silently remove required output or echo the input as proof of a returned value.
 
+   Challenge coincidental equality even in a research handoff labeled proven.
+   Six cartons containing one item each cannot distinguish carton count from
+   total item count. Ask for evidence where the competing meanings differ,
+   such as two cartons containing three items each, before assigning the
+   ambiguous response slot or request slot that meaning. Do not manufacture
+   a parser test from the same guess or add an input echo to hide the gap.
+   Preserve the working API call and return the exact uncertainty to the master;
+   this is a focused semantic question, not optional breadth testing.
+
 5. **Do not write workflow.json with hardcoded user-specific values.** Replace them with `${param.NAME}` or `${credential.NAME}` as appropriate.
 
 5a. **Do not drop the login request when its body uses `${credential.username}`/`${credential.password}` placeholders.** That's the signal that the workflow needs to log in fresh on each call. Keep it as request[0], `extract` the returned auth tokens, chain them into subsequent requests. The runtime substitutes the username/password from the credential manager at call time.

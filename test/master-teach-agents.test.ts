@@ -1385,6 +1385,21 @@ describe('prompts and pre-plan discovery', () => {
     expect(research).toContain('preserving the working');
   });
 
+  it('asks agents to separate competing meanings instead of trusting equal numbers', () => {
+    for (const name of [
+      'master-teach-api-researcher.md',
+      'master-teach-baseline-mvp-review.md',
+      'compile-agent.md',
+    ]) {
+      const guidance = prompt(name);
+      expect(guidance).toContain('coincidental equality');
+      expect(guidance).toContain('competing meanings differ');
+      expect(guidance.toLowerCase()).toContain('cartons');
+    }
+    expect(prompt('master-teach-api-researcher.md')).toContain('not a mandatory sweep');
+    expect(prompt('master-teach-baseline-mvp-review.md')).toContain('narrow the contract');
+  });
+
   it('lets the master question unsupported proof within one tool', () => {
     const master = prompt('master-teach-decision.md');
     expect(master).toContain('A research status of `proven` is the researcher');

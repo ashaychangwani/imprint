@@ -59,6 +59,12 @@ The contrast should distinguish each claimed core mapping from a default or
 coincidental match. One changed input does not prove all inputs. Researchers
 preserve the working request and identify unresolved mappings for focused
 follow-up rather than declaring an unsupported full contract proven.
+For unlabeled fields, a matching number alone does not identify its meaning.
+Research and review should distinguish plausible alternatives with a small
+contrast (for example, carton count versus total item count), reusing decisive
+evidence when available. The compiler must question unsupported research labels
+too. This does not add a runtime classifier or mandatory parameter sweep;
+the master can request missing proof or narrow the public contract.
 The master treats the research status as a conclusion to review, not an
 automatic approval. Missing evidence inside one tool can trigger a focused
 follow-up just like a cross-tool contradiction, preserving the working request.

@@ -34,6 +34,15 @@ product attributes or independently observed effective settings. If the core
 claim rests only on query text, report the missing proof, not success and not
 an invented mismatch.
 
+Watch for coincidental equality in unlabeled fields: six cartons containing
+one item each also means six total items. A matching `6` alone does not prove
+which meaning the parser assigned correctly. Look for labels or a supplied
+contrast where the competing meanings differ. If that distinction is required
+for the core claim and absent, report the exact ambiguity as missing proof;
+do not invent a mismatch or demand a full parameter sweep. The master can
+request focused research or narrow the contract. Optional fields may be omitted
+instead of confidently mislabeled.
+
 When supplied, `resultDerivation` is the current build's parser source, with its
 saved artifact reference and an explicit truncation flag. Use it only to trace
 where reviewed output values originate: a value copied from caller parameters

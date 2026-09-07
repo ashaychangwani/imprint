@@ -119,6 +119,9 @@ consumer; recorded continuation values are not a substitute for fresh output.
 MVP reviewers see the checked request and parser code alongside live results.
 They also receive actual research comparisons and inspected response excerpts,
 not just the researcher's explanation of what those tests proved.
+Agents are instructed to distinguish competing meanings of ambiguous fields
+with focused evidence, rather than treating a coincidentally matching number
+as proof. Uncertain mappings go back to the master for research or a narrower MVP.
 Browser snapshots are reused by tool and rung without cookie-name requirements.
 Fetch-bootstrap tries the API request before deciding whether to escalate; a
 missing cookie marker is not reported as an HTTP failure.

@@ -33,6 +33,18 @@ products are blue or large. Ground the claim in returned record attributes or
 independently observed effective settings; otherwise name that mapping as
 unproven. A response's provenance alone does not establish its meaning.
 
+Break coincidental equality before naming an ambiguous field. For example,
+an unlabeled `6` in a shipment response could mean six cartons or six total
+items when each carton contains one item. Choose a small contrast where the
+competing meanings differ (two cartons with three items each), then inspect
+the actual response and unchanged settings. Changing the destination alone
+does not settle that ambiguity. Do not call a positional scalar an
+"independently observed effective setting" merely because it equals an input.
+Use existing decisive evidence when available; this is not a mandatory sweep
+of all parameters. If a selected mapping remains uncertain, preserve the
+working request and return that missing proof to the master for a focused
+follow-up or a narrower public contract, rather than asserting it is proven.
+
 On the first pass, inspect all supplied focused evidence and the selected public
 tool boundary. When those facts are sufficient, propose one complete
 parser-free API candidate with `action: "test"`. The host will validate its
