@@ -6271,3 +6271,20 @@ URL omitted/misassigned protobuf tags. It is testing a corrected request.
 These are real request-construction failures; do not waive them as transport
 or provider capacity problems. No malformed research handoff has reached the
 master yet in this attempt, and no tools have passed independent audit.
+
+## 2026-09-07 05:00 PDT — Grid baseline works; range contract still needs review
+
+At about 39 minutes, date-grid research returned a proven CDP API candidate
+after fixing protobuf encoding and replacing a broad recorded selector with
+the actual observed Date grid button. Its current seven-by-seven date example
+returns real fares. Booking remains unresolved after two approximately
+90-second CDP navigation timeouts waiting for GetBookingResults; no malformed
+handoff has reached master repair yet.
+
+Independent source inspection found a contract risk in the grid candidate:
+it advertises four independent range endpoints, but the transform uses only
+each range's midpoint to construct the page URL. One successful seven-day
+window pair cannot prove arbitrary range widths. The candidate is not yet
+published; observe whether compilation/review narrows it, then audit the
+actual emitted contract. Do not manually edit this generated candidate or
+count the researcher's six-parameter claim as independent coverage.
