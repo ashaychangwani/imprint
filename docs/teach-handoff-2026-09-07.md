@@ -1,63 +1,51 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 11:16 PDT
+## Current continuation — 12:55 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
-branch `codex/imprint-master-v066-validation`, originally based only on remote
-`origin/codex/imprint-master-v066` at `34a6235`. Latest implementation is
-**`9d50dc4`**: physical module paths are resolved before fresh imports, fixing
-Bun's repeated-import failure through directory symlinks. Earlier lifecycle,
-deadline, time-fact, and contract-handoff fixes remain. All 1,930 tests, lint,
-type checking, website build, and desktop/mobile checks pass. No MR or push.
+branch `codex/imprint-master-v066-validation`, based only on remote
+`origin/codex/imprint-master-v066` at `34a6235`. Latest tested runtime is
+**`9d50dc4`**, fixing repeated module imports through directory symlinks.
+A prompt-only correction now documents the already-supported navigation
+transform overrides that the researcher signature omitted. Its 205 focused
+tests, lint, website build, and desktop/mobile checks pass. Full runtime suite
+last passed 1,930 tests. Commit the prompt correction, then start fresh Flights.
+No MR or push has been made.
 
-Fresh Flights attempt **8** completed **17:44:16 UTC**, after **82.2922
-minutes**, with all four tools published and the fresh search-to-booking chain
-verified. Teach PID 72015 exited. That run used `1677b16`.
-Independent audit **8** passed **24/24** units: 13 valid calls and all 11
-advertised parameters, with one deliberately invalid grid-window call excluded.
-Audit PID 2992 exited after 9.3943 minutes. Public grid windows are exactly seven
-days; airport-code contrasts passed, and teach MVP verification also used a
-Tokyo city identifier. Independent identifier breadth and warm timing remain due.
+Flights attempt **9** failed at its 90-minute deadline with two ready/two not
+ready. Location and grid are published; search paired flight details with the
+wrong continuation values, and its repair was interrupted. The master removed
+booking because the full context source remained unproven. Its successful
+page-owned option test used a fixed selector; the researcher was not told its
+transform could compute that selector. The runtime already supports this.
+No malformed handoff exercised the original recovery catch. The symlink module
+failure did not recur.
 
-**Hotels teach 3** was cancelled at **18:08:28 UTC** after **8.8645 minutes**,
-zero published tools. Its first fetch returned listings, but later guest-count
-contrasts failed before transport because the module loader could not load a
-fresh transform through a directory symlink. This was reproduced with synthetic
-files and resolved by canonicalizing the physical path. The committed fix needs
-fresh validation; never resume this cancelled run. Evidence stays in
-`/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-3`, with hotels-teach-3 log/manifest.
-PID 5286 has exited. Occupancy remains unproven.
+Independent **audit 9** failed **12/13** units (seven correct calls, one failed
+call, five working parameters), only two published tools. A SEA–LAX grid probe
+returned no payload and its identical paced retry passed; count both. Its
+underlying intermittent cause remains unresolved. The audit took 4.883 minutes.
+Teach PID 13489 and audit PID 49798 have exited. Evidence remains in
+`/tmp/imprint-fresh-inputs-VYbJm1/home-9`, with flights-teach-9/flights-audit-9
+logs and manifests. Nothing is currently teaching or auditing.
 
-Trace collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-Fresh **Flights teach 9** started **18:15:17 UTC**, PID **13489**, on
-`9d50dc4`, new `/tmp/imprint-fresh-inputs-VYbJm1/home-9`. Verify
-`flights-teach-9-manifest.json`; log `flights-teach-9.log`. Exact combined
-recording and four-operation guidance are unchanged. Target 18:45 UTC,
-assess 19:15, hard deadline about 19:45. The heartbeat now follows this run.
-Disk is about 27 GiB free. Do not duplicate processes or reuse old candidates.
+Earlier Flights **8** passed all four tools and audit **24/24** on `1677b16`,
+but Hotels **3** was cancelled after 8.8645 minutes when its guest-count tests
+hit the reproduced symlink loader defect. No occupancy support was proven.
+These different revisions and failures do not establish repeatability.
 
-Attempt 6 reached 90 minutes with three published tools; their independent
-audit passed 10 invocations plus six parameters (16/16). Grid verification
-returned zero items and booking compilation was unfinished. A separate grid
-diagnostic later returned 49 pairs cold (33.212 s including setup), then timed
-out warm (60.243 s). Its harness and every failed diagnostic remain private;
-it was not an audit or artifact repair. Attempt 7 also reached 90 minutes,
-before planning, with no published tools. Late contract coordination consumed
-the available time. Neither attempt establishes full Flights success. The
-original malformed-handoff catch has not been exercised by these live runs.
+Collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
+Disk is about 27 GiB free. Update the heartbeat when fresh Flights 10 starts
+in new home-10 with the exact recording/four-operation guidance below. Target
+30 minutes, assess 60, hard limit 90. Never resume failed runs or feed old
+artifacts, examples, or diagnostics to teachers. Keep two-worker concurrency.
 
-Accounting through Hotels teach 3: eleven teaches and five audits, including failures;
-base API estimate **$142.30** with cache/billing/interrupted-usage caveats in
-`docs/teach-validation-accounting-2026-09-07.md`. No raw evidence was deleted or
-provided to later teaching agents. Latest full suite: 1,930 passing tests,
-including the symlink regression and updated prompt-packaging expectations.
-Lint, type checking, website build, and desktop/mobile visual checks pass.
-
-Next: monitor Flights 9 and independently audit all published tools. Once it
-passes, freshly teach and audit Hotels on the same corrected revision. Fresh repeated
-successes for both sites are still due. Measure warm calls separately and check
-advertised identifier breadth after sequential validation. Keep all failures
-and unsupported scope explicit. Older sections below are historical snapshots.
+Accounting through audit 9: twelve teaches and six audits, including failures;
+base API estimate **$157.70**, with cache and interrupted-usage caveats in
+`docs/teach-validation-accounting-2026-09-07.md`. No data was deleted.
+Next: fresh Flights, independent full-scope audit, then Hotels on unchanged
+code and its audit; fresh repeated successes for both remain due. Measure warm
+calls separately and check advertised identifier breadth. No MR until requested.
 
 ## Previous continuation — 05:53 PDT
 

@@ -201,6 +201,10 @@ the runtime does not guess which request matters or turn the capability into a
 site rule. The recorded response used for offline checks is separate from the
 response order in a fresh live call. Playbooks remain the final fallback.
 
+During research and compilation, request transforms can compute navigation
+targets and click actions from current inputs or earlier responses. The declared
+API response matcher stays fixed so live and offline checks select the same data.
+
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
 It streams only narrowly identified GET navigation/prefetch and POST Server

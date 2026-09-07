@@ -6722,3 +6722,47 @@ by the completed drafts and earlier standalone success, while preserving the
 remaining proof requirement and hard deadline. Repeated module loads still have
 not shown the prior symlink failure. No independent audit or repeatability is
 claimed, and no code changed during this run.
+
+
+### 2026-09-07 19:51 UTC — Flights 9 failed; audit the two published tools
+
+Attempt 9 reached its original deadline after 90.0024 minutes: two ready,
+two not ready. Location and grid are published. Search verification caught
+flight details paired with another itinerary's opaque values; the compiler's
+repair was interrupted. Booking was removed after its larger selected context
+could not be traced. No malformed researcher handoff exercised the recovery
+catch. The earlier symlink module failure did not recur.
+
+Reported usage: 13,509,129 input including 11,733,504 cached reads, 164,139
+output, zero reported writes; 77 usage spans, no unreported semantic call,
+but interrupted compiler usage may be incomplete. Base estimate $15.08;
+cumulative accounted estimate $157.37. Partial independent audit 9 started
+19:47:18 UTC, PID 49798, same home-9, 45-minute timeout. Its two-tool scope
+cannot establish the requested full Flights result.
+
+Inspection found a small general capability-documentation gap: the researcher
+prompt's exact transform return signature omits navigation overrides already
+supported by runtime.ts and documented for the compiler. The booking researcher
+explicitly treated its fixed click selector as a blocker. Documenting computed
+selectors can let agents choose that existing execution path; no new runtime
+strategy rule is needed. Validate the contract correction with fresh teaches.
+
+
+### 2026-09-07 19:55 UTC — Partial audit failed; correct researcher capabilities
+
+Audit 9 failed at 92.3%, 12/13 units across two published tools: seven correct
+calls, one failed call, and five working parameters. The first SEA–LAX grid
+probe returned no payload; its identical paced retry succeeded. Preserve both
+observations and the unresolved intermittent cause. This was not a full-scope
+audit. Duration 4.8830 minutes; 360,143 input including 326,400 cached reads,
+3,060 output, zero reported writes, base estimate $0.33. Total estimate $157.70.
+
+Corrected the researcher's exact request-transform signature to include the
+existing navigation override type. Explain computed click/readiness/result
+selectors and the immutable network-response matcher, matching the compiler
+and runtime contract. No runtime code or site-specific instruction changed.
+The existing dynamic-navigation and matcher-protection regressions, researcher,
+agent, and packaging checks pass: 205 tests, 1,058 assertions. Lint, website
+build, and desktop/mobile visual checks pass, no errors or overflow; the
+existing bundle warning remains. The task-owned preview stopped. The last
+full runtime suite passed 1,930 tests on 9d50dc4. Fresh validation is next.

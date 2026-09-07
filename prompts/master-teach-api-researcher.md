@@ -471,6 +471,16 @@ function called `transform` with this signature:
 
 ```typescript
 type Params = Record<string, string | number | boolean>;
+type TransformNavigation = {
+  waitUntil?: 'domcontentloaded' | 'load';
+  timeoutMs?: number;
+  pollIntervalMs?: number;
+  urlIncludes?: string;
+  selector?: string;
+  actions?: Array<{ action: 'click'; selector: string }>;
+  resultSelector?: string;
+  cookie?: { name: string; domain?: string; path?: string };
+};
 
 export function transform(
   method: string,
@@ -481,12 +491,25 @@ export function transform(
   url?: string;
   body?: string;
   headers?: Record<string, string>;
+  navigation?: TransformNavigation;
   skip?: boolean;
 } {
   // Return a URL string, or only the request fields that must change.
   return url;
 }
 ```
+
+The transform may compute `navigation.actions`, `selector`, or `resultSelector`
+from `params` and earlier `responses`. Literal workflow selectors do not
+interpolate parameter placeholders; return the computed navigation fields from
+the transform when a current input determines the target. Choose the selector
+and any escaping from the actual page evidence, then test a different current
+target rather than preserving a successful example's fixed selector. These
+overrides merge with the declared navigation options. They cannot override
+`navigation.networkResponse`: its complete matcher remains in the workflow so
+live execution and offline proof select the same response. A navigation may
+use computed actions and return that matched API response; this capability is
+available during research as well as compilation.
 
 It does not receive one wrapper object, `parameterValues`, `bootstrap`,
 `state`, or `capturedState`. `responses` contains prior workflow response

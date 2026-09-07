@@ -196,6 +196,9 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('export function transform(');
   expect(apiResearchPrompt).toContain('responses: unknown[]');
   expect(apiResearchPrompt).toContain('params: Params = {}');
+  expect(apiResearchPrompt).toContain('navigation?: TransformNavigation');
+  expect(apiResearchPrompt).toContain('return the computed navigation fields');
+  expect(apiResearchPrompt).toMatch(/cannot override\s+`navigation.networkResponse`/);
   expect(apiResearchPrompt).toContain('It does not receive one wrapper object');
   expect(apiResearchPrompt).toContain('Do not look at the');
   expect(apiResearchPrompt).toContain('Do not choose or recommend playbook here.');

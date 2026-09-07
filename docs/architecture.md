@@ -604,6 +604,14 @@ a unique sibling copy. This avoids Bun's stale module cache and repeated-import
 resolution failures through symlinked directories while preserving sibling
 imports. The temporary copy is removed after evaluation.
 
+Request transforms can also return `navigation` overrides, including computed
+click actions, readiness selectors, and result selectors derived from current
+parameters or earlier responses. Literal selectors do not interpolate workflow
+placeholders. This same surface is available to the researcher and compiler.
+The declared `networkResponse` matcher cannot be overridden by a transform;
+computed actions can trigger it while live and offline response selection stay
+consistent. Agents choose the target and construction from evidence.
+
 The compile-agent writes this module when `stateHints` flag `query_param_changes_across_calls` — high-entropy query params that vary per call. It uses `search_response_body` to find the signing function in `.js` responses and replicates it.
 
 Example: a site that signs each request URL with a scheme computed in its `.js` (CRC32, HMAC, etc.) — the compile agent reads the signing function out of the bundle and replicates it in `request-transform.ts`.
