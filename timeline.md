@@ -6777,3 +6777,20 @@ directory. Target 20:26 UTC, assess 20:56, hard deadline 21:26. Collector PID
 54899 remains active; disk is about 25 GiB free. The handoff and heartbeat
 follow this run. No earlier artifact or diagnostic was supplied to teachers.
 Full Flights success, Hotels validation, and repeatability remain due.
+
+
+### 2026-09-07 20:30 UTC — Flights 10 half-hour checkpoint
+
+Location research is proven through fetch (349 ms). Search research returned
+live one-way SFO–LAX November 3 itineraries through captured GetShoppingResults,
+with route/date fields and per-itinerary selection values. Booking called the
+fresh producer, but token-only and manually contextualized requests returned
+protocol error 13. It returned a factual blocked handoff around minute 34,
+asking the master to revise the single-token contract to carry a supported
+continuation. This is normal advisory recovery, not malformed-output recovery.
+
+Grid research has seen bad responses and capture timeouts; its latest transport
+completed but semantic proof remains pending. No tools are published. The
+30-minute target is missed. Continue on unchanged de8e789 toward the 20:56 UTC
+assessment and original 21:26 hard deadline. A pooled booking request took
+266 ms but failed semantically; do not count that as usable warm latency.
