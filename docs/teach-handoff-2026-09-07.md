@@ -1,20 +1,18 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 11:13 PDT
+## Current continuation — 11:16 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, originally based only on remote
-`origin/codex/imprint-master-v066` at `34a6235`. Last live-tested implementation is
-**`1677b16`**: earlier bootstrap/browser lifecycle fixes, accurate deadline
-reporting and per-turn time facts (`6ca89ba`), then simpler early contract-gap
-handoffs and coordinated producer/consumer revisions. No site-specific runtime
-or prompt rules were added. A new general module-loader fix resolves physical paths before fresh imports;
-its 1,930 tests, lint, type checking, website build, and desktop/mobile
-checks pass. Fresh live validation remains due. No MR or push.
+`origin/codex/imprint-master-v066` at `34a6235`. Latest implementation is
+**`9d50dc4`**: physical module paths are resolved before fresh imports, fixing
+Bun's repeated-import failure through directory symlinks. Earlier lifecycle,
+deadline, time-fact, and contract-handoff fixes remain. All 1,930 tests, lint,
+type checking, website build, and desktop/mobile checks pass. No MR or push.
 
 Fresh Flights attempt **8** completed **17:44:16 UTC**, after **82.2922
 minutes**, with all four tools published and the fresh search-to-booking chain
-verified. Teach PID 72015 exited. Implementation remains `1677b16`.
+verified. Teach PID 72015 exited. That run used `1677b16`.
 Independent audit **8** passed **24/24** units: 13 valid calls and all 11
 advertised parameters, with one deliberately invalid grid-window call excluded.
 Audit PID 2992 exited after 9.3943 minutes. Public grid windows are exactly seven
@@ -25,15 +23,18 @@ Tokyo city identifier. Independent identifier breadth and warm timing remain due
 zero published tools. Its first fetch returned listings, but later guest-count
 contrasts failed before transport because the module loader could not load a
 fresh transform through a directory symlink. This was reproduced with synthetic
-files and resolved by canonicalizing the physical path. The local patch needs
+files and resolved by canonicalizing the physical path. The committed fix needs
 fresh validation; never resume this cancelled run. Evidence stays in
 `/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-3`, with hotels-teach-3 log/manifest.
 PID 5286 has exited. Occupancy remains unproven.
 
 Trace collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-No teach or audit is currently active; commit the validated fix, then
-launch fresh Flights in home-9 and update this section and the heartbeat.
-Disk is about 27 GiB free. Exact recordings and Flights guidance remain below.
+Fresh **Flights teach 9** started **18:15:17 UTC**, PID **13489**, on
+`9d50dc4`, new `/tmp/imprint-fresh-inputs-VYbJm1/home-9`. Verify
+`flights-teach-9-manifest.json`; log `flights-teach-9.log`. Exact combined
+recording and four-operation guidance are unchanged. Target 18:45 UTC,
+assess 19:15, hard deadline about 19:45. The heartbeat now follows this run.
+Disk is about 27 GiB free. Do not duplicate processes or reuse old candidates.
 
 Attempt 6 reached 90 minutes with three published tools; their independent
 audit passed 10 invocations plus six parameters (16/16). Grid verification
@@ -52,8 +53,8 @@ provided to later teaching agents. Latest full suite: 1,930 passing tests,
 including the symlink regression and updated prompt-packaging expectations.
 Lint, type checking, website build, and desktop/mobile visual checks pass.
 
-Next: commit the module-loader fix, then freshly teach and independently
-audit Flights followed by Hotels on the corrected revision. Fresh repeated
+Next: monitor Flights 9 and independently audit all published tools. Once it
+passes, freshly teach and audit Hotels on the same corrected revision. Fresh repeated
 successes for both sites are still due. Measure warm calls separately and check
 advertised identifier breadth after sequential validation. Keep all failures
 and unsupported scope explicit. Older sections below are historical snapshots.

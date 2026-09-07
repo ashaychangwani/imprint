@@ -6674,3 +6674,14 @@ The final full suite passes 1,930 tests, 6,106 assertions across 97 files in
 visual checks pass with no errors or overflow; the existing bundle-size warning
 remains. Test failures and screenshots use the private symlink-import/symlink
 prefixes. The task-owned website preview has stopped.
+
+
+### 2026-09-07 18:16 UTC — Fresh Flights 9 started on the loader fix
+
+Committed the general loader correction as 9d50dc4. Fresh Flights attempt 9
+started 18:15:17 UTC, PID 13489, new home-9, exact combined recording and
+four-operation guidance. Log/manifest use flights-teach-9 names in the private
+experiment directory. Target 18:45 UTC, assess 19:15, hard deadline 19:45.
+Disk is about 27 GiB free; collector PID 54899 remains active. Handoff and
+heartbeat now follow this run. No prior artifact, example, or diagnostic was
+supplied to teachers. Independent audit, Hotels, and fresh repeats remain due.
