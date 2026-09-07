@@ -6026,3 +6026,17 @@ comparison-evidence handoff. The run is not yet successful, and Hotels still
 waits for meaningful Flights completion. Free disk is about 1.8 GB; nothing has
 been deleted. Research history is being saved, but final reviews must still
 establish that the supplied evidence supports the current artifacts.
+
+## 2026-09-07 01:03 PDT — All four Flights tools complete; independent audit starts
+
+Fresh attempt 3 finished with four ready and zero failed: location lookup,
+search, date grid, and booking options. Booking also completed its fresh
+producer-consumer check, and the independent completion reviewer accepted the
+run. This took about 70 minutes, still far above the desired 30 minutes.
+
+An independent `imprint audit` now exercises the published output in the same
+isolated home, with a 45-minute cap. Its log is `flights-audit-3.log` in the
+experiment directory. Passing teach is not yet proof of repeatability or broad
+parameter coverage. No examples or manual artifact repairs were supplied.
+Only about 750 MiB of disk remains; nothing was deleted. Check capacity before
+starting Hotels or another fresh teach.
