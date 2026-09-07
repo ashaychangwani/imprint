@@ -12,6 +12,7 @@ import {
   ApiResearchHandoffSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
+  SemanticAgentOutputError,
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
   parseApiResearchOutput,
@@ -598,6 +599,55 @@ describe('focused API research', () => {
         relevantEvidence: expandedEvidence,
       });
       expect(retainedTurnDeltas[3]).toMatchObject({ kind: 'observation' });
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
+  it('returns malformed research handoffs to the master with the actual test history', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-handoff-error-'));
+    let calls = 0;
+    let blocked: ApiResearchBlockedError | undefined;
+    try {
+      try {
+        await researchApiMvpCall({
+          run,
+          recordingIndex,
+          tool,
+          evidence,
+          toolDir,
+          agent: {},
+          runDeadline: new RunDeadline(Date.now() + 60_000),
+          dependencies: {
+            requestStep: async () => {
+              if (calls++ === 0)
+                return {
+                  binding,
+                  action: 'test',
+                  candidate: apiCandidate('baseline'),
+                  reason: 'Test.',
+                };
+              throw new SemanticAgentOutputError(
+                'API researcher',
+                ['candidate: partial candidate differs from the tested request'],
+                2,
+              );
+            },
+            runApiTool: async () => ({
+              result: { ok: true, data: { items: [{ name: 'fixture item' }] } },
+              executionMechanism: 'fetch',
+            }),
+          },
+        });
+      } catch (error) {
+        if (!(error instanceof ApiResearchBlockedError)) throw error;
+        blocked = error;
+      }
+      expect(blocked?.message).toContain('not an API failure');
+      expect(blocked?.message).toContain('partial candidate differs');
+      expect(blocked?.observations).toHaveLength(1);
+      expect(blocked?.observations[0]?.result.ok).toBe(true);
+      expect(calls).toBe(2);
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }

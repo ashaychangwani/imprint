@@ -6149,3 +6149,26 @@ home `home-4`, log `flights-teach-4.log`, no prior artifacts or candidate reuse.
 The 90-minute deadline and 60-minute progress decision remain. This checks
 repeatability and whether the neutral ambiguity guidance regresses Flights.
 Free disk is about 2.4 GiB; monitor it. No code changed after Hotels audit.
+
+## 2026-09-07 03:34 PDT — Flights repeat exposes fatal research-handoff handling
+
+Flights attempt4 `886fea4d-6dcd-4f64-a7bd-0cebfbcacdd6` failed before planning:
+zero published, four not ready. Location, search, and date-grid research had
+working candidates, but booking suffered repeated network timeouts and then
+returned a partial candidate that did not match its cited tested request.
+One output-repair turn did not resolve that mismatch. The typed validation
+error escaped the existing master-review path and ended the entire teach.
+This repeat did not succeed; the earlier successful run is not repeatability.
+
+The small correction routes only this typed agent-output error through the
+existing blocked research handoff, retaining actual observations and the exact
+error for the master. Invalid proof is still rejected. Cancellation, provider
+errors, and unexpected exceptions still propagate. Research instructions now
+clarify exact candidate reuse versus testing a changed request; the master is
+told that a malformed handoff does not establish API failure. No site rule or
+new status/schema was added, and generated artifacts remain untouched.
+
+All 186 focused research/agent/controller tests pass, as do type checking and
+lint. Website build and inspected desktop/mobile renders pass. Free disk is
+about 1.5 GiB; another large teach waits for more headroom rather than risking
+loss of its logs. The failed run and all previous audit reports are preserved.

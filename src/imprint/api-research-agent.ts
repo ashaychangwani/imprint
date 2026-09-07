@@ -29,6 +29,7 @@ import type {
 import {
   type ApiResearchRetainedTurnDelta,
   type MasterTeachAgentOptions,
+  SemanticAgentOutputError,
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
   apiResearchStableInputsSha256,
@@ -440,11 +441,22 @@ export async function researchApiMvpCall(input: {
       ...(input.previousProgress ? { previousProgress: input.previousProgress } : {}),
       ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
     };
-    const decision = await input.dependencies.requestStep(
-      researchInput,
-      input.agent,
-      retainedTurnDelta,
-    );
+    let decision: Awaited<ReturnType<typeof requestApiResearchStep>>;
+    try {
+      decision = await input.dependencies.requestStep(
+        researchInput,
+        input.agent,
+        retainedTurnDelta,
+      );
+    } catch (error) {
+      if (!(error instanceof SemanticAgentOutputError)) throw error;
+      // A malformed advisory handoff is not evidence that the API is impossible.
+      // Preserve the actual tests and let the master resume this researcher.
+      throw new ApiResearchBlockedError(
+        `Research handoff needs correction; this is not an API failure. ${error.message}`,
+        observations,
+      );
+    }
     retainedTurnDelta = undefined;
     resultInspection = undefined;
     if (decision.action === 'inspect_result') {

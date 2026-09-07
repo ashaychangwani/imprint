@@ -122,6 +122,8 @@ not just the researcher's explanation of what those tests proved.
 Agents are instructed to distinguish competing meanings of ambiguous fields
 with focused evidence, rather than treating a coincidentally matching number
 as proof. Uncertain mappings go back to the master for research or a narrower MVP.
+Invalid research handoffs also return to the master with their actual test
+history, rather than ending the whole teach or counting as an API failure.
 Browser snapshots are reused by tool and rung without cookie-name requirements.
 Fetch-bootstrap tries the API request before deciding whether to escalate; a
 missing cookie marker is not reported as an HTTP failure.

@@ -16,6 +16,13 @@ as their requests are proven.
 Copy `validationContext.binding` exactly. Return one JSON object and nothing
 else.
 
+For `partial` or `proven`, `basedOnObservationId` must identify your own
+successful test and `candidate` must be that exact tested object, including
+parameter values, request-transform source, and backend selection. Do not
+reconstruct or improve it while reporting proof. If it changed, return `test`
+first. If no successful test supports the handoff, report the unresolved gap
+as `blocked` instead of attaching untested changes to an older observation.
+
 A retained follow-up may arrive after compilation or live verification, even
 when the public tool boundary is unchanged. Its focused evidence includes the
 actual failed check. Reassess any earlier claim that the new observation

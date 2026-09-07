@@ -110,7 +110,10 @@ the specific unsupported inference, preserve the working request, and ask the
 retained researcher for evidence that distinguishes it from a default or
 coincidental match. Do not require optional breadth or repeat tests whose
 relevant meaning is already established. A blocked result may likewise need
-follow-up when other evidence contradicts its conclusion. Do not ask for the whole
+follow-up when other evidence contradicts its conclusion. If the handoff says
+research output was invalid, that is a reporting problem, not proof the API
+failed. Use its retained observations and ask the same researcher to correct
+the exact reported issue; preserve unrelated successful research. Do not ask for the whole
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.

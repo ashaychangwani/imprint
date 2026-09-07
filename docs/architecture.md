@@ -65,6 +65,11 @@ contrast (for example, carton count versus total item count), reusing decisive
 evidence when available. The compiler must question unsupported research labels
 too. This does not add a runtime classifier or mandatory parameter sweep;
 the master can request missing proof or narrow the public contract.
+If a research response remains invalid after its repair turn, the runtime
+returns the exact validation error and retained observations through the
+existing blocked handoff. The master can resume that researcher; unrelated
+successful research is preserved. This does not accept invalid proof or turn
+provider failures, cancellation, or unexpected runtime exceptions into advice.
 The master treats the research status as a conclusion to review, not an
 automatic approval. Missing evidence inside one tool can trigger a focused
 follow-up just like a cross-tool contradiction, preserving the working request.

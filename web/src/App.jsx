@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Independent drafts can compile while research continues. Researchers can call working sibling requests for fresh inputs; reviewers inspect checked code, live results, and actual research comparisons. Agents test ambiguous field meanings instead of trusting matching numbers. Browser setup is reused within each tool and rung; actual responses decide escalation, not cookie names. Optional breadth can wait; core failures cannot.',
+    body: 'Generate state-aware API workflows with DOM playbooks as the final fallback. Independent drafts can compile while research continues. Researchers can call working sibling requests for fresh inputs; reviewers inspect checked code, live results, and actual research comparisons. Agents test ambiguous field meanings instead of trusting matching numbers. Invalid research handoffs return to the master with test history. Browser setup is reused within each tool and rung; actual responses decide escalation, not cookie names. Optional breadth can wait; core failures cannot.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
