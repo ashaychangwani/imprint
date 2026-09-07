@@ -455,6 +455,12 @@ The public teaching path is one fresh foreground controller:
    Fetch-bootstrap also executes the request before escalating. It does not
    manufacture a forbidden result or remember a rung as unavailable merely
    because the minted jar lacks particular cookie markers.
+   Research preserves the input values and actual observations from its tests,
+   including response excerpts requested by the researcher. MVP review receives
+   up to eight successful contrasts from the proven request definition, plus
+   that request's source. The reviewer compares these facts with the current
+   implementation; prior summaries alone are not comparative proof. Raw test
+   history remains available in the research artifact across follow-ups.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first

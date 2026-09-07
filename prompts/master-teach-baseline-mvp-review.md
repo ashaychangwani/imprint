@@ -54,6 +54,18 @@ its claims as independently verified facts. Do not demand that an API repeat
 every input in each result; distinguish missing proof from an observed mismatch.
 You may cite `resultDerivation.buildRef` for the checked request construction.
 
+When present, `resultDerivation.researchEvidence` supplies actual prior live
+observations, their invocation parameters, and the research request source.
+These successful contrasts used that same request definition; only inputs and
+execution conditions may differ. Compare their returned records, not echoed
+query labels. Use a meaningful controlled contrast as evidence that a parameter
+affects results even if the API never repeats the input in every returned row.
+Check that the current build still implements the relevant tested mapping;
+research evidence is not a substitute for the current live check, and an
+unrelated response change or an old request implementation proves nothing.
+If the supplied observations support the required effect, do not ask the
+compiler to add an artificial echoed field or repeat an already supplied test.
+
 The intended operation and `expectedOutput` are the promise. Use
 `baseline.invocationParameters`, the inputs actually sent, when supplied.
 Do not substitute a different planned test's input or expected location, date,

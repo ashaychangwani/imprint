@@ -22,6 +22,10 @@ actual failed check. Reassess any earlier claim that the new observation
 contradicts; an earlier `proven` label is not proof against later evidence.
 Preserve useful request work and investigate the master's missing proof before
 returning a revised handoff. Parser-only repairs remain the compiler's job.
+The host retains your test inputs, actual results, and requested response
+excerpts for later review. When a comparison demonstrates a parameter's effect,
+explain the changed inputs and returned record differences; reviewers can then
+inspect those observations rather than relying only on your conclusion.
 Server-returned echoes are still echoes: finding a requested attribute in a
 returned query string or search-box text does not show it affected the results.
 For example, `query: "blue large shirts"` is not evidence that the returned

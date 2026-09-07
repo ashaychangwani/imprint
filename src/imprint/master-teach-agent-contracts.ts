@@ -177,7 +177,12 @@ export const ApiResearchObservationSchema = strictObject({
   producerToolName: SemanticToolCandidateSchema.shape.toolName.optional(),
   invocationParameters: ScalarParameterValuesSchema.optional(),
   resultTextLength: z.number().int().nonnegative().optional(),
+  resultInspections: z
+    .array(strictObject({ offset: z.number().int().nonnegative(), text: utf8Text(0, 8_000) }))
+    .max(8)
+    .optional(),
   candidateSha256: PromptShaSchema,
+  requestDefinitionSha256: PromptShaSchema.optional(),
   executionMechanism: utf8Text(1, 128),
   backendAttempts: z.custom<BackendAttemptFact[]>().default([]),
   responseObservations: z
@@ -340,8 +345,8 @@ export const ApiResearchHandoffSchema = strictObject({
   summary: Reason,
   candidate: ApiResearchCandidateSchema.optional(),
   observation: ApiResearchObservationSchema.optional(),
-  /** Failed tests are retained for a blocker so the master sees facts rather
-   * than only the researcher's conclusion. Oldest-to-newest, bounded by host. */
+  /** Actual research history, including successful contrasts. Oldest-to-newest,
+   * bounded by the host; retained across follow-ups and final handoffs. */
   observations: z.array(ApiResearchObservationSchema).max(64).optional(),
   missingProof: ApiResearchMissingProofSchema.optional(),
 }).superRefine((handoff, ctx) => {
@@ -380,13 +385,6 @@ export const ApiResearchHandoffSchema = strictObject({
   }
   if (handoff.status === 'proven' && handoff.missingProof) {
     schemaIssue(ctx, ['missingProof'], 'proven API research cannot have missing proof');
-  }
-  if (handoff.status !== 'blocked' && handoff.observations?.length) {
-    schemaIssue(
-      ctx,
-      ['observations'],
-      'failed observation history belongs only to blocked research',
-    );
   }
   if (
     handoff.candidate &&
@@ -644,6 +642,23 @@ const ResultDerivationSchema = strictObject({
   requestSource: utf8Text(0, 32_000).optional(),
   requestSourceTruncated: z.boolean().optional(),
   researchSummary: utf8Text(0, 16_000).optional(),
+  researchEvidence: strictObject({
+    requestSource: utf8Text(0, 32_000),
+    requestSourceTruncated: z.boolean(),
+    observations: z
+      .array(
+        ApiResearchObservationSchema.pick({
+          id: true,
+          candidateSha256: true,
+          requestDefinitionSha256: true,
+          invocationParameters: true,
+          executionMechanism: true,
+          result: true,
+          resultInspections: true,
+        }),
+      )
+      .max(8),
+  }).optional(),
 });
 export const BaselineMvpReviewInputSchema = strictObject({
   run: CurrentPlanBindingSchema,

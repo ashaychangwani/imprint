@@ -5967,6 +5967,44 @@ export async function runFreshMasterTeach(
                     source: Buffer.from(activeJournal.readBytes(file.artifactRef)).toString('utf8'),
                   })),
               });
+              const research = apiResearchByToolId.get(tool.id);
+              const researchRequest = research
+                ? {
+                    workflow: research.candidate.workflow,
+                    requestTransformSource: research.candidate.requestTransformSource,
+                  }
+                : undefined;
+              const researchRequestText = JSON.stringify(researchRequest) ?? '';
+              const researchObservations = researchRequest
+                ? (research?.observations ?? [])
+                    .filter(
+                      (observation) =>
+                        !observation.producerToolName &&
+                        observation.result.ok &&
+                        observation.requestDefinitionSha256 ===
+                          teachingPlanContentSha256(researchRequest),
+                    )
+                    .slice(-8)
+                    .map(
+                      ({
+                        id,
+                        candidateSha256,
+                        requestDefinitionSha256,
+                        invocationParameters,
+                        executionMechanism,
+                        result,
+                        resultInspections,
+                      }) => ({
+                        id,
+                        candidateSha256,
+                        requestDefinitionSha256,
+                        invocationParameters,
+                        executionMechanism,
+                        result,
+                        resultInspections,
+                      }),
+                    )
+                : [];
               const review = await deps.requestBaselineMvpReview(
                 {
                   run: current.binding,
@@ -5988,6 +6026,16 @@ export async function runFreshMasterTeach(
                             apiResearchByToolId.get(tool.id)?.summary ?? '',
                             16_000,
                           ),
+                          ...(researchObservations.length
+                            ? {
+                                researchEvidence: {
+                                  requestSource: utf8Prefix(researchRequestText, 32_000),
+                                  requestSourceTruncated:
+                                    Buffer.byteLength(researchRequestText, 'utf8') > 32_000,
+                                  observations: researchObservations,
+                                },
+                              }
+                            : {}),
                         },
                       }
                     : {}),

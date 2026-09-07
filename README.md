@@ -117,6 +117,8 @@ exactly matching draft is reused. Declared consumers retain producer-first order
 Researchers can call proven sibling requests with fresh inputs before testing a
 consumer; recorded continuation values are not a substitute for fresh output.
 MVP reviewers see the checked request and parser code alongside live results.
+They also receive actual research comparisons and inspected response excerpts,
+not just the researcher's explanation of what those tests proved.
 Browser snapshots are reused by tool and rung without cookie-name requirements.
 Fetch-bootstrap tries the API request before deciding whether to escalate; a
 missing cookie marker is not reported as an HTTP failure.

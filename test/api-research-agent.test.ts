@@ -110,6 +110,61 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('retains actual contrast results and inputs under the same request definition', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-contrasts-'));
+    const first = apiCandidate('working', 'fetch');
+    const second = { ...first, parameterValues: { query: 'beta' } };
+    try {
+      const outcome = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) =>
+            input.observations.length < 2
+              ? {
+                  binding,
+                  action: 'test',
+                  candidate: input.observations.length ? second : first,
+                  reason: 'Compare results under changed inputs.',
+                }
+              : {
+                  binding,
+                  action: 'proven',
+                  candidate: second,
+                  basedOnObservationId: input.observations[1]?.id,
+                  reason: 'Both inputs returned distinct actual records.',
+                },
+          runApiTool: async ({ parameters }) => ({
+            result: { ok: true, data: { records: [{ id: parameters.query === 'alpha' ? 1 : 2 }] } },
+            executionMechanism: 'fetch',
+          }),
+        },
+      });
+      expect(outcome.observations).toHaveLength(2);
+      expect(outcome.observations?.map((entry) => entry.invocationParameters)).toEqual([
+        { query: 'alpha' },
+        { query: 'beta' },
+      ]);
+      expect(outcome.observations?.[0]?.requestDefinitionSha256).toBe(
+        outcome.observations?.[1]?.requestDefinitionSha256,
+      );
+      expect(outcome.observations?.[0]?.candidateSha256).not.toBe(
+        outcome.observations?.[1]?.candidateSha256,
+      );
+      expect(outcome.observations?.[0]?.result.preview).toContain('1');
+      expect(outcome.observations?.[1]?.result.preview).toContain('2');
+      expect(
+        JSON.parse(readFileSync(join(toolDir, 'api-research.json'), 'utf8')).observations,
+      ).toHaveLength(2);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
   it('calls a working producer with fresh agent-selected inputs before testing its consumer', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-fresh-producer-'));
     const producer = apiCandidate('producer', 'fetch');
@@ -716,6 +771,7 @@ describe('focused API research', () => {
             if (turns === 3) {
               expect(input.resultInspection?.offset).toBeGreaterThan(12_000);
               expect(input.resultInspection?.text).toContain('state=fixture-state');
+              expect(observation.resultInspections?.[0]?.text).toContain('state=fixture-state');
               expect(input.resultInspection?.text).toContain('fixture-hidden-state');
               expect(input.resultInspection?.text).toContain('${credential.password}');
               expect(input.resultInspection?.text).not.toContain('fixture-password');
@@ -914,7 +970,6 @@ describe('focused API research', () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-partial-'));
     const mvp = apiCandidate('mvp');
     const completed = apiCandidate('completed');
-    const firstObservationId = 'working-mvp-observation';
     try {
       const partial = await researchApiMvpCall({
         run,
@@ -945,6 +1000,7 @@ describe('focused API research', () => {
       expect('status' in partial && partial.status).toBe('partial');
       if (!('status' in partial) || partial.status !== 'partial')
         throw new Error('fixture expected partial research');
+      const firstObservationId = partial.observation.id;
 
       const previousProgress = {
         toolName: tool.candidate.toolName,

@@ -14,6 +14,7 @@ import type { TriageResult } from '../src/imprint/compile.ts';
 import {
   type ApiResearchInput,
   type BaselineMvpReviewInput,
+  BaselineMvpReviewInputSchema,
   BaselineMvpReviewOutputSchema,
   CompletionReviewOutputSchema,
   type FocusedPlannerInput,
@@ -4756,9 +4757,15 @@ describe('fresh foreground master controller end to end', () => {
         requestBaselineMvpReview: (input) => {
           reviews += 1;
           expect(input.resultDerivation?.source).toBe(source);
+          expect(BaselineMvpReviewInputSchema.safeParse(input).success).toBe(true);
           expect(input.resultDerivation?.truncated).toBe(false);
           expect(input.resultDerivation?.requestSource).toContain('workflow');
           expect(input.resultDerivation?.requestSourceTruncated).toBe(false);
+          expect(input.resultDerivation?.researchEvidence?.observations).toHaveLength(1);
+          expect(
+            input.resultDerivation?.researchEvidence?.observations[0]?.invocationParameters,
+          ).toBeDefined();
+          expect(input.resultDerivation?.researchEvidence?.requestSource).toContain('workflow');
           const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
           expect(input.resultDerivation?.buildRef).toEqual(proof?.currentBuildRef);
           return baselineMvpReview(input, 'revision_required');

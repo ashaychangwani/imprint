@@ -5976,3 +5976,33 @@ Continue rather than kill: the run has moved from research into checked,
 published output and still has about 29 minutes for remaining tools and final
 review. Keep the original 90-minute deadline. This is not yet overall success;
 the fresh independent audit remains necessary. Disk is about 2.2 GB free.
+
+## 2026-09-06 23:39–23:48 PDT — Preserve actual comparison evidence for review
+
+Stopped attempt 2 at about 73 minutes, with one tool published and three
+unfinished. Search and the date grid repeatedly reached real data, but the
+reviewer asked for passenger-count and route proof already described in the
+research. Inspection showed my earlier evidence fix was incomplete: it passed
+the researcher's explanation, not the actual earlier inputs and responses.
+The compiler was being asked to manufacture another visible field or repeat
+comparisons instead of the reviewer seeing the collected facts.
+
+Research now retains the actual test inputs/results and excerpts it requested
+from longer responses. The reviewer gets up to eight successful comparisons
+using the proven request definition, together with that request's source and
+the current checked build. It must still judge whether the current build
+preserves the tested mapping and whether the current result works. It cannot
+approve a result solely on the researcher's claims. Full bounded research
+history stays local instead of filling the master's and planner's prompts.
+Retained follow-ups recover it from the same run's research artifact.
+
+All 184 focused research/agent/controller tests pass. The full suite passed
+1,914 of 1,915 tests; the unrelated recorder example.com navigation timed out.
+That test is being rerun separately. No old teach conversation is resumed and
+no generated artifact is manually repaired. The previous run remains available
+for diagnosis and comparison.
+
+The isolated example.com recorder test passed on rerun. Types, lint, dependency
+checks, website build, and desktop/mobile inspection passed. This is an evidence
+delivery fix, not a waiver of the semantic review. The next fresh attempt keeps
+the same recording and scope in a new isolated home.

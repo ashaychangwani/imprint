@@ -17,6 +17,7 @@ import {
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
+import { ApiResearchObservationSchema } from './master-teach-agent-contracts.ts';
 import type {
   ApiResearchCandidate,
   ApiResearchHandoff,
@@ -60,6 +61,7 @@ export interface ApiResearchResult {
   toolDir: string;
   summary: string;
   observation: ApiResearchObservation;
+  observations?: ApiResearchObservation[];
   parameters: Record<string, string | number | boolean>;
   /** The exact rung that produced the agent-approved semantic result. */
   backend?: ConcreteBackend;
@@ -366,7 +368,23 @@ export async function researchApiMvpCall(input: {
   let requestCatalogPage = input.requestCatalogPage;
   const inspectedRequestSeqs = new Set<number>();
   const completedInspectionStates = new Set<string>();
+  // Keep full research history local. Master/planner handoffs stay compact;
+  // retained follow-ups and the reviewer can still recover the actual tests.
+  let savedObservations: ApiResearchObservation[] = [];
+  const historyPath = pathJoin(input.toolDir, 'api-research.json');
+  if (input.previousProgress && existsSync(historyPath)) {
+    try {
+      const saved = JSON.parse(readFileSync(historyPath, 'utf8'));
+      const checked = ApiResearchObservationSchema.array().max(64).safeParse(saved.observations);
+      if (checked.success) savedObservations = checked.data;
+    } catch {
+      input.report?.(
+        `${input.tool.candidate.toolName}: prior research history could not be read; retaining the supplied handoff`,
+      );
+    }
+  }
   const observations: ApiResearchObservation[] = [
+    ...savedObservations,
     ...(input.previousProgress?.observations ?? []),
     ...(input.previousProgress?.observation ? [input.previousProgress.observation] : []),
   ].filter((observation, index, all) => all.findIndex(({ id }) => id === observation.id) === index);
@@ -450,6 +468,11 @@ export async function researchApiMvpCall(input: {
         ...(query.search === undefined ? {} : { matchFound: match >= 0 }),
       };
       retainedTurnDelta = { kind: 'result_inspection', resultInspection };
+      if (slice.length)
+        observation.resultInspections = [
+          ...(observation.resultInspections ?? []).filter((entry) => entry.offset !== offset),
+          { offset, text: slice },
+        ].slice(-8);
       continue;
     }
     if (decision.action === 'catalog') {
@@ -533,7 +556,7 @@ export async function researchApiMvpCall(input: {
       if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
       writeFileSync(
         pathJoin(input.toolDir, 'api-research.json'),
-        `${JSON.stringify({ decision, observation }, null, 2)}\n`,
+        `${JSON.stringify({ decision, observation, observations: observations.slice(-64) }, null, 2)}\n`,
         'utf8',
       );
       return {
@@ -550,6 +573,7 @@ export async function researchApiMvpCall(input: {
         toolDir: input.toolDir,
         summary: decision.reason,
         observation,
+        observations: observations.slice(-64),
         parameters: candidate.parameterValues,
         ...(backend ? { backend } : {}),
         ...(decision.action === 'partial'
@@ -589,10 +613,13 @@ export async function researchApiMvpCall(input: {
       });
       const observation: ApiResearchObservation = {
         id: randomUUID(),
-        ...(producer
-          ? { producerToolName: producer.toolName, invocationParameters: candidate.parameterValues }
-          : {}),
+        ...(producer ? { producerToolName: producer.toolName } : {}),
+        invocationParameters: candidate.parameterValues,
         candidateSha256: apiResearchCandidateSha256(candidate),
+        requestDefinitionSha256: teachingPlanContentSha256({
+          workflow: candidate.workflow,
+          requestTransformSource: candidate.requestTransformSource,
+        }),
         executionMechanism: observed.executionMechanism,
         backendAttempts: observed.backendAttempts ?? [],
         responseObservations: observed.responseObservations ?? [],
