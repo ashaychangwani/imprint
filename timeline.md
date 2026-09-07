@@ -6685,3 +6685,21 @@ experiment directory. Target 18:45 UTC, assess 19:15, hard deadline 19:45.
 Disk is about 27 GiB free; collector PID 54899 remains active. Handoff and
 heartbeat now follow this run. No prior artifact, example, or diagnostic was
 supplied to teachers. Independent audit, Hotels, and fresh repeats remain due.
+
+
+### 2026-09-07 18:50 UTC — Flights 9 half-hour checkpoint
+
+Location research is proven through fetch (452 ms). Search research proves a
+one-way SFO–LAX October 20 result using a rendered-document navigation after
+API-response capture attempts timed out. The same returned document contains
+flight records and their selection values; this is a workflow navigation, not
+a playbook. Booking has called the current search producer, but consumer proof
+is pending. Date-grid research has repeated capture timeouts; its latest
+transport completed, with semantics not yet confirmed. Nothing is published.
+
+Repeated request transforms have executed without the prior module-load error.
+One grid setup logged a closed CDP connection and relaunched; retain that
+observation without labelling the unresolved grid result an infrastructure
+waiver. The 30-minute target is missed. Continue on unchanged 9d50dc4 toward
+the 19:15 UTC assessment and original 19:45 hard deadline. No audit or fresh
+repeatability claim is available from this run yet.
