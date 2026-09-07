@@ -6288,3 +6288,20 @@ window pair cannot prove arbitrary range widths. The candidate is not yet
 published; observe whether compilation/review narrows it, then audit the
 actual emitted contract. Do not manually edit this generated candidate or
 count the researcher's six-parameter claim as independent coverage.
+
+## 2026-09-07 05:20 PDT — Sixty-minute assessment: continue on new booking evidence
+
+At 60 minutes, continue attempt 5 to its existing 90-minute deadline. Three
+research candidates have completed draft compiles, and booking has just found
+a concrete request-construction defect: earlier direct bodies had one extra
+array wrapper around the origin location. Recorded scalar paths and the
+rendered-body size difference exposed the mistake. The corrected request,
+still using the fresh LAX-JFK B6 1024 selection, completed through direct
+fetch in 339 ms. Semantic acceptance is pending; HTTP success alone is not
+proof. This distinct correction justifies using the remaining run time.
+
+The preceding navigation and recorded-value diagnostics remain failures and
+are preserved. Do not attribute them to provider capacity. The hard deadline
+is still approximately 12:49 UTC; no extension was made. Booking correctness,
+malformed-handoff recovery, independent audit, and the grid-width contract
+remain to be established.
