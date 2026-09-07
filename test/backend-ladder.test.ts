@@ -1176,7 +1176,7 @@ describe('runWorkflowWithLadder', () => {
     }
   }, 15_000);
 
-  it('does not repeat an unvalidated fetch-bootstrap mint for the same tool', async () => {
+  it('remembers the reached rung without relying on cookie validation', async () => {
     __resetCompileWinningBackendForTest();
     let mints = 0;
     __setCdpJarMinterForTest(async () => {
@@ -1190,7 +1190,7 @@ describe('runWorkflowWithLadder', () => {
         validated: false,
       } as MintedJar;
     });
-    // This test is only about the fetch-bootstrap skip memo. Stop the ladder at
+    // This test is about remembering the reached rung. Stop the ladder at
     // a deterministic, non-escalatable CDP result instead of letting the
     // unrelated stealth rung launch a real browser after the parser rejects
     // the synthetic response.
@@ -1242,6 +1242,9 @@ describe('runWorkflowWithLadder', () => {
 
       expect(first.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(true);
       expect(afterFirst).toBe(1);
+      expect(
+        first.attempts.find(({ backend }) => backend === 'fetch-bootstrap')?.detail,
+      ).not.toContain('did not validate');
       expect(second.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(false);
       expect(mints).toBe(afterFirst);
 
@@ -1801,7 +1804,7 @@ describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', (
   });
 });
 
-describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () => {
+describe('fetch-bootstrap observes the API instead of classifying cookies', () => {
   function bootstrapTool(site: string, onReplay: () => void): ResolvedTool {
     return {
       site,
@@ -1823,7 +1826,7 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
     };
   }
 
-  it('escalates immediately — no replay, no second mint — when jar.validated===false', async () => {
+  it('executes a successful request even when jar.validated===false', async () => {
     let mints = 0;
     __setCdpJarMinterForTest(async () => {
       mints++;
@@ -1852,10 +1855,10 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
         skipBootstrapSplice: true,
       },
     );
-    expect(r.result.ok).toBe(false);
-    if (!r.result.ok) expect(r.result.error).toBe('FORBIDDEN');
-    expect(replays).toBe(0); // doomed plain-fetch replay skipped
-    expect(mints).toBe(1); // no second re-mint (was 2 → ~80s)
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(replays).toBe(1);
+    expect(mints).toBe(1);
   });
 
   it('still replays a validated jar (happy path preserved)', async () => {

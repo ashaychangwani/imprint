@@ -5918,3 +5918,24 @@ thread monitor will inspect meaningful progress, the 60-minute decision point,
 and the 90-minute deadline, then diagnose/retry or audit the fresh result.
 The final focused rerun passed all 199 tests, including controller end-to-end
 fixtures. Local token traces are being captured alongside the attempt.
+
+## 2026-09-06 22:21 PDT — Live validation caught a second cookie gate
+
+Stopped fresh Flights run `0ce02fa6-b263-4516-8e9a-a514a048e231` after about
+12 minutes. The log exposed a missed part of the previous fix: although the
+cache loader now accepts cookie-free jars, fetch-bootstrap itself still returned
+a made-up forbidden result without making the API request when named cookie
+markers were absent. Another map then remembered that rung as unavailable.
+This was a runtime defect, not proof that the agent's API request was wrong.
+
+Removed that duplicate check and its unavailable-rung memory. The normal
+preferred-rung memory remains: actual transport outcomes still guide subsequent
+calls. Expiry, real failed requests, and tool/rung isolation remain unchanged.
+The cancelled run and logs are preserved. A fresh restart will use the same
+recording with a new isolated home, not the cancelled conversation.
+
+All 104 focused backend/cache tests pass. The full suite again passed 1,913 of
+1,914 tests, with the same intermittent process-cleanup stress failure; no
+changed-path test failed. Types and lint passed. Website build and mobile/
+desktop inspection passed. This patch removes runtime code rather than adding
+a new site classification.

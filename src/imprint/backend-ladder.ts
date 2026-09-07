@@ -154,27 +154,8 @@ const DEFAULT_PLAYBOOK_BACKEND_STEP_TIMEOUT_MS = 45_000;
  *  skip doomed rungs after the first success. Never persisted; never consulted
  *  by production replay. Exported reset for test isolation. */
 const compileWinningBackend = new Map<string, ConcreteBackend>();
-/** Compile-only memory of a rung that produced a conclusive mechanical miss for
- * one public tool. This currently records only an unvalidated browser-minted
- * jar: rerunning that same expensive mint on every artifact revision adds no
- * new request evidence. It is process-scoped and never affects production. */
-const compileUnavailableBackends = new Map<string, Set<ConcreteBackend>>();
 export function __resetCompileWinningBackendForTest(): void {
   compileWinningBackend.clear();
-  compileUnavailableBackends.clear();
-}
-
-function rememberCompileUnavailableBackends(memoKey: string, result: LadderResult): void {
-  if (
-    !result.attempts.some(
-      ({ backend, detail }) => backend === 'fetch-bootstrap' && detail.includes('did not validate'),
-    )
-  ) {
-    return;
-  }
-  const unavailable = compileUnavailableBackends.get(memoKey) ?? new Set<ConcreteBackend>();
-  unavailable.add('fetch-bootstrap');
-  compileUnavailableBackends.set(memoKey, unavailable);
 }
 
 /** Keep compile-time transport memory scoped to one request construction.
@@ -974,27 +955,6 @@ async function runFetchBootstrap(
       };
     }
 
-    // Fast-fail an UNVALIDATED jar. A cdp-minted jar without `_abck~0~`/`bm_sv`
-    // (validated:false) is rejected by Akamai on plain-fetch replay, and a second
-    // mint just produces another unvalidated jar — so don't pay two doomed
-    // ~40s mint+replay cycles (the ~80s that made southwest's every call slow).
-    // Escalate straight to cdp-replay, which fetches INSIDE the live page (the
-    // bmak sensor re-validates `_abck` between calls) and is the only path that
-    // works once the recording is too old to seed a high-trust jar. A
-    // recording-seeded or cached jar is validated:true by construction, so the
-    // cheap plain-fetch path is untouched; `=== false` (not falsy) leaves jars
-    // without the field — older caches / test stubs — on the original path.
-    if (jar.validated === false) {
-      log(
-        'fetch-bootstrap: minted jar unvalidated (no _abck~0~/bm_sv) — plain-fetch replay doomed; escalating to cdp-replay',
-      );
-      return {
-        ok: false,
-        error: 'FORBIDDEN',
-        message: 'fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required.',
-      };
-    }
-
     // Build credentials carrying the minted jar's cookies (executeWorkflow's
     // RuntimeCookieJar scopes them per-request); fetchImpl only forces the UA.
     const bootstrappedCredentials: CredentialStore = {
@@ -1679,17 +1639,7 @@ export async function runWorkflowWithLadder(opts: {
   const assetRoot = pathResolve(toolDir, '..', '..');
 
   const memoKey = compileExecutionMemoKey(workflow, toolDir);
-  const unavailable = compileUnavailableBackends.get(memoKey);
-  const defaultCompileLadder: ConcreteBackend[] = [
-    'fetch',
-    'fetch-bootstrap',
-    'cdp-replay',
-    'stealth-fetch',
-  ];
-  const ladder = defaultCompileLadder.filter((backend) => !unavailable?.has(backend));
-  if (unavailable?.has('fetch-bootstrap')) {
-    log(`compile memo: ${memoKey} skipping previously unvalidated fetch-bootstrap`);
-  }
+  const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
   let memoWinner = compileWinningBackend.get(memoKey);
 
   // Reuse stealth state only for repeated calls to this exact tool and rung.
@@ -1795,7 +1745,6 @@ export async function runWorkflowWithLadder(opts: {
     // winner for the next call.
     if (!memoWinner) {
       const result = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
-        skipBootstrapSplice: unavailable?.has('fetch-bootstrap') === true,
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
@@ -1803,7 +1752,6 @@ export async function runWorkflowWithLadder(opts: {
         onResponse: observeResponse,
         onPreparedRequest: opts.onPreparedRequest,
       });
-      rememberCompileUnavailableBackends(memoKey, result);
       if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
       return { ...result, responseObservations };
     }
@@ -1828,7 +1776,6 @@ export async function runWorkflowWithLadder(opts: {
       onResponse: observeResponse,
       onPreparedRequest: opts.onPreparedRequest,
     });
-    rememberCompileUnavailableBackends(memoKey, result);
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
     } else {

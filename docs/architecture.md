@@ -452,6 +452,9 @@ The public teaching path is one fresh foreground controller:
    that the server honored a setting. Cached browser snapshots no longer need
    particular cookie names to qualify for reuse; age and actual failures still
    determine when to refresh them.
+   Fetch-bootstrap also executes the request before escalating. It does not
+   manufacture a forbidden result or remember a rung as unavailable merely
+   because the minted jar lacks particular cookie markers.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first
