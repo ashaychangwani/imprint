@@ -6557,3 +6557,14 @@ adjustment also passes 126 agent packaging tests. Lint passes. Website build
 and desktop/mobile visual checks pass with no page errors or overflow; the
 existing bundle warning remains. Full runtime suite last passed 1,929 tests
 on `6ca89ba`. Preview PID 71785 was stopped. The next validation must be fresh.
+
+### 2026-09-07 16:23 UTC — Fresh Flights 8 started
+
+Attempt 8 runs on `1677b16`, started 16:21:58 UTC, PID 72015, in `home-8`.
+Log and launch record are `flights-teach-8.log` and
+`flights-teach-8-manifest.json` under the existing experiment directory.
+The recording and four-operation guidance are unchanged. No prior artifact,
+example, conversation, or diagnostic was passed to the teaching agents.
+Target 16:51 UTC; hour assessment 17:21; original hard deadline about 17:51.
+Trace collector PID 54899 remains active; disk is about 28 GiB free.
+The handoff's current section now points here and preserves earlier snapshots.
