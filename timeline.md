@@ -6080,3 +6080,22 @@ so this result describes a narrow search MVP, not full Hotels coverage.
 The teach completed within about 22 minutes of launch (exact timing will come
 from the trace). An independent audit now runs against `hotels-home-1`, logging
 to `hotels-audit-1.log`. Disk remains about 2.6 GiB free. No code changed.
+
+## 2026-09-07 01:52 PDT — Hotels audit catches a false field interpretation
+
+Independent audit failed at 33.3%: nine graded units, three correct and six
+broken; one extra invalid-date call was excluded as bad parameters. Location
+works. Changing either date changes the returned `guest_count`, and requesting
+four guests still returns two. The generated parser labels `stay[2]` as guest
+count; the request transform also places guest count beside the two dates.
+Audit evidence strongly suggests that field is duration, not occupancy.
+
+The teach's baseline was a three-night stay for three guests. The reviewer
+accepted the matching number as proof, so the ambiguous interpretation survived.
+This is not a transport failure. Do not repair the generated artifact manually
+or add a Hotels rule. Next investigate the research transcript and improve
+generic guidance for ambiguous field meanings: distinguish competing meanings
+with a small live contrast instead of trusting coincidentally equal numbers.
+Keep the MVP narrow rather than adding guessed parameters. Preserve this failed
+audit and start a fresh teach after any prompt/code correction. Flights repeat
+waits while this defect is investigated.
