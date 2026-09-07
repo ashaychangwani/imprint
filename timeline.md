@@ -6040,3 +6040,22 @@ experiment directory. Passing teach is not yet proof of repeatability or broad
 parameter coverage. No examples or manual artifact repairs were supplied.
 Only about 750 MiB of disk remains; nothing was deleted. Check capacity before
 starting Hotels or another fresh teach.
+
+## 2026-09-07 01:12 PDT — Flights independent audit passes; storage pauses retries
+
+The independent audit scored 100% on all four published tools: 13 recorded
+invocations plus nine parameter checks, 22 graded units, zero broken, no-op,
+infrastructure, bad-parameter, or untestable results. The auditor's prose says
+14 invocations/23 units, but its actual arrays and deterministic totals say
+13/22; use the actual counts. Location changed between Seattle and Portland;
+search and grid changed routes and dates; booking used two fresh search
+selections and returned the matching Delta and JetBlue offers.
+
+This proves the narrow exposed MVP, not round-trip/multi-city search or broad
+filters that these artifacts do not expose, and not yet repeatability.
+The audit recorded 679,038 input tokens (645,376 cached reads), 4,201 output
+tokens, and zero reported cache-write tokens. Raw evidence stays local.
+
+Free disk is down to about 600 MiB. Hotels and another Flights teach are not
+being started until space is available. No data has been deleted. The existing
+monitor will check for available space and continue validation when feasible.
