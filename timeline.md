@@ -5798,3 +5798,18 @@ Continue within the remaining 30 minutes because focused planning is now
 producing concrete implementations. This repeat has not reproduced the prior
 full Flights success; a passing subset must not hide the missing booking tool.
 Keep the original 90-minute deadline. Local usage traces continue to arrive.
+
+### September 6, 17:54 PDT — Flights repeat fails at its deadline
+
+Run `48e0fd1d-6d4c-4c8c-beb6-26c1957962f7` ended failed at 17:51:23 PDT:
+one ready tool (calendar), four not ready. The measured teach time is
+90 minutes and 0.4 seconds. Search was still compiling a repair when the
+deadline stopped it; location's subsequent result review could not finish.
+Booking remained unresolved and the selection tool was not published.
+This does not reproduce the earlier five-tool success. Do not relabel the
+single published tool as a successful overall compile.
+
+At 17:54 PDT start an independent audit of the only fresh published tool,
+calendar, in the same isolated home. Keep its score separate from overall
+coverage and preserve this failed teach's token cost. Hotels will follow on
+the unchanged code, not after secretly tuning the repeatability experiment.
