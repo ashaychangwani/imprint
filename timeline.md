@@ -6012,3 +6012,17 @@ Checkpoint `6b7d30c`. Fresh Flights attempt 3 started at about 23:49 PDT
 `/tmp/imprint-fresh-inputs-VYbJm1/home-3` and log `flights-teach-3.log` in the
 same parent. The monitor follows this new attempt. No previous discovery,
 compiled tool, example, or agent conversation was supplied.
+
+## 2026-09-07 00:50 PDT — Attempt 3 reaches checked output
+
+Run `9cfdf837-8178-4027-b953-f3175423d1a7` is about 62 minutes old. Research
+and master review produced a four-tool plan. Booking again used fresh search
+output in a retained follow-up. Location has passed live/semantic review and
+been published. Search completed its live request and entered semantic review.
+
+Continue to the existing 90-minute deadline: the run is producing checked
+output and this is the first live attempt that can exercise the actual
+comparison-evidence handoff. The run is not yet successful, and Hotels still
+waits for meaningful Flights completion. Free disk is about 1.8 GB; nothing has
+been deleted. Research history is being saved, but final reviews must still
+establish that the supplied evidence supports the current artifacts.
