@@ -6070,3 +6070,13 @@ existing experiment directory. The run retains the 90-minute deadline, with
 a progress decision at 60 minutes. Trace capture remains enabled. Monitor
 space closely; Flights has passed independent audit but repeatability still
 needs another fresh validation.
+
+## 2026-09-07 01:46 PDT — Hotels teach succeeds; independent audit starts
+
+Hotels run `187e68da-1cad-4683-8758-f253c389c655` finished with one ready
+search tool and zero failed tools. It used plain fetch; the checked request
+took about 1.8 seconds. Discovery proposed one operation from this recording,
+so this result describes a narrow search MVP, not full Hotels coverage.
+The teach completed within about 22 minutes of launch (exact timing will come
+from the trace). An independent audit now runs against `hotels-home-1`, logging
+to `hotels-audit-1.log`. Disk remains about 2.6 GiB free. No code changed.
