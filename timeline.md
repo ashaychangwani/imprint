@@ -6910,3 +6910,21 @@ those route and machine identifiers. Private source response:
 `home-11/.../get_flight_booking_options/live-results/9106c3d3c6140641c04926fa2b3289cd37ea755a76cc2772a9a2c75d2bff60aa.txt`.
 The public serialized field still needs compiler and final chain proof.
 No repeated teach or independent audit success is claimed.
+
+
+## 2026-09-07 16:33 PDT — Flights 11 failed; partial audit and timing analysis
+
+Flights 11 failed at the 90-minute deadline, three ready/one not ready. Booking
+MVP combined different fare bundles and mislabelled a provider; the final chain
+timed out, and the late compiler repair was interrupted. The producer selection
+again used a display airline name where the consumer expected a machine code.
+Independent partial audit 11 started 23:28:51 UTC, PID 20331, same home, three
+published tools only, 45-minute deadline. Disk 24.52 GiB. No artifact repaired.
+
+Teach usage: 11,978,209 input (9,372,416 cache reads), 159,771 output, zero
+reported cache writes, $17.37 base API equivalent; interrupted compiler usage
+may be incomplete. Recorded cumulative estimate $196.21 before audit 11.
+Read-only deep-dive: final compile began at minute 69; final compilers took two
+to five minutes each. Legacy compile-log analyzer does not parse current Codex
+events; its zero-call reports are not evidence. Investigating the producer
+compiler's missing downstream construction context before choosing a correction.

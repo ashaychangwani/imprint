@@ -1,6 +1,42 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 14:55 PDT
+## Current continuation — 16:33 PDT
+
+Same validation worktree and branch; implementation **`43ab0c7`**, latest
+checkpoint before this note `e2a27e9`. No push or MR. Flights **11** failed at
+90.0027 minutes: **three ready, booking not ready**. Booking MVP review rejected
+combined fare bundles and an incorrect provider label. Its final chain timed
+out after 150.611 seconds; the search selection again used a display airline
+name where booking's proven transform used the machine code. The master began
+a late booking repair and the deadline interrupted it. All evidence retained.
+
+**Partial audit 11** started **23:28:51 UTC**, PID **20331**, three published
+tools in `/tmp/imprint-fresh-inputs-VYbJm1/home-11`, 45-minute deadline about
+**00:13:51 UTC September 8**. Verify `flights-audit-11-manifest.json` and log.
+Teach PID 88789 exited. Collector PID **54899**, port **6438**, continues
+`spans-validation.jsonl`. Disk had **24.52 GiB** free before the audit.
+
+A read-only timing investigation is in progress using the teach-deepdive skill.
+Final compilation started near minute 69; each final compiler took about two
+to five minutes. Earlier drafts were seeded into revised compiles. The old
+compile-log analysis script cannot parse these current Codex event arrays;
+its zero-call reports are invalid. Use trace spans instead. Root inspection
+shows the producer compiler receives its own research plus its plan, without
+the consumer's exact tested construction. Check whether passing bounded,
+current-run consumer evidence for declared outgoing links would resolve this
+information gap; do not add another semantic runtime rule. No correction has
+yet been made for that gap. Do not launch another teach before the audit and
+evidence-based correction are assessed.
+
+Accounting through teach 11: fourteen teaches/seven completed audits,
+**$196.21** base API equivalent. Audit 11 remains excluded until complete.
+The original malformed-handoff path has not been exercised; no symlink failure
+recurred. Full Flights/Hotels success on unchanged code and fresh repeats remain
+due. Keep two-worker concurrency, sequential experiments, and the 30/60/90-minute
+schedule. Never feed old artifacts or diagnostics to teachers, resume failed
+teaches, delete evidence, or use old vNext changes.
+
+## Previous continuation — 14:55 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, based only on remote

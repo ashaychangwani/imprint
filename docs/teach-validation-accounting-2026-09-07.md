@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are thirteen teaches and seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fourteen teaches and seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 691 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 754 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -28,7 +28,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights audit 9 | 12/13 correct; only two published tools | 4.88 | 360,143 | 326,400 | 0 | 3,060 | $0.33 |
 | Flights teach 10 | Deadline: 4 ready, both chain checks failed | 90.00 | 16,435,849 | 13,469,056 | 0 | 164,056 | $20.54 |
 | Flights audit 10 | 8/15 correct; booking untestable | 12.53 | 958,099 | 922,496 | 0 | 4,651 | $0.60 |
-| **Total** | **Includes failures/cancellations** | **839.86** | **139,847,075** | **114,492,288** | **0** | **1,581,281** | **$178.84** |
+| Flights teach 11 | Deadline: 3 ready; booking MVP and chain failed | 90.00 | 11,978,209 | 9,372,416 | 0 | 159,771 | $17.37 |
+| **Total** | **Includes failures/cancellations** | **929.86** | **151,825,284** | **123,864,704** | **0** | **1,741,052** | **$196.21** |
 
 ## Cost assumptions and completeness
 
@@ -44,7 +45,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-10 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty accounted traces contain 1,957 spans and twenty completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-11 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-one accounted traces contain 2,179 spans and twenty-one completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -129,3 +130,20 @@ separate, and browser contexts were closed afterward. These are host diagnostic
 calls with no LLM usage, not a replacement audit or measured warm success.
 Evidence: `diagnose-flights-10.ts`, `flights-10-diagnostic-{1,2}.json`, log and
 `flights-10-diagnostic-timings.json` in the private experiment directory.
+
+
+Flights 11 on `43ab0c7` failed at 90.0027 minutes with three published tools.
+Booking's MVP parser combined separate fare bundles into a contradictory
+record; its final chain timed out after 150.611 seconds including setup. Search
+again serialized a display airline name where the proven consumer used its
+machine code. The late booking compiler repair was interrupted, so its CLI
+usage may be incomplete despite no missing semantic `llm.analyze` usage spans.
+Partial audit 11 of the three published tools is pending.
+
+Final compilation began around minute 69, after research and plan revisions.
+The three earlier drafts took 3.04 / 5.35 / 2.53 minutes of worker time; the
+final location, search, grid, and booking compilers took 1.92 / 2.91 / 2.11 /
+4.54 minutes, with a 2.29-minute interrupted booking repair. Parallel durations
+must not be added as elapsed time. The older compile-log analysis script
+reported zero calls because it did not parse this Codex event shape; those
+outputs are not valid timing totals. Completed trace spans provide these times.
