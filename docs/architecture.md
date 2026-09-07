@@ -441,6 +441,12 @@ The public teaching path is one fresh foreground controller:
    smallest useful API call. Every tool gets this narrow first pass before
    optional breadth or producer-consumer details can consume the run.
 6. Research has three factual handoffs: `proven`, `partial`, and `blocked`.
+   A proven independent tool can plan and compile a draft in its existing
+   worker slot while another tool continues researching. This adds no extra
+   agent concurrency. Declared consumers wait for the normal producer-first
+   build waves. The final master review can replace an early proposal; a draft
+   is reused only when both its compile inputs and implementation plan match.
+   Verification and publication still follow master approval, not research alone.
    `partial` preserves a tested working subset but names proof still required by
    the selected MVP or one of its dependency edges. Optional parameter breadth
    waits for the later best-effort pass. After all first passes finish, the

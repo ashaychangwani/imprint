@@ -2454,6 +2454,12 @@ async function researchSelectedOperations(input: {
   followUps?: readonly ApiResearchFollowUpDirective[];
   previousHandoffs?: readonly ApiResearchHandoff[];
   verificationEvidenceByToolName?: ReadonlyMap<string, PromptEvidenceEntry[]>;
+  onProven?: (
+    tool: EditableTeachingTool,
+    result: ApiResearchResult,
+    handoff: ApiResearchHandoff,
+    evidence: PromptEvidenceProjection,
+  ) => Promise<void>;
 }): Promise<PrePlanApiResearch> {
   const evidenceByTool = focusedEvidenceForPlan({
     plan: input.plan,
@@ -2577,7 +2583,7 @@ async function researchSelectedOperations(input: {
           }
           resultsByToolId.set(tool.id, outcome);
           input.report?.(`${tool.candidate.toolName}: API research is proven`);
-          return ApiResearchHandoffSchema.parse({
+          const handoff = ApiResearchHandoffSchema.parse({
             toolName: tool.candidate.toolName,
             researchInputsSha256: outcome.researchInputsSha256,
             status: 'proven',
@@ -2585,6 +2591,8 @@ async function researchSelectedOperations(input: {
             candidate: outcome.candidate,
             observation: outcome.observation,
           });
+          await input.onProven?.(sourceTool, outcome, handoff, evidence);
+          return handoff;
         } catch (error) {
           if (!(error instanceof ApiResearchBlockedError)) throw error;
           input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
@@ -2979,6 +2987,8 @@ async function discoverAndPlan(input: {
   report?: (message: string) => void;
   now: Date;
   onSelected?: (selection: CandidateSelection) => void;
+  compileInput: { sessionPath: string; llmConfig: LLMOptions; keepTest?: boolean };
+  compileSessionsByToolId: Map<string, string>;
 }): Promise<{
   plan: EditableTeachingPlan;
   discoveryInput: ToolSelectionAdvisorInput;
@@ -2988,6 +2998,10 @@ async function discoverAndPlan(input: {
   toolAdvice: ToolAdvice;
   apiResearch: ApiResearchHandoff[];
   apiResearchResults: Map<string, ApiResearchResult>;
+  earlyDrafts: Map<
+    string,
+    { compiled: CompiledFocusedTool; compileInputsSha256: string; implementationSha256: string }
+  >;
 }> {
   const recordingIndex = recordingIndexFromSession(input.triage.session, input.recordingSha256);
   const run = {
@@ -3078,6 +3092,18 @@ async function discoverAndPlan(input: {
   const initialPlanObject = jsonRef(initialPlan);
   addBootstrap(input.seeds, initialPlanObject);
 
+  // A research worker keeps its slot while preparing its own draft. Other
+  // workers can continue research, without creating another concurrency pool.
+  // Drafts are never published until the master's final plan and normal checks.
+  const earlyDrafts = new Map<
+    string,
+    { compiled: CompiledFocusedTool; compileInputsSha256: string; implementationSha256: string }
+  >();
+  const earlyPlans = new Map<
+    string,
+    { bundle: HostedPlannerBundle; research: ApiResearchResult; boundary: string }
+  >();
+
   const firstPassResearch = await researchSelectedOperations({
     plan: initialPlan,
     run,
@@ -3091,6 +3117,70 @@ async function discoverAndPlan(input: {
     runDeadline: input.runDeadline,
     signal: input.signal,
     report: input.report,
+    onProven: async (tool, result, handoff, evidence) => {
+      // Consumers still wait for their declared producers and normal build
+      // waves. Early work must not bypass the existing producer-first checks.
+      if (
+        tool.candidate.dependsOnTools.length > 0 ||
+        initialPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id)
+      )
+        return;
+      try {
+        const [bundle] = await requestFocusedPlannerBundles({
+          plan: initialPlan,
+          discoveryRun: run,
+          recordingIndex,
+          triagedSession: input.triage.session,
+          independent: input.independent,
+          seeds: input.seeds,
+          agent: input.agent,
+          deps: input.deps,
+          apiResearch: [handoff],
+          evidenceByTool: new Map([[tool.id, evidence]]),
+          toolIds: new Set([tool.id]),
+        });
+        if (!bundle) return;
+        const proposed = bundle.proposal.payload.tool;
+        if (!apiResearchMatchesPlan(proposed, bundle.output.implementationPlan, result)) return;
+        earlyPlans.set(tool.id, {
+          bundle,
+          research: result,
+          boundary: teachingToolCompileInputsSha256({
+            ...tool,
+            strategy: undefined,
+            evidenceRefs: [],
+          }),
+        });
+        input.report?.(
+          `${tool.candidate.toolName}: compiling a draft while other research continues`,
+        );
+        const compiled = await input.deps.compileFocusedTool({
+          tool: proposed,
+          implementationPlan: bundle.output.implementationPlan,
+          triage: input.triage,
+          ...input.compileInput,
+          stagingDir: pathJoin(input.stagingRoot, 'research-drafts', tool.id),
+          apiResearchDir: result.toolDir,
+          apiResearchSummary: result.summary,
+          resumeSessionId: input.compileSessionsByToolId.get(tool.id),
+          onSessionId: (id) => input.compileSessionsByToolId.set(tool.id, id),
+          runDeadline: input.runDeadline,
+          signal: input.signal,
+        });
+        earlyDrafts.set(tool.id, {
+          compiled,
+          compileInputsSha256: bundle.proposal.payload.binding.compileInputsSha256,
+          implementationSha256: teachingPlanContentSha256(bundle.output.implementationPlan),
+        });
+      } catch (error) {
+        if (input.signal?.aborted) throw abortSignalError(input.signal);
+        const controlError = providerControlError(error);
+        if (controlError) throw controlError;
+        input.report?.(
+          `${tool.candidate.toolName}: early draft needs another pass (${boundedTerminalMessage(error)})`,
+        );
+      }
+    },
   });
   const research = await reviewApiResearchBeforePlanning({
     initialPlan,
@@ -3115,18 +3205,35 @@ async function discoverAndPlan(input: {
     addBootstrap(input.seeds, jsonRef(handoff)),
   );
 
-  const plannerBundles = await requestFocusedPlannerBundles({
-    plan: research.plan,
-    discoveryRun: run,
-    recordingIndex,
-    triagedSession: input.triage.session,
-    independent: input.independent,
-    seeds: input.seeds,
-    agent: input.agent,
-    deps: input.deps,
-    apiResearch: research.handoffs,
-    evidenceByTool: research.evidenceByTool,
+  const reusablePlans = research.plan.tools.flatMap((tool) => {
+    const early = earlyPlans.get(tool.id);
+    return early &&
+      early.research === research.resultsByToolId.get(tool.id) &&
+      (tool.strategy === undefined || tool.strategy.kind === 'api') &&
+      early.boundary ===
+        teachingToolCompileInputsSha256({ ...tool, strategy: undefined, evidenceRefs: [] })
+      ? [early.bundle]
+      : [];
   });
+  const reusedIds = new Set(reusablePlans.map(({ output }) => output.tool.id));
+  const plannerBundles = [
+    ...reusablePlans,
+    ...(await requestFocusedPlannerBundles({
+      plan: research.plan,
+      discoveryRun: run,
+      recordingIndex,
+      triagedSession: input.triage.session,
+      independent: input.independent,
+      seeds: input.seeds,
+      agent: input.agent,
+      deps: input.deps,
+      apiResearch: research.handoffs,
+      evidenceByTool: research.evidenceByTool,
+      toolIds: new Set(
+        research.plan.tools.filter(({ id }) => !reusedIds.has(id)).map(({ id }) => id),
+      ),
+    })),
+  ];
   const evidenceRefs = allEvidenceRefs(discoveryEvidence, plannerBundles);
   const prePlanObject = jsonRef(research.plan);
   addBootstrap(input.seeds, prePlanObject);
@@ -3215,6 +3322,7 @@ async function discoverAndPlan(input: {
     toolAdvice: advice,
     apiResearch: research.handoffs,
     apiResearchResults: research.resultsByToolId,
+    earlyDrafts,
   };
 }
 
@@ -3512,6 +3620,10 @@ async function compileAndCheckCurrentPlan(input: {
   apiResearchByToolId?: ReadonlyMap<string, ApiResearchResult>;
   /** Durable compiler conversations, one per public tool. */
   compileSessionsByToolId?: Map<string, string>;
+  earlyDrafts?: Map<
+    string,
+    { compiled: CompiledFocusedTool; compileInputsSha256: string; implementationSha256: string }
+  >;
   /** Install an independently usable MVP before optional breadth work. */
   publishMvp?: (tool: EditableTeachingTool, compiled: CompiledFocusedTool) => Promise<void>;
   /** Review only the default result's fitness for the core operation. */
@@ -3612,6 +3724,18 @@ async function compileAndCheckCurrentPlan(input: {
     const implementation = input.journal.readJson(
       tool.implementationPlan,
     ) as ImplementationPlanPayload;
+    const early = input.earlyDrafts?.get(tool.id);
+    input.earlyDrafts?.delete(tool.id);
+    if (
+      early &&
+      early.compileInputsSha256 === teachingToolCompileInputsSha256(tool, plan.chainEdges) &&
+      early.implementationSha256 === teachingPlanContentSha256(implementation)
+    ) {
+      input.report?.(
+        `${tool.candidate.toolName}: using the draft that matches the master-approved plan`,
+      );
+      return early.compiled;
+    }
     let apiResearch: ApiResearchResult | undefined;
     if (tool.strategy.kind === 'api') {
       apiResearch = input.apiResearchByToolId?.get(tool.id);
@@ -3638,7 +3762,8 @@ async function compileAndCheckCurrentPlan(input: {
       priorToolDir:
         revisionSourceByToolId.get(tool.id)?.strategyKind === tool.strategy.kind
           ? revisionSourceByToolId.get(tool.id)?.toolDir
-          : draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir,
+          : (draftSourceByToolStrategy.get(draftSourceKey(tool.id, tool.strategy.kind))?.toolDir ??
+            (tool.strategy.kind === 'api' ? early?.compiled.toolDir : undefined)),
       apiResearchDir: apiResearch?.toolDir,
       apiResearchSummary: apiResearch?.summary,
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
@@ -5570,6 +5695,7 @@ export async function runFreshMasterTeach(
       });
       reportProgress(opts, `reviewing ${detection.candidates.length} discovered operation(s)`);
     }
+    const compileSessionsByToolId = new Map<string, string>();
     const planned = await discoverAndPlan({
       site,
       runId,
@@ -5588,6 +5714,12 @@ export async function runFreshMasterTeach(
       signal: opts.signal,
       report: (message) => reportProgress(opts, message),
       now: deps.now(),
+      compileInput: {
+        sessionPath: redacted.path,
+        llmConfig: llmOptions(opts),
+        keepTest: opts.keepTest,
+      },
+      compileSessionsByToolId,
       onSelected: (selection) => {
         plannedTools = selection.discoveryDecision.desiredPlan.tools.length;
         writeCandidateSelectionCheckpoint(runRoot, selection, seeds);
@@ -5631,7 +5763,6 @@ export async function runFreshMasterTeach(
     let draftSourceByToolStrategy = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
-    const compileSessionsByToolId = new Map<string, string>();
     const apiResearchByToolId = planned.apiResearchResults;
     const revisionGuidanceByToolId = new Map<string, string>();
     const repairContextByToolId = new Map<string, FocusedPlannerRevisionContext>();
@@ -5747,6 +5878,7 @@ export async function runFreshMasterTeach(
           focusedEvidenceByToolId: planned.focusedEvidence,
           apiResearchByToolId,
           compileSessionsByToolId,
+          earlyDrafts: planned.earlyDrafts,
           isMvpPublished: (toolId, buildRef) =>
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
           resultDisposition: (toolId, resultReceiptRef) =>

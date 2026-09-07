@@ -45,7 +45,10 @@ selected MVP's core result or a required downstream obligation. Preserve that
 exact candidate and observation and list each blocking gap in `missingProof`.
 Do not use `partial` for optional filters, extra modes, or more aggressive
 request minimization; note those as deferred best-effort work in `reason` and
-let planning and compilation proceed. The master waits for every operation's
+let planning and compilation proceed. Proven independent tools may prepare
+drafts while other research continues, within the same two worker slots.
+Drafts still require master approval and normal verification before publication.
+The master waits for every operation's
 first pass, reviews the complete set together, then may send a precise
 `followUp` back to this same retained conversation.
 

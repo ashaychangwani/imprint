@@ -836,7 +836,7 @@ describe('fresh foreground master controller end to end', () => {
     ).toBeUndefined();
   });
 
-  it('finishes every request researcher before focused planning starts', async () => {
+  it('compiles a proven producer before slower sibling research finishes', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const base = lifecycleFailureFixture({
@@ -847,9 +847,16 @@ describe('fresh foreground master controller end to end', () => {
       });
       const baseResearch = base.requestApiResearchStep;
       const basePlanner = base.requestFocusedPlan;
+      const baseCompile = base.compileFocusedTool;
       if (!baseResearch || !basePlanner) throw new Error('fixture research roles are missing');
+      if (!baseCompile) throw new Error('fixture compiler is missing');
       const proven = new Set<string>();
       let plannerCalls = 0;
+      let releaseConsumer!: () => void;
+      const producerCompiled = new Promise<void>((resolve) => {
+        releaseConsumer = resolve;
+      });
+      let compiledBeforeConsumer = false;
 
       const terminal = await runFreshMasterTeach(
         {
@@ -862,15 +869,16 @@ describe('fresh foreground master controller end to end', () => {
         {
           ...base,
           requestApiResearchStep: async (input) => {
+            if (input.tool.id === CONSUMER_ID) await producerCompiled;
             const decision = await baseResearch(input);
             if (decision.action === 'proven') proven.add(input.tool.id);
             return decision;
           },
           requestFocusedPlan: async (input) => {
             plannerCalls += 1;
-            expect([...proven].sort()).toEqual([CONSUMER_ID, PRODUCER_ID].sort());
+            expect(proven.has(input.tool.id)).toBeTrue();
             const apiResearch = input.apiResearch ?? [];
-            expect(apiResearch).toHaveLength(2);
+            expect(apiResearch.length).toBeGreaterThanOrEqual(1);
             expect(apiResearch.every(({ status }) => status === 'proven')).toBeTrue();
             expect(
               apiResearch.every(({ candidate, observation }) =>
@@ -879,10 +887,19 @@ describe('fresh foreground master controller end to end', () => {
             ).toBeTrue();
             return await basePlanner(input);
           },
+          compileFocusedTool: async (input) => {
+            const output = await baseCompile(input);
+            if (input.tool.id === PRODUCER_ID) {
+              compiledBeforeConsumer = !proven.has(CONSUMER_ID);
+              releaseConsumer();
+            }
+            return output;
+          },
         },
       );
 
       expect(plannerCalls).toBe(2);
+      expect(compiledBeforeConsumer).toBeTrue();
       expect(terminal.status).toBe('failed');
     });
   });
@@ -1067,7 +1084,9 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.status).toBe('failed');
       expect(firstPasses.get(PRODUCER_NAME)).toBe(1);
       expect(firstPasses.get(CONSUMER_NAME)).toBe(1);
-      expect(plannerCalls).toBe(2);
+      // The deliberately failing planner is tried early for the producer,
+      // then retried alongside the consumer after the master review.
+      expect(plannerCalls).toBe(3);
     });
   });
 
@@ -1219,7 +1238,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(requestedNeighborInspection).toBeTrue();
       expect(sawNeighborInspection).toBeTrue();
       expect(sawRedundantProducerRefresh).toBeFalse();
-      expect(plannerCalls).toBe(2);
+      expect(plannerCalls).toBe(3);
       expect(terminal.status).toBe('failed');
     });
   });
@@ -1962,8 +1981,10 @@ describe('fresh foreground master controller end to end', () => {
           },
           requestFocusedPlan: async (input) => {
             plannerCalls += 1;
-            expect(researchReviews).toBeGreaterThanOrEqual(2);
-            expect(renamedWasProven).toBeTrue();
+            if (input.tool.id !== PRODUCER_ID) {
+              expect(researchReviews).toBeGreaterThanOrEqual(2);
+              expect(renamedWasProven).toBeTrue();
+            }
             return await basePlanner(input);
           },
         },
@@ -1972,7 +1993,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(researchReviews).toBeGreaterThanOrEqual(2);
       expect(renamedResearchTurns).toBe(2);
       expect(renamedWasProven).toBeTrue();
-      expect(plannerCalls).toBe(2);
+      expect(plannerCalls).toBe(3);
       expect(terminal.status).toBe('provider_unavailable');
     });
   });
@@ -2645,6 +2666,7 @@ describe('fresh foreground master controller end to end', () => {
       ]);
       expect(focusedProposalDecisions).toBe(3);
       expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
+        `compile:${PRODUCER_ID}`,
         `compile:${PRODUCER_ID}`,
         `compile:${CONSUMER_ID}`,
       ]);
@@ -5972,6 +5994,7 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(terminal.status).toBe('completed');
       expect(plannerCalls).toEqual([
+        PRODUCER_ID,
         PRODUCER_ID,
         CONSUMER_ID,
         PRODUCER_ID,

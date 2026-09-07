@@ -5845,3 +5845,36 @@ Flights is a lower bound because a deadline-interrupted request may not emit
 final usage. Full counts, limitations, timing and sources are recorded in
 `docs/repeatability-2026-09-06.md`. Stop this experiment's monitor and local
 trace receiver now that both requested teaches and audits have finished.
+
+### September 6, 21:48 PDT — Overlap independent draft compilation with research
+
+The user authorized earlier compilation and asked for explanations of the
+existing token, reviewer, and browser-cache behavior. Independent tools whose
+first research pass is proven now prepare a focused plan and compile a draft
+in the same worker slot while other research continues. There are still only
+two workers. Declared consumers retain the existing producer-first build order.
+The master can revise early proposals; an unchanged plan reuses its draft,
+while a changed API plan returns the draft and retained compiler conversation
+for revision. No draft bypasses normal checks or master approval.
+
+This overlaps planning/compilation only. Publication still waits for the
+complete-plan review and live checks. It does not yet make fresh compiled
+producer outputs available to a consumer during initial research. Do not claim
+that this alone fixes the unresolved booking dependency or the entire Flights
+run. No reviewer evidence or browser-cache behavior was changed.
+
+A fresh neutral end-to-end fixture holds consumer research open until the
+producer compiler finishes, proving the new overlap and reuse. Other fixtures
+cover master revisions and prevent a rejected producer from unblocking a
+consumer. All 45 controller end-to-end tests and all 1,912 full-suite tests pass
+(94.6 seconds), along with lint, types, dependency checks, website build and
+desktop/mobile inspection. No old failed teach was resumed and no new live
+Flights teach was started in this change.
+
+Inspection answers: recorded booking tokens came from the recording in a
+prompt-permitted stale-value diagnostic before compiled producers existed.
+Producer-first ordering is later in the build path, not initial research.
+The MVP reviewer gets caller inputs, a 2,000-byte parsed-result preview, receipt
+references, and bounded parser source—not the complete request/research history.
+Browser caching exists but rejects jars lacking the configured validation
+markers; that gate caused six explicit cache rejections in the repeat run.

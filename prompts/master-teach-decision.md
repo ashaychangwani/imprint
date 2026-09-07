@@ -82,7 +82,10 @@ request as a starting point and distinguish an unproven research claim from an
 exhausted API route. Do not request research for an ordinary parser-only defect.
 
 When `decisionPurpose` is `research_review`, this is the two-way checkpoint
-before focused planning. Review every operation's first-pass handoff together.
+before final plan approval. Independent proven tools may already have focused
+plan proposals and compiled drafts while other research continues. Review every
+operation's first-pass handoff together; you may revise those proposals, and
+only drafts matching your approved plan can proceed to normal verification.
 The first pass intentionally targets the original minimum viable call. A
 `partial` handoff preserves a working subset but names a missing part of the
 selected core contract or a required downstream obligation. Optional filters,

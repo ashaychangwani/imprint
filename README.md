@@ -103,13 +103,17 @@ producer runs before its consumers. Failed checks return factual evidence to
 the master, which can revise the affected tool and its dependants without
 rebuilding unrelated tools.
 
-Before planning, one retained researcher conversation per tool first proves the
+Before that tool's planning, one retained researcher conversation first proves the
 smallest useful API call. If part of the selected MVP contract or a required
 downstream value is still unproven, the researcher returns that working partial
 result instead of pretending it is complete or discarding it. Optional breadth
 waits for the later best-effort pass. Once all first passes finish, the master
 can send the exact missing question back to that same conversation with only
 the relevant sibling results and recorded requests.
+An independent proven tool can prepare its plan and compile a draft while
+other research continues, using the same two worker slots. The master still
+reviews the complete plan before normal verification and publication; only an
+exactly matching draft is reused. Declared consumers retain producer-first ordering.
 Rewording auth or token notes reuses that proof; the master explicitly requests
 new research when the actual strategy changes.
 The final reviewer receives the same human scope and checks requested tool
