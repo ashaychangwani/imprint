@@ -6133,3 +6133,19 @@ it is not a playbook. The independent audit now runs in `hotels-home-2`, with
 log `hotels-audit-2.log`. Its result is pending. The narrower contract avoids
 the unsupported guest-count promise but does not prove that feature works.
 Disk remains about 2.5 GiB free.
+
+## 2026-09-07 02:36 PDT — Hotels audit passes; fresh Flights repeat starts
+
+Hotels audit2 passed 100%: four successful calls and three working parameter
+checks, seven graded units, no failures or untestable inputs. Paris versus
+Tokyo changed real properties; changing dates correctly produced one-, two-,
+and three-night stays. This is verified destination/date search, not occupancy
+support. Audit usage: 177,730 input tokens including 151,040 cached reads,
+1,430 output tokens, zero reported cache writes.
+
+Started fresh Flights attempt4 on the same implementation `0f07a5d`, using
+the same combined recording and four-operation scope as attempt3. Isolated
+home `home-4`, log `flights-teach-4.log`, no prior artifacts or candidate reuse.
+The 90-minute deadline and 60-minute progress decision remain. This checks
+repeatability and whether the neutral ambiguity guidance regresses Flights.
+Free disk is about 2.4 GiB; monitor it. No code changed after Hotels audit.
