@@ -1,6 +1,49 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 14:36 PDT
+## Current continuation — 14:55 PDT
+
+Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
+branch `codex/imprint-master-v066-validation`, based only on remote
+`origin/codex/imprint-master-v066` at `34a6235`. Latest implementation
+**`43ab0c7`** preserves completed backend attempts in MCP errors and clarifies
+machine identifiers versus display labels in serialized selection contracts.
+114 focused tests, lint, type checking, web build and mobile/desktop checks
+pass. Latest full suite was 1,930 tests on the preceding runtime revision.
+No push or MR.
+
+**Flights 10 teach and audit both failed.** Teach published four tools but both
+final booking chains timed out. The saved search MVP bundle used a carrier
+display name where the proven booking candidate used its machine code. Audit
+failed **8/15** units in **12.5306 minutes**: five valid calls passed/five failed,
+three parameters passed/two failed. One timeout and two bad inputs excluded;
+four parameters untestable. Search never succeeded, so no valid booking audit
+was possible. The grid also returned an unrelated single pair when return date
+changed. These artifact behavior failures remain unresolved.
+
+Two bounded search diagnostics on unchanged attempt-10 artifacts confirmed
+CDP ran and timed out before a later fallback reported inability to navigate;
+the old MCP error omitted that history. Cold CDP **91.182 s** including setup,
+same-tool warm CDP **60.292 s**, both failed. Private `flights-10-diagnostic-*`
+evidence is retained; diagnostic browsers and website preview are closed.
+Audit PID 84512 and teach PID 51822 exited. Never overwrite their reports.
+
+**Fresh Flights 11** started **21:55:03 UTC**, PID **88789**, on `43ab0c7`,
+new `/tmp/imprint-fresh-inputs-VYbJm1/home-11`. Verify
+`flights-teach-11-manifest.json` and log. Exact recording and four-operation
+scope unchanged; no prior generated tools or diagnostics supplied to agents.
+Target **22:25 UTC**, assess **22:55**, hard deadline about **23:25**.
+Collector PID **54899**, port **6438**, writes `spans-validation.jsonl`.
+The existing heartbeat follows this run. Disk had **25.00 GiB** free at launch.
+No malformed-handoff catch has been exercised, and no symlink error recurred.
+
+Accounting through audit 10: thirteen teaches/seven audits, **$178.84** base
+API equivalent, 839.86 minutes. Interrupted usage and cache caveats remain in
+the accounting document. Next: fresh Flights success and full independent
+audit, then Hotels on unchanged code and its audit, then repeated fresh
+successes for both. Warm successes remain unproven. Do not delete evidence,
+resume failed teaches, overlap experiments, or use old vNext changes.
+
+## Previous continuation — 14:36 PDT
 
 Worktree and branch remain `imprint-master-v066-validation` /
 `codex/imprint-master-v066-validation`, based only on remote `34a6235`.
