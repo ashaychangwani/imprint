@@ -6375,3 +6375,30 @@ The retained search candidate still describes canonical city identifiers even
 though its proven scope says airport codes; check whether compilation narrows
 that claim, and audit the actual published contract. Nothing is published yet.
 The 60-minute assessment and 90-minute hard deadline remain unchanged.
+
+### 2026-09-07 13:50 UTC — Flights 6 near-hour assessment
+
+Continue the existing run to its original 90-minute deadline: new evidence
+is still closing the dependency chain, rather than repeating only failed
+transport guesses. The 30-minute target was missed. Nothing is published or
+independently audited yet. Disk remains about 28 GiB free.
+
+The master received the ordinary partial next-leg handoff and directed a
+self-contained input contract. A new SEA–DEN November 18/25 search supplied
+Frontier F9 3406, and the repaired next-leg candidate returned actual return
+options including F9 4545. Its public scalar now carries route, dates, flight,
+and token together instead of requiring hidden SFO/LAX constants. The master
+still needs to ensure that the search parser emits this revised representation.
+This is normal advisory repair, not the malformed-handoff catch under test.
+
+Booking then called that next-leg producer and tested the matching completed
+SEA–DEN round trip with a fresh 108-character selection value. Its unpadded
+value matches the retained producer response `7b804985937b99d9202a0c50a34cbbecce040d584316277dbddfb0342ff05832.txt`
+under attempt 6's booking `live-results` directory (padding is JSON-escaped).
+Transport returned in 355 ms; semantic success is still unproven.
+
+The search draft now correctly restricts locations to IATA airport codes.
+The grid researcher proved a seven-by-seven November response, but its transform
+still reduces each advertised inclusive window to its midpoint. Compilation
+and independent audit must establish the actual supported window sizes; the
+research claim alone does not establish arbitrary ranges. Preserve that check.
