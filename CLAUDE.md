@@ -78,7 +78,32 @@ evidence, prompt, or focused test harness before considering another runtime
 rule. After any code or prompt change, validate with a fresh teach run rather
 than resuming the older run.
 
-### Transient provider failures
+### Evidence and task handoff
+
+Keep strategic decisions with agents and mechanical execution in the runtime.
+A returned value's location or equality with an input does not prove its
+meaning. Where plausible meanings coincide, ask for a small distinguishing
+comparison; reuse decisive evidence instead of requiring exhaustive tests.
+Keep an MVP narrow rather than advertising guessed parameters or output fields.
+
+Separate agent-reporting errors from API failures. Preserve actual observations
+and return a repairable advisory handoff to the master; do not silently accept
+invalid proof or discard unrelated successful work. Cancellation and provider
+failures retain their own handling.
+
+Teach completion proves only its selected baseline. Use an independent audit
+and fresh repeated teaches before claiming repeatability. Report actual graded
+counts and supported scope, not just an agent's prose or a percentage.
+
+For long work, keep `timeline.md` and checkpoint commits current. At handoff,
+record the branch, tested commit, unfinished validation, local evidence paths,
+and next command in a repo-scoped document. Stop task-owned monitors and
+processes when the user ends the task. Do not commit recordings, credentials,
+opaque live values, or private transcripts. See
+[`docs/teach-handoff-2026-09-07.md`](docs/teach-handoff-2026-09-07.md) for the
+current handoff and `.agents/skills/imprint-reteach-audit/SKILL.md` for validation.
+
+### Transient provider failures (retry policy)
 
 During `imprint teach`, treat provider capacity, overload, and temporary rate-limit failures as interruptions to the same compile—not as artifact failures. Retry with capped exponential backoff and jitter until the provider recovers, the user cancels, or the existing run deadline ends. Do not retry deterministic schema, authentication, authorization, or invalid-request failures. After a code or prompt change, start a fresh teach instead of resuming the failed pre-change run.
 

@@ -6172,3 +6172,18 @@ All 186 focused research/agent/controller tests pass, as do type checking and
 lint. Website build and inspected desktop/mobile renders pass. Free disk is
 about 1.5 GiB; another large teach waits for more headroom rather than risking
 loss of its logs. The failed run and all previous audit reports are preserved.
+
+## 2026-09-07 — Conversation shutdown and branch handoff
+
+The user requested an end to this conversation and a committed handoff for
+another task on this branch. Deleted the validation heartbeat and stopped only
+this task's trace collector and website preview. No teach was running. No
+recordings, runs, or private evidence were deleted or committed.
+
+Durable principles are in CLAUDE.md (also loaded by AGENTS.md). Updated the
+repo-scoped re-teach audit skill to use fresh isolated master-flow validation
+and preserve the lessons about ambiguous fields, actual evidence, fresh
+producer calls, and honest audit counts. The exact state, failures, commits,
+local evidence paths, and next command are in
+`docs/teach-handoff-2026-09-07.md`. The latest runtime fix remains unvalidated
+by a fresh teach. Further work is intentionally stopped, not declared complete.
