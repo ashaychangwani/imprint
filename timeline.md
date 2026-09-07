@@ -5939,3 +5939,10 @@ All 104 focused backend/cache tests pass. The full suite again passed 1,913 of
 changed-path test failed. Types and lint passed. Website build and mobile/
 desktop inspection passed. This patch removes runtime code rather than adding
 a new site classification.
+
+Checkpoint `8a9603a`; the isolated cleanup-test rerun passed all 14 tests and
+dependency checks passed. Started fresh Flights attempt 2 at about 22:26 PDT
+(05:26 UTC September 7), PID 7982, using
+`/tmp/imprint-fresh-inputs-VYbJm1/home-2` and log `flights-teach-2.log` in the
+same parent. The monitor now follows attempt 2. The recording and scope are
+unchanged, and no prior agent conversation or artifact was supplied.
