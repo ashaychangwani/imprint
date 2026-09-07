@@ -6059,3 +6059,14 @@ tokens, and zero reported cache-write tokens. Raw evidence stays local.
 Free disk is down to about 600 MiB. Hotels and another Flights teach are not
 being started until space is available. No data has been deleted. The existing
 monitor will check for available space and continue validation when feasible.
+
+## 2026-09-07 01:24 PDT — Space recovered; fresh Hotels validation starts
+
+Free disk recovered to 2.7 GiB without any cleanup by this task. Started a fresh
+Hotels teach on unchanged implementation `6b7d30c`, using the June 4 recording
+explicitly, no saved candidates, no examples, and no additional steering.
+The isolated home is `hotels-home-1` and log is `hotels-teach-1.log` in the
+existing experiment directory. The run retains the 90-minute deadline, with
+a progress decision at 60 minutes. Trace capture remains enabled. Monitor
+space closely; Flights has passed independent audit but repeatability still
+needs another fresh validation.
