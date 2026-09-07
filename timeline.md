@@ -6621,3 +6621,23 @@ Independent audit 8 started at 17:46:07 UTC, PID 2992, same home-8, 45-minute
 timeout. Log/manifest use flights-audit-8 names in the experiment directory.
 The heartbeat and handoff now follow that audit. Do not claim repeatability or
 Hotels success from this result; audit and fresh repeats remain due.
+
+
+### 2026-09-07 18:01 UTC — Flights audit passed; fresh Hotels started
+
+Independent Flights audit 8 passed 24/24 graded units: 13 correct live calls
+and all 11 advertised parameters across four tools. One isolated date-window
+boundary change deliberately violated the seven-day invariant and was excluded
+as bad input. Two producer-issued Delta choices resolved to their corresponding
+booking options. The audit exercised airport codes; the teach's grid MVP case
+also used a Tokyo city identifier. Warm timing and independent identifier
+breadth still need separate measurement. No failures were hidden or rerolled.
+
+Audit duration 9.3943 minutes; 705,235 input including 665,088 cached reads,
+6,334 output, zero reported writes, base estimate $0.55. Cumulative accounted
+estimate is $140.55. Fresh Hotels teach 3 started 17:59:36 UTC, PID 5286,
+hotels-home-3, unchanged implementation 1677b16, exact June 4 recording and no
+prior artifacts. Log/manifest use hotels-teach-3 names in the experiment folder.
+Target 18:29 UTC, assess 18:59, hard deadline 19:29. Follow actual destination,
+stay-date, and any occupancy evidence; do not assume old output scopes passed.
+Fresh repeated successes for both sites remain required after this Hotels audit.

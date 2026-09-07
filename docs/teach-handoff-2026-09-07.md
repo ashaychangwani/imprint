@@ -1,6 +1,6 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 10:48 PDT
+## Current continuation — 11:01 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, originally based only on remote
@@ -13,14 +13,21 @@ or prompt rules were added. All changes are committed locally; no MR or push.
 Fresh Flights attempt **8** completed **17:44:16 UTC**, after **82.2922
 minutes**, with all four tools published and the fresh search-to-booking chain
 verified. Teach PID 72015 exited. Implementation remains `1677b16`.
-Independent audit **8** started **17:46:07 UTC**, PID **2992**, using the same
-`/tmp/imprint-fresh-inputs-VYbJm1/home-8`. Verify process identity from
-`flights-audit-8-manifest.json`; log `flights-audit-8.log`, timeout 45 minutes.
-The audit outcome is pending. Grid windows are explicitly seven days;
-city-identifier claims and public parameters still need independent coverage.
+Independent audit **8** passed **24/24** units: 13 valid calls and all 11
+advertised parameters, with one deliberately invalid grid-window call excluded.
+Audit PID 2992 exited after 9.3943 minutes. Public grid windows are exactly seven
+days; airport-code contrasts passed, and teach MVP verification also used a
+Tokyo city identifier. Independent identifier breadth and warm timing remain due.
+
+Fresh **Hotels teach 3** started **17:59:36 UTC**, PID **5286**, using the exact
+June 4 recording below and new `/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-3`.
+No previous artifact or extra parameter instructions were supplied. Verify
+`hotels-teach-3-manifest.json`; log `hotels-teach-3.log`, timeout 90 minutes.
+Target 18:29 UTC, assess 18:59, hard deadline about 19:29. Watch destination/date
+semantics and any claimed guest support; only actual proof establishes scope.
 Trace collector PID **54899** writes `spans-validation.jsonl` on port **6438**.
-The heartbeat follows the audit. Do not duplicate processes or resume failed
-teaches. Disk is about 28 GiB free. Exact recordings and guidance remain below.
+The heartbeat follows Hotels. Do not duplicate processes or resume failed
+teaches. Disk is about 27 GiB free. Exact recordings and Flights guidance remain below.
 
 Attempt 6 reached 90 minutes with three published tools; their independent
 audit passed 10 invocations plus six parameters (16/16). Grid verification
@@ -32,19 +39,18 @@ before planning, with no published tools. Late contract coordination consumed
 the available time. Neither attempt establishes full Flights success. The
 original malformed-handoff catch has not been exercised by these live runs.
 
-Accounting through attempt 8: ten teaches and four audits, including failures;
-base API estimate **$139.99** with cache/billing/interrupted-usage caveats in
+Accounting through Flights audit 8: ten teaches and five audits, including failures;
+base API estimate **$140.55** with cache/billing/interrupted-usage caveats in
 `docs/teach-validation-accounting-2026-09-07.md`. No raw evidence was deleted or
 provided to later teaching agents. Latest runtime suite: 1,929 passing tests;
 latest prompt checks: 182 focused tests plus final packaging check, lint, website
 build, desktop/mobile visual verification.
 
-Next: inspect the independent audit's actual invocation/parameter totals and
-any failed calls. After full Flights audit success, repeat Hotels sequentially
-on unchanged code and independently audit its narrow destination/date scope.
-Fresh repeated successes for both sites remain due. Keep deadline failures and
-unsupported scope explicit. Older sections below are historical snapshots;
-use this section and current timeline entries.
+Next: monitor Hotels and independently audit its published tools. After a
+passing Hotels audit, freshly repeat Flights and Hotels on unchanged code and
+audit both. Two fresh successes per site on this revision are still due. Keep
+failures and unsupported scope explicit. Older sections below are historical
+snapshots; use this section and current timeline entries.
 
 ## Previous continuation — 05:53 PDT
 

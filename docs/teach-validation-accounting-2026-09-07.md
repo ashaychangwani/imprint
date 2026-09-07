@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are ten teaches and four independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are ten teaches and five independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 534 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 535 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -21,8 +21,9 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights teach 6 | Deadline; 3 ready, grid failed, booking unfinished | 90.00 | 14,432,957 | 11,569,024 | 0 | 175,407 | $19.59 |
 | Flights audit 6 | 16/16 correct; 3 published tools only | 7.60 | 548,944 | 502,784 | 0 | 3,867 | $0.46 |
 | Flights teach 7 | Deadline before planning; 0 ready | 90.00 | 15,580,269 | 12,171,520 | 0 | 150,435 | $21.51 |
-| Flights teach 8 | 4 ready; independent audit pending | 82.29 | 12,453,189 | 9,761,024 | 0 | 164,877 | $17.97 |
-| **Total** | **Includes failures/cancellations** | **624.19** | **106,745,163** | **86,522,880** | **0** | **1,224,765** | **$139.99** |
+| Flights teach 8 | 4 ready; independent audit passed | 82.29 | 12,453,189 | 9,761,024 | 0 | 164,877 | $17.97 |
+| Flights audit 8 | 24/24 correct; 1 excluded bad input | 9.39 | 705,235 | 665,088 | 0 | 6,334 | $0.55 |
+| **Total** | **Includes failures/cancellations** | **633.58** | **107,450,398** | **87,187,968** | **0** | **1,231,099** | **$140.55** |
 
 ## Cost assumptions and completeness
 
@@ -38,7 +39,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed attempt-5 through attempt-8 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The fourteen accounted traces contain 1,478 spans and fourteen completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed attempt-5 through attempt-8 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The fifteen accounted traces contain 1,481 spans and fifteen completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -68,5 +69,9 @@ seven-day date grids, and booking capture API responses through CDP navigation.
 Booking research consumed a current producer selection across separate browser
 sessions and returned provider fares and outbound links. All 64 usage spans
 reported usage, with no interrupted semantic call in this trace. Independent
-audit 8 is running and is excluded from these totals until complete. This
-success does not establish fresh-run repeatability on the current revision.
+audit 8 passed all 13 valid invocations and 11 parameter checks (24/24). Its
+fourth grid invocation deliberately broke the seven-day invariant and was
+excluded as bad input. The audit covered airport codes; the teach MVP review
+also exercised a Tokyo city identifier in the grid. Broader identifier coverage
+and measured warm-call timing remain follow-ups. This success does not establish
+fresh-run repeatability on the current revision.
