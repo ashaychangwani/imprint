@@ -6492,3 +6492,22 @@ recording, four-operation guidance, two workers, and 90-minute limit are
 unchanged. Target 15:14 UTC; assess 15:44; hard deadline about 16:14. No earlier
 artifact, conversation, diagnostic, or example was supplied to teaching agents.
 Trace collector remains PID 54899 on port 6438. Disk is about 27 GiB free.
+
+### 2026-09-07 15:14 UTC — Flights 7 near-half-hour checkpoint
+
+Location lookup, round-trip search, and date-grid research have live proof.
+The grid candidate exposes reference departure/return dates, so it no longer
+advertises arbitrary inclusive windows. Place-identifier breadth remains
+deferred and must be reflected in the final public schema. Draft compilation
+is underway; this is not a published-tool or audit pass.
+
+Booking called the current search producer, inspected its raw response, and
+tested a fresh Frontier SFO–LAX October 20 selection through page navigation.
+That first consumer test timed out waiting for the booking API response. The
+researcher is still resolving whether a return-leg continuation is needed;
+no booking correctness or complete fresh chain is proven yet.
+
+The trace confirms actual per-turn `runTiming` delivery, including the shared
+16:14:54 UTC deadline and refreshed remaining milliseconds. No malformed
+handoff recovery has been observed. Continue unchanged to the planned hour
+assessment; preserve the original 90-minute limit.
