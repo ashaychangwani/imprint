@@ -6568,3 +6568,19 @@ example, conversation, or diagnostic was passed to the teaching agents.
 Target 16:51 UTC; hour assessment 17:21; original hard deadline about 17:51.
 Trace collector PID 54899 remains active; disk is about 28 GiB free.
 The handoff's current section now points here and preserves earlier snapshots.
+
+### 2026-09-07 16:52 UTC — Flights 8 near-half-hour checkpoint
+
+The master chose a one-way search/booking MVP, avoiding an additional return
+selection stage while retaining the requested four operation areas. Search
+research proves SFO–LAX on November 3. Grid research returned all 49 date pairs
+for seven-day windows and tested a second route with the dates held constant;
+the SEA–JFK matrix differed materially from SFO–LAX. The candidate still
+advertises start/end window inputs, so supported widths and place-identifier
+breadth must be checked during compilation and audit.
+
+Booking called the current search producer and tested a consumer through
+fetch and CDP. Transport completion alone is not booking proof; its semantic
+handoff is still pending. Nothing is published or audited. Continue under the
+same 60-minute assessment and hard 90-minute deadline; the 30-minute target
+is not yet met. No old examples or artifacts informed this fresh run.
