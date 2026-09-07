@@ -5909,3 +5909,12 @@ as the failed repeat. No failed run or saved discovery checkpoint is resumed.
 Flights must show meaningful completion before Hotels. Preserve each failed
 attempt and diagnose the newest evidence before making another general fix.
 Disk currently has about 2.9 GB available; monitor it without deleting user data.
+
+Checkpoint: `2b93cc7`. Fresh Flights teach started at about 22:09 PDT
+(05:09 UTC September 7), PID 250. Its log is
+`/tmp/imprint-fresh-inputs-VYbJm1/flights-teach.log`; it began by triaging 78
+request candidates. This is in progress, not a claimed success. A five-minute
+thread monitor will inspect meaningful progress, the 60-minute decision point,
+and the 90-minute deadline, then diagnose/retry or audit the fresh result.
+The final focused rerun passed all 199 tests, including controller end-to-end
+fixtures. Local token traces are being captured alongside the attempt.
