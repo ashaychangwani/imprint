@@ -6468,3 +6468,27 @@ passes with the existing chunk-size warning. Mobile and desktop rendered
 without overflow or page errors; screenshots are retained as `time-facts-*`.
 The preview process was stopped. A separate unchanged-artifact grid diagnostic
 is collecting cold and warm captures before the next fresh teach.
+
+### 2026-09-07 14:45 UTC — Grid diagnostic and fresh Flights 7
+
+The unchanged grid transform and parser can produce all 49 requested SEA–DEN
+date pairs in a new API capture: 33.212 seconds cold including browser setup.
+The immediate same-tool/same-rung warm call timed out at 60.243 seconds waiting
+for the matching GetCalendarGrid XHR. The original zero-item MVP result remains
+an unresolved failure; one successful diagnostic does not establish reliability.
+
+Private diagnostic scripts initially failed to load a temporary TypeScript
+sibling after browser setup. Those failures and logs are preserved. The final
+harness loaded the existing transform/parser before setup, applied the exact
+transform to the same parameters, captured the raw API data, and invoked the
+unchanged parser. It did not edit or publish the generated tool. Its raw data,
+results, and timings are retained as `grid-6-v3-*`; browser contexts were closed.
+These are diagnostic timings, not an audit pass or published warm-call promise.
+
+Fresh Flights attempt 7 started on `6ca89ba` at 14:44:54 UTC, PID 37962. Home,
+log, and manifest are `home-7`, `flights-teach-7.log`, and
+`flights-teach-7-manifest.json` in the existing experiment directory. Exact
+recording, four-operation guidance, two workers, and 90-minute limit are
+unchanged. Target 15:14 UTC; assess 15:44; hard deadline about 16:14. No earlier
+artifact, conversation, diagnostic, or example was supplied to teaching agents.
+Trace collector remains PID 54899 on port 6438. Disk is about 27 GiB free.

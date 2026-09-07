@@ -41,3 +41,12 @@ Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed attemp
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
 Warm API execution and browser setup cannot be recovered reliably from root timing or compiler-agent timing alone. Measure them separately in new live audits, preserving tool/rung state isolation. Record new attempts, fresh producer-consumer results, and independent audit counts before claiming repeatability.
+
+
+The attempt-6 grid diagnostic measured 33.212 seconds for a cold call including
+setup (49 date pairs), followed by a 60.243-second timeout on the same tool and
+CDP rung. Raw captures and timing records are local `grid-6-v3-*` files. This
+used the unchanged transform/parser in a host diagnostic harness, not a
+published tool audit. Earlier harness module-loading failures remain preserved
+and are not counted as usable warm calls. No provider calls were made by these
+diagnostic scripts.
