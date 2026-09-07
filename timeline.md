@@ -5782,3 +5782,19 @@ failed attempts. Prices will be API-equivalent estimates, not subscription
 invoices, using current official model rates and applicable long-input rates.
 The five-minute monitor will manage the sequential runs and report material
 progress and final results. Initial free disk space was 4.4 GiB.
+
+### September 6, 17:21 PDT — One-hour repeatability review
+
+Flights run `48e0fd1d-6d4c-4c8c-beb6-26c1957962f7` has research proofs for
+location lookup, search, outbound selection with return choices, and calendar.
+Booking remains unresolved: research reported protocol errors and no captured
+booking response from its parameterized navigation. The master changed the
+booking inputs to include a paired itinerary, investigated again, and then
+kept booking as unresolved coverage while planning the other four tools.
+These are the agents' findings, not an independently established claim that
+booking is impossible. No example solution or manual repair was supplied.
+
+Continue within the remaining 30 minutes because focused planning is now
+producing concrete implementations. This repeat has not reproduced the prior
+full Flights success; a passing subset must not hide the missing booking tool.
+Keep the original 90-minute deadline. Local usage traces continue to arrive.
