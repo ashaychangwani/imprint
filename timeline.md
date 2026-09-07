@@ -6187,3 +6187,34 @@ producer calls, and honest audit counts. The exact state, failures, commits,
 local evidence paths, and next command are in
 `docs/teach-handoff-2026-09-07.md`. The latest runtime fix remains unvalidated
 by a fresh teach. Further work is intentionally stopped, not declared complete.
+
+## 2026-09-07 04:19 PDT — Fresh validation on a new remote-based worktree
+
+Created `codex/imprint-master-v066-validation` from the freshly fetched remote
+`origin/codex/imprint-master-v066`, at `34a6235`. The new worktree is
+`~/.codex/worktrees/imprint-master-v066-validation`. No old vNext changes were
+used. Verified both exact recordings and all handoff evidence. Initial free
+disk was only 339 MiB, then recovered to 6.1 GiB without deletion by this task.
+
+Fresh Flights attempt 5 started at 11:19:07 UTC, PID 54983, run
+`745495f5-6efa-42e4-be6c-3125cbc88f40`, with isolated home `home-5` in
+`/tmp/imprint-fresh-inputs-VYbJm1`. It uses the same exact combined recording
+and four-operation scope, unchanged implementation `60392ef`, two workers,
+and the 90-minute deadline. The log is `flights-teach-5.log`; its launch
+manifest is `flights-teach-5-manifest.json`. This remains unproven live work.
+
+A deliberately restarted trace collector (PID 54899, port 6438) writes
+`spans-validation.jsonl`, preserving the old capture. A new task heartbeat
+`imprint-fresh-validation` monitors this validation every five minutes.
+No old monitor was restarted. Dependencies are linked from the same-revision
+worktree to avoid another installation. Lint and type checking pass.
+
+Historical accounting is in `docs/teach-validation-accounting-2026-09-07.md`.
+The nine earlier teach/audit attempts took 264.29 total process minutes and
+reported 51,108,571 input tokens, including 41,573,504 cache reads, plus
+586,897 output tokens. Reported cache writes were zero. The base API price
+estimate is $66.51, not an invoice; individual long-context requests, service
+tier, and unreported interrupted work prevent exact actual cost recovery.
+Five failed LLM spans have no usage. All failures and cancellations remain
+included. Exact successful teach times are Flights 69.40 minutes and Hotels
+28.46 minutes; these replace earlier rounded observation times.
