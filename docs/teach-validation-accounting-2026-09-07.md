@@ -27,7 +27,7 @@ This is an API-equivalent estimate, not an invoice or measured Codex subscriptio
 
 Each span is counted once by trace/span ID. The trace file has no duplicate span IDs within a trace and no token-bearing ancestor of a counted usage span. Compiler and audit CLI usage carriers have no token-bearing children. Workflow spans are excluded. No counted usage is marked estimated.
 
-Five failed `llm.analyze` spans have no reported usage. Cancelled or interrupted provider work may also have consumed unreported tokens; the recorded total is therefore incomplete for such work. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
+Five interrupted `llm.analyze` spans have no reported usage: three in cancelled Flights attempts and two optional Hotels refinement passes stopped after MVP promotion. Cancelled or interrupted provider work may have consumed unreported tokens; the recorded total is therefore incomplete for such work. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
 
 The successful Flights teach took 69.40 minutes, above the 30-minute target. The successful narrow Hotels teach took 28.46 minutes. Earlier approximate timeline times include observation delay and are superseded here for process duration. Flights teach 4 failed after 52.40 minutes. These different revisions do not demonstrate repeatability.
 

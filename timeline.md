@@ -6218,3 +6218,17 @@ tier, and unreported interrupted work prevent exact actual cost recovery.
 Five failed LLM spans have no usage. All failures and cancellations remain
 included. Exact successful teach times are Flights 69.40 minutes and Hotels
 28.46 minutes; these replace earlier rounded observation times.
+
+## 2026-09-07 04:29 PDT — Full baseline suite passes
+
+On unchanged implementation `60392ef`, the full suite passed: 1,917 tests,
+zero failures, 6,064 assertions across 96 files in 98.71 seconds. The local
+log is `validation-full-tests.log` in the experiment directory. No external
+recorder retry was needed. Lint and type checking had already passed.
+
+Flights attempt 5 remains in master scope review; no generated output or
+research-handoff repair is proven yet. Disk has recovered to about 31 GiB.
+During audit preparation, source inspection found that MCP idle/timeout
+cleanup still looks up CDP browsers by site, while the ladder stores them
+by site, tool, and bootstrap URL. Keep this as a follow-up to reproduce;
+do not change implementation halfway through the controlled teach.
