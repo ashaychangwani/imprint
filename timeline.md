@@ -6584,3 +6584,21 @@ fetch and CDP. Transport completion alone is not booking proof; its semantic
 handoff is still pending. Nothing is published or audited. Continue under the
 same 60-minute assessment and hard 90-minute deadline; the 30-minute target
 is not yet met. No old examples or artifacts informed this fresh run.
+
+### 2026-09-07 17:24 UTC — Flights 8 hour assessment
+
+Continue within the original 17:51 UTC hard deadline. Booking research now
+returns provider fares and outbound links from a fresh SEA–LAX November 10
+search result. The consumed selection appears in the retained producer response,
+alongside the matching itinerary fields. Search and booking used separate CDP
+sessions; the successful booking call took 31.113 seconds including setup.
+The master coordinated a six-field scalar choice contract and research verified
+it again. The earlier partial handoff reached the master normally; this still
+does not exercise malformed-handoff recovery.
+
+All four research boundaries are proven and focused planning is progressing;
+three draft compilations are complete. No tools are published yet. Continuing
+is justified by the newly resolved booking gap and roughly 28 minutes left for
+compilation and verification. The half-hour target was missed. Grid identifier
+and window-width claims still need verification; independent audit and fresh
+repeats remain due. No code changed during this run.
