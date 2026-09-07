@@ -5946,3 +5946,17 @@ dependency checks passed. Started fresh Flights attempt 2 at about 22:26 PDT
 `/tmp/imprint-fresh-inputs-VYbJm1/home-2` and log `flights-teach-2.log` in the
 same parent. The monitor now follows attempt 2. The recording and scope are
 unchanged, and no prior agent conversation or artifact was supplied.
+
+## 2026-09-06 22:54 PDT — Fresh upstream handoff exercised live
+
+Attempt 2 is `b5605cde-2418-4dd5-b7a4-19f23a9b485a`, about 29 minutes in.
+Location and search research are proven and have begun independent drafts.
+Booking explicitly called the proven search request for fresh upstream values,
+received a new response, and then tested its own request. This confirms the new
+handoff is reachable during research; it does not yet certify booking output.
+Calendar found real fares but correctly returned partial because its working
+request still used fixed route/date settings. No tool has been published yet.
+
+The removed cookie gate has not returned. The log shows actual fetch-bootstrap
+requests and reuse of a jar lacking the old marker. A warm pooled-CDP request
+completed in 1.9 seconds. Disk remains limited at about 2.4 GB; nothing deleted.
