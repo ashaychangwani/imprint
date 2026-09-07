@@ -6356,3 +6356,22 @@ experiment directory. Trace capture continues in `spans-validation.jsonl`.
 The new run gets the same 30-minute target, 60-minute assessment, and 90-minute
 hard deadline. No candidates, artifacts, or conversations from attempt 5 were
 supplied. Hotels still waits for Flights to pass. Disk is about 28 GiB free.
+
+### 2026-09-07 13:20 UTC — Flights 6 search proof and dependency check
+
+Attempt 6 is about 29 minutes into its unchanged `cdf57eb` run. Location
+lookup has a compiled draft. Search research has a live SFO-to-LAX outbound
+result for November 12 and a controlled return-date comparison (November 19
+versus December 3). Its researcher reports the same AA2211 outbound changing
+from $100 to $83; this is research evidence, not an independent audit result.
+The public search draft is still compiling.
+
+The master chose a round-trip MVP, so this run includes a separate next-leg
+selection stage before booking. That researcher first returned a normal blocked
+report while the search producer was unavailable, then called the newly proven
+search for fresh values. This is useful dependency progress, but does not
+exercise the malformed-handoff recovery path or prove booking consumption yet.
+The retained search candidate still describes canonical city identifiers even
+though its proven scope says airport codes; check whether compilation narrows
+that claim, and audit the actual published contract. Nothing is published yet.
+The 60-minute assessment and 90-minute hard deadline remain unchanged.
