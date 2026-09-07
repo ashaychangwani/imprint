@@ -6419,3 +6419,26 @@ date-grid window claim still need compilation/review and independent audit.
 This progress justifies using the remaining original deadline; no extension
 or success claim is warranted yet. The malformed-handoff catch has not been
 observed in this run.
+
+### 2026-09-07 14:26 UTC — Flights 6 deadline; audit published partial output
+
+Attempt 6 ended after 90.0031 minutes: location, search, and next-leg selection
+ready; date grid and booking not ready. The grid MVP reviewer correctly rejected
+`{items:[],count:0}` for the changed SEA–DEN seven-by-seven case. Its narrowed
+window guard worked as a contract restriction, but did not make retrieval pass.
+Booking research was proven, yet wave 3 compilation started only near the hard
+deadline. The CLI incorrectly called this provider unavailability; the log
+shows deadline exhaustion, not a transient capacity failure. Do not extend or
+resume the teach. No malformed-handoff rejection occurred.
+
+Started the independent audit of the three published tools on unchanged
+`cdf57eb` at 14:24:23 UTC, PID 32877, with a 45-minute deadline. Its log and
+manifest are `flights-audit-6.log` and `flights-audit-6-manifest.json` under the
+existing experiment directory. This measures the partial result honestly;
+it cannot qualify Flights for the subsequent Hotels comparison.
+
+Attempt 6 reported 14,432,957 input tokens (11,569,024 cached), 175,407 output,
+and zero reported cache writes: $19.59 base API estimate. Cumulative accounted
+work is $100.05 before this audit; interrupted billing caveats still apply.
+Inspect the empty grid and excessive pre-compilation time before choosing the
+next small general correction. No generated artifact will be hand-repaired.
