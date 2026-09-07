@@ -1,6 +1,35 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 12:57 PDT
+## Current continuation — 14:36 PDT
+
+Worktree and branch remain `imprint-master-v066-validation` /
+`codex/imprint-master-v066-validation`, based only on remote `34a6235`.
+Implementation is **`de8e789`**, runtime **`9d50dc4`**. No push or MR.
+
+Fresh Flights **10** failed at 90.0003 minutes: **four ready, zero not ready**,
+but both final search-to-booking chain checks failed. They timed out waiting
+for the booking API POST response after 89.985 / 150.609 seconds including
+setup (60 / 120-second navigation waits). The deadline interrupted the next
+master decision. Booking's individual MVP passed after a compiler repair for
+missing promised output fields. Keep these facts distinct from a full pass.
+The malformed-handoff recovery path was not exercised; no symlink import
+failure was observed.
+
+**Independent audit 10** is running against all four published tools in
+`/tmp/imprint-fresh-inputs-VYbJm1/home-10`. PID **84512**, start **21:32:14 UTC**,
+45-minute deadline about **22:17 UTC**; verify `flights-audit-10-manifest.json`
+and log. Teach PID 51822 exited; terminal and both failed chain receipts remain.
+Collector PID **54899**, port **6438**, continues `spans-validation.jsonl`.
+Disk had 25.17 GiB free before the audit. The existing heartbeat follows it.
+
+Accounting now includes thirteen teaches and six completed audits, **$178.24**
+base API equivalent, with interrupted usage/cache caveats. Audit 10 is excluded
+until complete. Next: inspect audit failures and fresh dependency mappings,
+make only evidence-backed general corrections, then fresh Flights/Hotels
+validation on unchanged code. Repeated successes and warm timing remain due.
+Never feed prior artifacts to teachers, resume failed teaches, or delete evidence.
+
+## Previous continuation — 12:57 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, based only on remote

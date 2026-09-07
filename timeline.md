@@ -6811,3 +6811,20 @@ check. About 27 minutes remain for compilation and live verification. The
 completed independent drafts and resolved booking contract justify continuing.
 The half-hour target was missed. No code changed, no malformed-output recovery
 was exercised, and independent audit/repeatability remain due.
+
+
+## 2026-09-07 14:36 PDT — Flights 10 deadline; full independent audit started
+
+Flights attempt 10 (`de8e789`, run `fdf5d43d-3724-41aa-95bc-16013ad5103d`)
+published all four tools, then failed at the hard deadline. Both final booking
+chain probes timed out waiting for the API POST response (89.985 / 150.609 s
+including setup; navigation waits 60 / 120 s). The final master decision was
+interrupted. Booking's earlier missing-output-fields MVP failure was repaired
+and passed individually; this does not waive the chain failures. No malformed
+handoff or repeated module-import defect was observed. All evidence is retained.
+
+Independent audit 10 started 21:32:14 UTC, PID 84512, same isolated `home-10`,
+all four published tools, 45-minute deadline. No code changed. Disk 25.17 GiB.
+Completed teach usage: 16,435,849 input (13,469,056 cache reads), 164,056 output,
+zero reported cache writes, $20.54 base API equivalent; one interrupted semantic
+span lacks usage. Cumulative recorded estimate $178.24 before audit 10.
