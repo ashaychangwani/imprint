@@ -6331,3 +6331,28 @@ Website build and desktop/mobile checks pass, with no page errors or horizontal
 overflow. The temporary preview was stopped. Private evidence uses the
 `mechanics-*` prefix in the experiment directory. These changes still require
 a fresh teach after integration; do not resume attempt 5 on corrected code.
+
+## 2026-09-07 05:51 PDT — Flights attempt 5 fails at deadline; corrected fresh run starts
+
+Attempt 5 reached the original 90-minute deadline: zero ready, four not ready.
+Location, search, and date grid completed research drafts but were not published,
+so there is no published output to independently audit. Booking returned a
+normal blocked report, the master requested retained follow-up, and the final
+provider call hit the run deadline. This is not a provider-capacity interruption
+and does not exercise `60392ef`'s malformed-handoff catch. Fresh token use was
+verified; correct booking offers and repeatability were not. Preserve the run.
+
+Exact root duration: 89.9991 minutes. Reported usage: 12,621,233 input tokens,
+including 10,945,024 cache reads, 143,282 output tokens, zero reported cache
+writes. The final interrupted call has no usage. Base API estimate: $13.95,
+subject to the accounting document's request-length and billing caveats.
+
+Integrated the isolated, tested mechanics checkpoint as `cdf57eb`. All source,
+test, prompt, and website files match the validated checkout. Fresh attempt 6
+started at 12:51:42 UTC, PID 171, in `home-6`, using the exact same combined
+recording and four-operation scope. Log and launch record are
+`flights-teach-6.log` and `flights-teach-6-manifest.json` in the existing
+experiment directory. Trace capture continues in `spans-validation.jsonl`.
+The new run gets the same 30-minute target, 60-minute assessment, and 90-minute
+hard deadline. No candidates, artifacts, or conversations from attempt 5 were
+supplied. Hotels still waits for Flights to pass. Disk is about 28 GiB free.

@@ -1,6 +1,39 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Active continuation — 04:39 PDT
+## Current continuation — 05:53 PDT
+
+Work in `~/.codex/worktrees/imprint-master-v066-validation`, branch
+`codex/imprint-master-v066-validation`. Implementation is now **`cdf57eb`**,
+which integrates the isolated mechanics fix `fc4ed1a`. Its 1,927 tests, lint,
+type checking, website build, and desktop/mobile visual checks passed.
+The detached correction checkout remains intact for evidence.
+
+Flights attempt 5 **failed at the 90-minute deadline: zero ready, four not
+ready**. Its normal blocked handoff reached the master for retained follow-up,
+but the malformed-output error path was not exercised. No published output
+exists to audit. Fresh booking-token use was verified; booking offers were not.
+Historical accounting now includes this failure.
+
+Fresh attempt 6 started at **12:51:42 UTC**, launch PID **171**, in
+`/tmp/imprint-fresh-inputs-VYbJm1/home-6`. Verify process identity from
+`flights-teach-6-manifest.json` before acting on the PID. Its log is
+`flights-teach-6.log`; it uses the exact combined Flights recording and original
+four-operation scope, with no reused candidates, artifacts, or conversations.
+Target check: 13:21 UTC; progress assessment: 13:51 UTC; hard deadline: about
+14:21 UTC. Trace collector PID 54899 still writes `spans-validation.jsonl` on
+port 6438. The existing heartbeat was updated to follow attempt 6.
+
+Next: monitor fresh producer-to-booking execution and actual researcher/master
+recovery, then independently audit published tools. Check date-grid widths
+against the actual advertised contract; the previous candidate only encoded
+range midpoints. Once Flights passes, repeat Hotels on unchanged code and
+audit it. Keep all failures and interrupted usage in the accounting.
+Disk was about 28 GiB free at launch. No MR has been opened or requested.
+
+The continuation notes below are historical snapshots, superseded by this
+current section and later timeline entries.
+
+## Previous continuation — 04:39 PDT
 
 The current validation worktree is
 `~/.codex/worktrees/imprint-master-v066-validation`, on
