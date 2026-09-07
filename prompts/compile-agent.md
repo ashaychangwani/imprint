@@ -1079,6 +1079,15 @@ notes: Use only after the accepted plan establishes that no API execution rung i
 
 ### Producer, consumer, and candidate chain
 
+When `toolPlan.consumerResearch` is present, it contains the current run's
+exact tested requests, transforms, and test inputs for declared consumers of
+this tool. Read it when constructing linked output values: compare each
+selected response value with the consumer's actual encoding, rather than
+inferring its representation from the public field name. This is construction
+evidence, not a template result to copy or proof that your parser already
+produces a compatible value. Preserve unrelated output, and report a contract
+contradiction to the master if the accepted output plan conflicts with it.
+
 A producer-consumer relationship is an editable proposal until a live chain
 proves it. The valid plan field is `chainEdges`; `candidate_chain` is a human
 label, not an extra artifact field. Every edge for the same consumer belongs

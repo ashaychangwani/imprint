@@ -2824,6 +2824,96 @@ describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend diver
   });
 });
 
+describe('compile pool overlapping calls', () => {
+  for (const callerOwnedSibling of [false, true]) {
+    it(`does not idle-close an active global call when a ${callerOwnedSibling ? 'caller-owned' : 'global'} sibling finishes`, async () => {
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const active = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let closes = 0;
+      const idleTimers: ReturnType<typeof setTimeout>[] = [];
+      const originalSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((
+        handler: (...args: unknown[]) => void,
+        delay?: number,
+        ...args: unknown[]
+      ) => {
+        const timer = originalSetTimeout(handler, delay, ...args);
+        if (delay === 15000) idleTimers.push(timer);
+        return timer;
+      }) as typeof setTimeout;
+      __setCdpBrowserFetchFactoryForTest(() => ({
+        fetchImpl: (async (url: string | URL | Request) => {
+          if (String(url).includes('/active')) {
+            started();
+            await pending;
+          }
+          return new Response('{"items":[{"id":"fixture-item"}]}');
+        }) as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: [],
+          html: '<html></html>',
+          ua: 'fixture-agent',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '0',
+        }),
+        close: async () => {
+          closes++;
+        },
+      }));
+      const workflowPath = (name: string) => {
+        const dir = pathJoin(root, name);
+        mkdirSync(dir, { recursive: true });
+        const file = pathJoin(dir, 'workflow.json');
+        writeFileSync(
+          file,
+          JSON.stringify({
+            site: 'fixture-overlap',
+            toolName: name,
+            intent: { description: 'Synthetic concurrent request.' },
+            parameters: [],
+            requests: [{ method: 'GET', url: `https://fixture.invalid/${name}`, headers: {} }],
+          }),
+        );
+        return file;
+      };
+      const callerPool = new Map();
+      const running = runWorkflowWithLadder({
+        workflowPath: workflowPath('active'),
+        params: {},
+        forceBackend: 'cdp-replay',
+      });
+      try {
+        await active;
+        const result = await runWorkflowWithLadder({
+          workflowPath: workflowPath('sibling'),
+          params: {},
+          forceBackend: 'cdp-replay',
+          ...(callerOwnedSibling ? { cdpPool: callerPool } : {}),
+        });
+        expect(result.result.ok).toBe(true);
+        expect(idleTimers).toHaveLength(0);
+        expect(closes).toBe(0);
+        release();
+        expect((await running).result.ok).toBe(true);
+        expect(idleTimers).toHaveLength(callerOwnedSibling ? 1 : 2);
+      } finally {
+        release();
+        await running;
+        __resetCompileCdpPoolForTest();
+        await Promise.all([...callerPool.values()].map((browser) => browser.close()));
+        globalThis.setTimeout = originalSetTimeout;
+      }
+    });
+  }
+});
+
 describe('runtime winner memo (latency Fix B)', () => {
   it('starts the next call at the memoized winner and skips earlier rungs', async () => {
     const behavior: FakeToolBehavior = {

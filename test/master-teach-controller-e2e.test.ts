@@ -2288,6 +2288,7 @@ describe('fresh foreground master controller end to end', () => {
       let compilerScopeSeqs: number[] = [];
       let consumerFocusedEvidenceWasComplete = false;
       let consumerSawProducerTransportEvidence = false;
+      let producerSawConsumerConstruction = false;
       let detectorEventCitationsWereGrounded = false;
       let groundedCandidateRemainedAdvisory = false;
       let narrationRemainedInEvidence = false;
@@ -2463,6 +2464,14 @@ describe('fresh foreground master controller end to end', () => {
           },
           compileFocusedTool: async (compileInput) => {
             const { tool, triage, sessionPath, stagingDir } = compileInput;
+            if (tool.id === PRODUCER_ID && compileInput.consumerResearch?.length) {
+              const context = compileInput.consumerResearch[0];
+              expect(context?.toolName).toBe(CONSUMER_NAME);
+              expect(context?.candidate.workflow.toolName).toBe(CONSUMER_NAME);
+              expect(context?.links[0]?.producerToolId).toBe(PRODUCER_ID);
+              expect(context?.observation.candidateSha256).toMatch(/^sha256:/);
+              producerSawConsumerConstruction = true;
+            }
             events.push(`compile:${tool.id}`);
             if (tool.id === CONSUMER_ID) {
               const state = FreshTeachJournalStateSchema.parse(
@@ -2639,6 +2648,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(compilerScopeSeqs).toEqual([1, 2, 4]);
       expect(consumerFocusedEvidenceWasComplete).toBe(true);
       expect(consumerSawProducerTransportEvidence).toBe(true);
+      expect(producerSawConsumerConstruction).toBe(true);
       expect(detectorEventCitationsWereGrounded).toBe(true);
       expect(groundedCandidateRemainedAdvisory).toBe(true);
       expect(narrationRemainedInEvidence).toBe(true);

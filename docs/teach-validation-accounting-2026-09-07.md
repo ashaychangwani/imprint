@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are fourteen teaches and seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fourteen teaches and eight independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 754 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 755 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -29,7 +29,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights teach 10 | Deadline: 4 ready, both chain checks failed | 90.00 | 16,435,849 | 13,469,056 | 0 | 164,056 | $20.54 |
 | Flights audit 10 | 8/15 correct; booking untestable | 12.53 | 958,099 | 922,496 | 0 | 4,651 | $0.60 |
 | Flights teach 11 | Deadline: 3 ready; booking MVP and chain failed | 90.00 | 11,978,209 | 9,372,416 | 0 | 159,771 | $17.37 |
-| **Total** | **Includes failures/cancellations** | **929.86** | **151,825,284** | **123,864,704** | **0** | **1,741,052** | **$196.21** |
+| Flights audit 11 | 19/19 correct; 3 tools, one navigation failure excluded | 7.46 | 829,193 | 727,296 | 0 | 4,284 | $0.78 |
+| **Total** | **Includes failures/cancellations** | **937.33** | **152,654,477** | **124,592,000** | **0** | **1,745,336** | **$196.99** |
 
 ## Cost assumptions and completeness
 
@@ -45,7 +46,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-11 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-one accounted traces contain 2,179 spans and twenty-one completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-11 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-two accounted traces contain 2,182 spans and twenty-two completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -138,7 +139,7 @@ record; its final chain timed out after 150.611 seconds including setup. Search
 again serialized a display airline name where the proven consumer used its
 machine code. The late booking compiler repair was interrupted, so its CLI
 usage may be incomplete despite no missing semantic `llm.analyze` usage spans.
-Partial audit 11 of the three published tools is pending.
+Partial audit 11 passed its graded checks, with the exclusions below.
 
 Final compilation began around minute 69, after research and plan revisions.
 The three earlier drafts took 3.04 / 5.35 / 2.53 minutes of worker time; the
@@ -147,3 +148,11 @@ final location, search, grid, and booking compilers took 1.92 / 2.91 / 2.11 /
 must not be added as elapsed time. The older compile-log analysis script
 reported zero calls because it did not parse this Codex event shape; those
 outputs are not valid timing totals. Completed trace spans provide these times.
+
+
+Partial audit 11 passed 19/19 graded units: eleven correct calls and eight
+working parameters across location, search, and grid. A cold grid navigation
+failure was classified `infra` and excluded, and one invalid date-order call
+was excluded as bad input. The failure remains in the raw evidence and does
+not establish reliable cold execution. Booking was not published or audited;
+this is not a full Flights pass or fresh-run repeatability.

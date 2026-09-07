@@ -205,6 +205,10 @@ During research and compilation, request transforms can compute navigation
 targets and click actions from current inputs or earlier responses. The declared
 API response matcher stays fixed so live and offline checks select the same data.
 Dependent selections preserve the machine values required by the next tool.
+Producer compilers receive the current tested consumer construction for declared
+links, so they can check the required representation instead of guessing from names.
+Compile-time browser cleanup waits for concurrent calls to finish; one completed
+request cannot idle-close another request's active browser.
 MCP failures include the completed backend attempts and timings, so a final
 fallback error does not hide an earlier navigation timeout.
 

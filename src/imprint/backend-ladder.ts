@@ -193,6 +193,7 @@ export function rememberProvenCompileBackend(workflowPath: string, backend: Conc
 const compileCdpPool = new Map<string, CdpBrowserFetch>();
 const compileCdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const COMPILE_CDP_IDLE_MS = 15_000;
+let compileCdpActiveCalls = 0;
 
 /** Cancel pending idle-closes — called when a new call is about to reuse the pool. */
 function clearCompileCdpIdle(): void {
@@ -209,8 +210,9 @@ function armCompileCdpIdleClose(): void {
   clearCompileCdpIdle();
   for (const [site, cf] of compileCdpPool) {
     const timer = setTimeout(() => {
-      compileCdpPool.delete(site);
       compileCdpIdleTimers.delete(site);
+      if (compileCdpPool.get(site) !== cf) return;
+      compileCdpPool.delete(site);
       // Close releases the websocket + Chrome child handles so the event loop
       // drains and the host process exits (mirrors mcp-server's idle close).
       void cf.close().catch(() => {});
@@ -1705,7 +1707,10 @@ export async function runWorkflowWithLadder(opts: {
   // caller keeps the session alive across the user-input gap and drains it itself.
   const usingCallerPool = opts.cdpPool !== undefined;
   const cdpPool = opts.cdpPool ?? compileCdpPool;
-  if (!usingCallerPool) clearCompileCdpIdle();
+  if (!usingCallerPool) {
+    compileCdpActiveCalls++;
+    clearCompileCdpIdle();
+  }
 
   try {
     try {
@@ -1806,7 +1811,7 @@ export async function runWorkflowWithLadder(opts: {
     // Keep the pool warm for the next call in this process; arm an idle-close so
     // it's torn down shortly after the LAST call — that lets a raw `bun probe.ts`
     // exit cleanly (no 30-min hang) and never leaks a browser.
-    armCompileCdpIdleClose();
+    if (!usingCallerPool && --compileCdpActiveCalls === 0) armCompileCdpIdleClose();
   }
 }
 

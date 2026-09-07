@@ -6928,3 +6928,37 @@ Read-only deep-dive: final compile began at minute 69; final compilers took two
 to five minutes each. Legacy compile-log analyzer does not parse current Codex
 events; its zero-call reports are not evidence. Investigating the producer
 compiler's missing downstream construction context before choosing a correction.
+
+
+## 2026-09-07 16:52 PDT — Consumer construction evidence and compile browser lifetime
+
+Partial audit 11 passed 19/19 graded units for three tools (11 valid calls,
+8 parameters); one cold grid navigation failure and one invalid date-order
+call were excluded. The failed cold call remains evidence against reliable
+execution. Booking was unavailable, so this does not establish a Flights pass.
+Audit duration 7.4647 minutes, $0.78 base API equivalent; recorded total $196.99.
+
+The generated search parser repeated the display-name/machine-code mismatch.
+Its accepted plan named the serialized fields but the shipped compiler received
+only its own research, not the tested downstream construction. A bounded
+`consumerResearch` context now supplies current declared consumers' exact
+candidates, test inputs, observation identities, and links. It excludes unrelated
+or stale-boundary research, full response bodies, and history. Agents still
+interpret fields and choose repairs; chain verification and compatible draft
+reuse remain unchanged. Unit and end-to-end coverage verify the handoff.
+
+The closed-CDP messages also exposed a mechanical overlap bug: any completed
+compile/test call armed idle timers for every globally pooled browser, even
+while a sibling call remained active. Caller-owned calls could also arm global
+cleanup. Two synthetic overlapping-call regressions reproduced both cases.
+The global pool now arms idle cleanup only after its active calls finish;
+caller-owned pools do not arm it, and callbacks check session identity before
+eviction. Tool/bootstrap keys and execution-rung state remain separate.
+
+The first consumer-context full suite passed 1,932 tests. After the pool fix,
+its two new regressions passed; the full suite found one intermittent existing
+process-cleanup test failure, which passed a focused rerun. Its log is retained,
+no matching test process remained, and the full rerun passed 1,934 tests / 6,136
+assertions across 97 files in 93.92 seconds. Initial test
+fixture type errors and import-order lint were fixed. Website build and mobile/
+desktop checks pass; previews are stopped. No fresh teach started during checks.

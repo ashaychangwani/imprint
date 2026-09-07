@@ -638,3 +638,20 @@ interrupted by the audit deadline may still lack completed ladder history.
 Agents define each field of a serialized producer selection from its actual
 source and consumer wire representation, preserving machine identifiers apart
 from display labels. The runtime does not infer or convert those meanings.
+
+
+For a declared outgoing link, the producer compiler receives
+`toolPlan.consumerResearch`: the current consumer's tested candidate (request,
+transform, and test inputs), its observation identity, and the declared links.
+The controller includes only consumers whose research still covers their current
+boundary; it omits unrelated tools, response bodies, and research history.
+This supplies construction evidence without interpreting field meaning or
+replacing final chain verification. Compatible draft reuse and master-directed
+recall remain unchanged; new evidence does not itself select a repair strategy.
+
+
+The compile/test CDP pool counts active calls before arming its idle cleanup.
+A completed sibling cannot schedule teardown of another call's active browser.
+Calls using caller-owned pools do not arm global cleanup. Each idle callback
+also checks the session identity before eviction. This changes lifecycle only;
+tool/bootstrap keys and separate execution-rung state remain unchanged.

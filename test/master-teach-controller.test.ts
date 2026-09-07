@@ -13,6 +13,7 @@ import {
   apiResearchMatchesPlan,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
+  consumerResearchForCompiler,
   failureReceiptBindingError,
   focusedPlanningFailureMessage,
   focusedPlanningStateSha256,
@@ -282,6 +283,47 @@ describe('API research boundary reuse', () => {
     },
     parameters: { query: 'recorded', mode: 'broad' },
     backend: 'fetch',
+  });
+
+  it('supplies exact tested construction for declared consumers without response history', () => {
+    const producer = focusedTool(1);
+    const consumer = focusedTool(2);
+    const unrelated = focusedTool(3);
+    const research = researchFor(consumer);
+    research.researchInputsSha256 = apiResearchInputsSha256(consumer);
+    research.candidate.parameterValues = { query: 'fixture-code-42', mode: 'detail' };
+    research.candidate.requestTransformSource =
+      'export function transform(method, url, responses, params) { return { body: params.query }; }';
+    const edge = {
+      id: 'fixture-link',
+      producerToolId: producer.id,
+      producerResultPath: 'items[0].code',
+      consumerToolId: consumer.id,
+      consumerParameter: 'query',
+    };
+    const plan = { tools: [producer, consumer, unrelated], chainEdges: [edge] };
+    const contexts = consumerResearchForCompiler(
+      producer.id,
+      plan,
+      new Map([
+        [consumer.id, research],
+        [unrelated.id, researchFor(unrelated)],
+      ]),
+    );
+    expect(contexts).toHaveLength(1);
+    expect(contexts[0]?.links).toEqual([edge]);
+    expect(contexts[0]?.candidate).toEqual(research.candidate);
+    expect(contexts[0]?.observation).toEqual({
+      id: 'fixture-observation',
+      candidateSha256: SHA,
+      executionMechanism: 'fetch',
+    });
+    expect(JSON.stringify(contexts)).not.toContain('real result');
+    expect(consumerResearchForCompiler(consumer.id, plan, new Map())).toEqual([]);
+    consumer.candidate.requestSeqs = [4];
+    expect(
+      consumerResearchForCompiler(producer.id, plan, new Map([[consumer.id, research]])),
+    ).toEqual([]);
   });
 
   it('reuses proof after planning narrows parameters or rewrites notes', () => {

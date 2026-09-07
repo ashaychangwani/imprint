@@ -477,6 +477,46 @@ type ApiToolRunner = (input: {
   responseObservations?: BackendResponseObservation[];
 }>;
 
+interface ConsumerResearchContext {
+  toolName: string;
+  links: ChainEdge[];
+  candidate: ApiResearchResult['candidate'];
+  observation: Pick<
+    ApiResearchResult['observation'],
+    'id' | 'candidateSha256' | 'executionMechanism'
+  >;
+}
+
+/** Current declared consumers only; no response bodies or unrelated research history. */
+export function consumerResearchForCompiler(
+  toolId: string,
+  plan: Pick<EditableTeachingPlan, 'tools' | 'chainEdges'>,
+  researchByToolId?: ReadonlyMap<string, ApiResearchResult>,
+): ConsumerResearchContext[] {
+  return plan.tools.flatMap((consumer) => {
+    const links = plan.chainEdges.filter(
+      (edge) => edge.producerToolId === toolId && edge.consumerToolId === consumer.id,
+    );
+    const research = researchByToolId?.get(consumer.id);
+    if (
+      links.length === 0 ||
+      !research ||
+      !research.observation.result.ok ||
+      !apiResearchCoversToolBoundary(consumer, research)
+    )
+      return [];
+    const { id, candidateSha256, executionMechanism } = research.observation;
+    return [
+      {
+        toolName: consumer.candidate.toolName,
+        links,
+        candidate: research.candidate,
+        observation: { id, candidateSha256, executionMechanism },
+      },
+    ];
+  });
+}
+
 /** Test seams are deliberately role-sized; production defaults use the shipped modules. */
 interface FreshTeachControllerDependencies {
   now: () => Date;
@@ -506,6 +546,7 @@ interface FreshTeachControllerDependencies {
     priorToolDir?: string;
     apiResearchDir?: string;
     apiResearchSummary?: string;
+    consumerResearch?: ConsumerResearchContext[];
     revisionGuidance?: string;
     revisionContext?: FocusedPlannerRevisionContext;
     resumeSessionId?: string;
@@ -1746,6 +1787,7 @@ async function compileFocusedToolWithShippedAgent(input: {
   priorToolDir?: string;
   apiResearchDir?: string;
   apiResearchSummary?: string;
+  consumerResearch?: ConsumerResearchContext[];
   revisionGuidance?: string;
   revisionContext?: FocusedPlannerRevisionContext;
   resumeSessionId?: string;
@@ -1782,6 +1824,7 @@ async function compileFocusedToolWithShippedAgent(input: {
     {
       tool: input.tool,
       implementationPlan: input.implementationPlan,
+      ...(input.consumerResearch?.length ? { consumerResearch: input.consumerResearch } : {}),
       ...(input.apiResearchSummary
         ? {
             apiResearchHandoff: {
@@ -3810,6 +3853,7 @@ async function compileAndCheckCurrentPlan(input: {
             (tool.strategy.kind === 'api' ? early?.compiled.toolDir : undefined)),
       apiResearchDir: apiResearch?.toolDir,
       apiResearchSummary: apiResearch?.summary,
+      consumerResearch: consumerResearchForCompiler(tool.id, plan, input.apiResearchByToolId),
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       revisionContext: input.revisionContextByToolId?.get(tool.id),
       resumeSessionId: input.compileSessionsByToolId?.get(tool.id),
