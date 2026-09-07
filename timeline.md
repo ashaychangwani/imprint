@@ -5813,3 +5813,19 @@ At 17:54 PDT start an independent audit of the only fresh published tool,
 calendar, in the same isolated home. Keep its score separate from overall
 coverage and preserve this failed teach's token cost. Hotels will follow on
 the unchanged code, not after secretly tuning the repeatability experiment.
+
+### September 6, 18:00 PDT — Calendar audit completes; fresh Hotels starts
+
+Flights' calendar-only audit took 4 minutes 36 seconds and scored 91.7%:
+11 correct units, one broken, six calls, six parameters, no exclusions.
+Five calls worked. One return-window call failed, then the auditor's identical
+retry worked; the failure stays counted. All six parameters were demonstrated,
+with date bounds varied in pairs to preserve the tool's seven-day constraint.
+This does not change the failed overall Flights result or missing coverage.
+
+Started fresh Hotels discovery on the same June 4 recording, with no saved
+candidates and the same unchanged implementation. Its isolated output shares
+the repeatability experiment's home, not the installed working tool directory.
+Log: `/tmp/imprint-repeatability-P2oX4B/hotels-teach.log`. Review at one hour;
+hard limit 90 minutes. Token capture remains enabled for separate final teach
+and audit cost reporting.
