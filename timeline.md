@@ -6869,3 +6869,22 @@ Fresh Flights teach 11 began 21:55:03 UTC on `43ab0c7`, PID 88789, new
 four-operation guidance. No prior artifacts or diagnostics supplied. Disk
 25.00 GiB free; collector PID 54899 healthy. Target 22:25 UTC, assess 22:55,
 hard deadline approximately 23:25. Existing heartbeat follows this fresh run.
+
+
+## 2026-09-07 15:25 PDT — Flights 11 target assessment
+
+At 30 minutes, `43ab0c7` remains unchanged. Four selected operations are
+`search_flight_locations`, `search_flights`, `get_flight_date_grid`, and
+`get_flight_booking_options`. Location, search, and grid have proven research
+handoffs and draft compilation; there is no final teach or independent audit
+pass yet. Grid research includes a seven-by-seven matrix and separate origin
+and destination contrasts. Search's changed case is LAX–SEA, November 5.
+
+Booking called the current search producer (33.975 s) and inspected its output.
+The current navigation candidate computes a page selector from result position;
+its encoded selection is not yet a verified normalized producer contract, and
+same-itinerary booking identity still needs proof. Its CDP test timed out after
+121.827 s including setup. Preserve this failure and the earlier setup messages
+about a closed CDP connection; do not assume an infrastructure exemption.
+No malformed-handoff recovery was observed. Continue the retained run toward
+the 22:55 UTC assessment / 23:25 UTC hard deadline. No code or artifacts changed.
