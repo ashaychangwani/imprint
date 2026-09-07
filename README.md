@@ -177,6 +177,11 @@ breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint
 retries that exact delivery once on the same conversation and deadline.
 
+Semantic agents receive the current shared deadline and remaining time on each
+turn, including output repairs, so they can budget for compilation and live
+checks. Exhausting the run deadline is reported as a failed run; provider
+unavailability is reserved for an actual provider interruption.
+
 Every teach is fresh and stays in the foreground until it reaches a terminal
 result. There are no resume, phase-window, primary-tool, or partial-selection
 modes. A run succeeds only when every planned tool is verified; otherwise the

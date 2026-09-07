@@ -3966,6 +3966,41 @@ describe('completion history and factual pass gate', () => {
 });
 
 describe('strict repair and one real deadline', () => {
+  it('refreshes host time facts on a retained repair after the shared deadline changes', async () => {
+    const input = toolInput();
+    const invalid = toolOutput();
+    at(invalid.boundaries, 0).requestSeqs = [999];
+    const runDeadline = new RunDeadline(Date.now() + 60_000);
+    const originalDeadline = runDeadline.deadlineMs;
+    const payloads: Array<Record<string, unknown>> = [];
+    const analyzer: MasterTeachAnalyzer = {
+      async analyze(_prompt, payload) {
+        payloads.push(payload as Record<string, unknown>);
+        return { text: JSON.stringify(payloads.length === 1 ? invalid : toolOutput(input)) };
+      },
+    };
+    await requestToolSelectionAdvice(input, {
+      provider: 'codex-cli',
+      analyzer,
+      runDeadline,
+      onRetry: () => {
+        runDeadline.extend(60_000);
+      },
+    });
+    const first = payloads[0]?.runTiming as {
+      observedAt: string;
+      deadlineAt: string;
+      remainingMs: number;
+    };
+    const second = payloads[1]?.runTiming as typeof first;
+    expect(first.deadlineAt).toBe(new Date(originalDeadline).toISOString());
+    expect(second.deadlineAt).toBe(new Date(originalDeadline + 60_000).toISOString());
+    expect(second.remainingMs).toBe(originalDeadline + 60_000 - Date.parse(second.observedAt));
+    expect(second.remainingMs).toBeGreaterThan(first.remainingMs);
+    expect(payloads[1]).not.toHaveProperty('originalInput');
+    expect(payloads[1]?.priorResponse).toBe(JSON.stringify(invalid));
+  });
+
   it('accepts one optional fence and rejects prose/trailing/second objects', () => {
     const json = JSON.stringify(toolOutput());
     expect(parseToolSelectionAdvisorOutput(`\`\`\`json\n${json}\n\`\`\``, toolInput())).toEqual(

@@ -2119,7 +2119,7 @@ async function request<S extends z.ZodTypeAny>(options: {
       provider: options.agent.provider,
       model: options.agent.model,
     } satisfies LLMOptions);
-  const system = readFileSync(join(PROMPTS, options.prompt), 'utf8');
+  const system = `${readFileSync(join(PROMPTS, options.prompt), 'utf8')}\n\nWhen supplied, runTiming gives the host's current time and remaining shared run budget at this turn. Use it to choose a useful MVP and proportionate next steps, leaving time for planning, compilation, live verification, repair, and publication. These are time facts, not per-tool attempt limits or permission to weaken proof. Strategy remains yours.`;
   const startedAt = Date.now();
   const roleExpiresAt =
     options.agent.timeoutMs === undefined ? undefined : startedAt + options.agent.timeoutMs;
@@ -2140,10 +2140,23 @@ async function request<S extends z.ZodTypeAny>(options: {
   );
   const signal = active.signal ?? new AbortController().signal;
   const retainedCodexConversation = options.agent.provider === 'codex-cli';
-  const analyze = (payload: unknown, prompt = system) =>
+  const analyze = (payload: Record<string, unknown>, prompt = system) =>
     invoke(
-      () =>
-        analyzer.analyze(prompt, payload, {
+      () => {
+        const observedAt = Date.now();
+        const deadlineMs = runDeadline?.deadlineMs;
+        const timedPayload =
+          deadlineMs === undefined
+            ? payload
+            : {
+                ...payload,
+                runTiming: {
+                  observedAt: new Date(observedAt).toISOString(),
+                  deadlineAt: new Date(deadlineMs).toISOString(),
+                  remainingMs: Math.max(0, deadlineMs - observedAt),
+                },
+              };
+        return analyzer.analyze(prompt, timedPayload, {
           signal,
           timeoutMs:
             roleExpiresAt === undefined ? undefined : Math.max(0, roleExpiresAt - Date.now()),
@@ -2153,7 +2166,8 @@ async function request<S extends z.ZodTypeAny>(options: {
           onProviderRetry: options.agent.onProviderRetry,
           onDeadlineReached: options.agent.onDeadlineReached,
           conversationKey: options.conversationKey,
-        }),
+        });
+      },
       signal,
       active.waitForDeadlineDecision,
       options.role,

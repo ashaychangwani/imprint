@@ -50,7 +50,7 @@ export function compileProviderInterruptionError(
     'nested-live-verifier',
     { codes: [value.reason === 'deadline' ? 'provider_deadline' : 'provider_unavailable'] },
     cause,
-    'capacity_or_overload',
+    value.reason === 'unavailable' ? 'capacity_or_overload' : undefined,
   );
 }
 
@@ -92,7 +92,7 @@ function asDeadline(deadline: RunDeadlineRef | number): RunDeadlineRef {
 export function createCompileProviderControl(deadline: RunDeadlineRef | number) {
   const runDeadline = asDeadline(deadline);
   if (Date.now() >= runDeadline.deadlineMs) {
-    throw new ProviderUnavailableError(new ProviderDeadlineError(runDeadline.deadlineMs));
+    throw new ProviderDeadlineError(runDeadline.deadlineMs);
   }
   const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-provider-'));
   chmodSync(dir, 0o700);
@@ -201,6 +201,7 @@ export function createCompileProviderControl(deadline: RunDeadlineRef | number) 
         value.reason === 'deadline'
           ? new ProviderDeadlineError(value.deadlineMs)
           : new ProviderUnavailableError(new Error('Nested provider unavailable'));
+      if (cause instanceof ProviderDeadlineError) throw cause;
       throw new ProviderUnavailableError(
         cause,
         `The nested live verifier ${value.reason === 'deadline' ? 'reached the teach deadline' : 'provider remained unavailable'}; no artifact failure was recorded.`,

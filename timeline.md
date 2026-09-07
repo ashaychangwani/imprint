@@ -6442,3 +6442,29 @@ and zero reported cache writes: $19.59 base API estimate. Cumulative accounted
 work is $100.05 before this audit; interrupted billing caveats still apply.
 Inspect the empty grid and excessive pre-compilation time before choosing the
 next small general correction. No generated artifact will be hand-repaired.
+
+### 2026-09-07 14:40 UTC — Partial audit passes; general deadline fixes
+
+The independent audit finished in 7.5992 minutes with all 10 invocations and
+6 advertised parameters correct (16/16 units). It exercised only the three
+published tools, so Flights remains incomplete. Reported usage was 548,944
+input tokens including 502,784 cache reads, 3,867 output, zero reported writes:
+$0.46 base estimate; accounted total is now $100.51. The audit report and
+transcript remain in `home-6/google-flights`.
+
+Fixed the reproduced reporting error: compiler and nested-verifier deadline
+errors preserve their deadline cause and do not invent a capacity interruption
+or retry. Genuine transient provider failures retain their existing retry path.
+All semantic roles now receive the current shared deadline and remaining time
+on each turn, including retained output repairs; they decide how to budget
+research, planning, compilation, verification, and repair. No attempt limits,
+site rules, or proof waivers were added.
+
+Validation: 154 focused tests, lint, and typecheck pass. Full suite passes
+1,929 tests / 6,103 assertions across 97 files. The first full invocation
+missed Bun in child-process PATH and failed 38 tests; its log is preserved,
+and the correctly configured rerun passed in 94.87 seconds. Website build
+passes with the existing chunk-size warning. Mobile and desktop rendered
+without overflow or page errors; screenshots are retained as `time-facts-*`.
+The preview process was stopped. A separate unchanged-artifact grid diagnostic
+is collecting cold and warm captures before the next fresh teach.

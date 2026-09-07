@@ -524,6 +524,13 @@ controller only performs mechanical work: validates the plan and wave ordering,
 runs focused jobs and checks, tracks what became stale after a revision, and
 reports the terminal outcome.
 
+Each semantic-role request includes fresh `runTiming` facts: the observation
+time, shared deadline, and remaining milliseconds. Retained turns and output
+repairs refresh these facts without resetting conversation history. Agents
+choose how to use the remaining time; the host adds no attempt quotas or
+site-specific strategy. Compiler and nested-verifier deadline errors retain
+their deadline cause instead of being relabeled as provider capacity failures.
+
 A teach command never resumes an earlier run. Old run directories are
 diagnostic evidence only. The command stays in the foreground until it reports
 completed, blocked, failed, cancelled, or provider unavailable. Only completed

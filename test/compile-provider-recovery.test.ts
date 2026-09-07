@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import type { CompileAgentResult } from '../src/imprint/compile-agent-types.ts';
+import { compileProviderInterruptionError } from '../src/imprint/compile-provider-control.ts';
 import {
   type CompilerResume,
   runCompileWithProviderRecovery,
@@ -38,6 +39,34 @@ function result(
 }
 
 describe('runCompileWithProviderRecovery', () => {
+  it('preserves a compiler deadline without claiming capacity failure or retrying', async () => {
+    const providerError = compileProviderInterruptionError({ reason: 'deadline', deadlineMs: 110 });
+    let calls = 0;
+    let retries = 0;
+    await expect(
+      runCompileWithProviderRecovery({
+        run: async () => {
+          calls++;
+          return result({
+            outcome: 'error',
+            message: 'compiler reached the run deadline',
+            providerError,
+            providerInterruption: providerError.interruption,
+            sessionId: 'deadline-session',
+          });
+        },
+        deadlineMs: 110,
+        retry: { now: () => 100 },
+        onRetry: () => {
+          retries++;
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+    expect(providerError.interruption).toBeUndefined();
+    expect(calls).toBe(1);
+    expect(retries).toBe(0);
+  });
+
   it('does not start a compiler segment after the absolute deadline', async () => {
     let calls = 0;
     await expect(

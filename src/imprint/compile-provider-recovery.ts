@@ -1,6 +1,7 @@
 import type { CompileAgentResult } from './compile-agent-types.ts';
 import { abortSignalError } from './concurrency.ts';
 import {
+  ProviderDeadlineError,
   type ProviderInterruptionReason,
   ProviderReportedError,
   type ProviderRetryEvent,
@@ -100,6 +101,8 @@ export async function runCompileWithProviderRecovery(
           durationMs: Math.max(result.durationMs, now() - startedAt),
         };
         if (!result.providerError) return aggregate;
+        const control = providerControlError(result.providerError);
+        if (control instanceof ProviderDeadlineError) throw control;
         if (!result.providerInterruption) throw result.providerError;
 
         interruption = result.providerInterruption;

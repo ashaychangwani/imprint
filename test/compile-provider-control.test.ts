@@ -28,7 +28,7 @@ describe('nested compile provider control', () => {
     try {
       expect(nested?.deadlineMs).toBe(deadlineMs);
       nested?.report(new ProviderDeadlineError(deadlineMs));
-      expect(() => parent.throwIfInterrupted()).toThrow(ProviderUnavailableError);
+      expect(() => parent.throwIfInterrupted()).toThrow(ProviderDeadlineError);
     } finally {
       nested?.dispose();
       parent.dispose();
@@ -232,6 +232,6 @@ describe('nested compile provider control', () => {
   });
 
   it('refuses to create provider work after an expired deadline', () => {
-    expect(() => createCompileProviderControl(Date.now() - 1)).toThrow(ProviderUnavailableError);
+    expect(() => createCompileProviderControl(Date.now() - 1)).toThrow(ProviderDeadlineError);
   });
 });
