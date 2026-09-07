@@ -2540,6 +2540,50 @@ async function researchSelectedOperations(input: {
             loadNextRequestCatalogPage: (offset) =>
               apiResearchRequestCatalogPage(requestCatalog, offset),
             requiredLinks,
+            producers: () => {
+              const available = new Map<
+                string,
+                {
+                  toolName: string;
+                  candidate: ApiResearchResult['candidate'];
+                  summary: string;
+                  toolDir: string;
+                }
+              >();
+              for (const handoff of input.previousHandoffs ?? []) {
+                const sibling = input.plan.tools.find(
+                  ({ candidate }) => candidate.toolName === handoff.toolName,
+                );
+                if (
+                  !sibling ||
+                  handoff.status !== 'proven' ||
+                  !handoff.candidate ||
+                  apiResearchInputsSha256(sibling) !== handoff.researchInputsSha256
+                )
+                  continue;
+                available.set(handoff.toolName, {
+                  toolName: handoff.toolName,
+                  candidate: handoff.candidate,
+                  summary: handoff.summary,
+                  toolDir: pathJoin(input.stagingRoot, 'api-research', sibling.id),
+                });
+              }
+              for (const [id, result] of resultsByToolId) {
+                const sibling = input.plan.tools.find((entry) => entry.id === id);
+                if (sibling)
+                  available.set(sibling.candidate.toolName, {
+                    toolName: sibling.candidate.toolName,
+                    candidate: result.candidate,
+                    summary: result.summary,
+                    toolDir: result.toolDir,
+                  });
+              }
+              return [...available.values()].filter(
+                ({ toolName }) =>
+                  toolName !== tool.candidate.toolName &&
+                  input.plan.tools.some((entry) => entry.candidate.toolName === toolName),
+              );
+            },
             inspectRequests: (requestSeqs) => {
               for (const seq of requestSeqs) inspectedRequestSeqs.add(seq);
               const delta = inspectionResearchEvidence({
@@ -5441,7 +5485,7 @@ function completionToolResultEvidenceFor(
     throw new Error(`tool "${tool.id}" has no retained successful result`);
   }
   const serialized = JSON.stringify(live.result.data) ?? 'null';
-  const preview = utf8Prefix(serialized, 2_000);
+  const preview = utf8Prefix(serialized, 32_000);
   const shape = utf8Prefix(structuralResultShape(live.result.data), 512) || 'unknown';
   const payload = {
     toolId: tool.id,
@@ -5912,6 +5956,17 @@ export async function runFreshMasterTeach(
               const parserSource = parser
                 ? Buffer.from(activeJournal.readBytes(parser.artifactRef)).toString('utf8')
                 : undefined;
+              const requestSource = JSON.stringify({
+                workflow,
+                modules: manifest?.files
+                  .filter(
+                    ({ path }) => path === workflow?.requestTransformModule?.replace(/^\.\//, ''),
+                  )
+                  .map((file) => ({
+                    path: file.path,
+                    source: Buffer.from(activeJournal.readBytes(file.artifactRef)).toString('utf8'),
+                  })),
+              });
               const review = await deps.requestBaselineMvpReview(
                 {
                   run: current.binding,
@@ -5927,6 +5982,12 @@ export async function runFreshMasterTeach(
                           artifactRef: parser.artifactRef,
                           source: utf8Prefix(parserSource, 16_000),
                           truncated: Buffer.byteLength(parserSource, 'utf8') > 16_000,
+                          requestSource: utf8Prefix(requestSource, 32_000),
+                          requestSourceTruncated: Buffer.byteLength(requestSource, 'utf8') > 32_000,
+                          researchSummary: utf8Prefix(
+                            apiResearchByToolId.get(tool.id)?.summary ?? '',
+                            16_000,
+                          ),
                         },
                       }
                     : {}),

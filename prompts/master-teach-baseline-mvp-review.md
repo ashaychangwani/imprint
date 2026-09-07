@@ -44,6 +44,16 @@ When a required claim relies only on an echo and the supplied evidence cannot
 establish it, return `revision_required` with that exact missing proof, not an
 invented server mismatch. Unseen source or imported helpers are not proof.
 
+`resultDerivation.requestSource` contains the checked build's workflow and
+request transform, with an explicit truncation flag. Trace how actual invocation
+parameters enter the outgoing request, alongside the parser's returned records.
+Request encoding is supporting evidence, not proof that the server honored it.
+`researchSummary` is the researcher's prior explanation, not a replacement for
+this build's live result. Use it to understand prior experiments without treating
+its claims as independently verified facts. Do not demand that an API repeat
+every input in each result; distinguish missing proof from an observed mismatch.
+You may cite `resultDerivation.buildRef` for the checked request construction.
+
 The intended operation and `expectedOutput` are the promise. Use
 `baseline.invocationParameters`, the inputs actually sent, when supplied.
 Do not substitute a different planned test's input or expected location, date,

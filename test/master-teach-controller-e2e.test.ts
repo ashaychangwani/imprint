@@ -4757,6 +4757,8 @@ describe('fresh foreground master controller end to end', () => {
           reviews += 1;
           expect(input.resultDerivation?.source).toBe(source);
           expect(input.resultDerivation?.truncated).toBe(false);
+          expect(input.resultDerivation?.requestSource).toContain('workflow');
+          expect(input.resultDerivation?.requestSourceTruncated).toBe(false);
           const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
           expect(input.resultDerivation?.buildRef).toEqual(proof?.currentBuildRef);
           return baselineMvpReview(input, 'revision_required');

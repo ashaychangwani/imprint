@@ -114,6 +114,10 @@ An independent proven tool can prepare its plan and compile a draft while
 other research continues, using the same two worker slots. The master still
 reviews the complete plan before normal verification and publication; only an
 exactly matching draft is reused. Declared consumers retain producer-first ordering.
+Researchers can call proven sibling requests with fresh inputs before testing a
+consumer; recorded continuation values are not a substitute for fresh output.
+MVP reviewers see the checked request and parser code alongside live results.
+Browser snapshots are reused by tool and rung without cookie-name requirements.
 Rewording auth or token notes reuses that proof; the master explicitly requests
 new research when the actual strategy changes.
 The final reviewer receives the same human scope and checks requested tool

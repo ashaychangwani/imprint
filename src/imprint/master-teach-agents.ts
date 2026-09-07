@@ -328,6 +328,20 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
   return ApiResearchOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, apiResearchBinding(input)))
       issue(ctx, ['binding'], 'stale API-research binding');
+    if (output.action === 'call_producer') {
+      if (
+        !output.producerCall ||
+        !input.availableProducers?.some(
+          ({ toolName }) => toolName === output.producerCall?.toolName,
+        )
+      )
+        issue(ctx, ['producerCall'], 'choose an available producer and supply its parameters');
+      if (output.candidate || output.basedOnObservationId)
+        issue(ctx, ['candidate'], 'calling a producer does not prove the consumer');
+      return;
+    }
+    if (output.producerCall)
+      issue(ctx, ['producerCall'], 'only call_producer may invoke a producer');
     if (output.action === 'inspect_result') {
       if (!output.resultQuery) issue(ctx, ['resultQuery'], 'result inspection requires a query');
       else {
@@ -489,6 +503,12 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       issue(ctx, ['basedOnObservationId'], 'unknown API-research observation');
       return;
     }
+    if (observation.producerToolName)
+      issue(
+        ctx,
+        ['basedOnObservationId'],
+        'producer evidence supplies inputs; test the consumer itself before claiming proof',
+      );
     if (!observation.result.ok)
       issue(
         ctx,
@@ -1015,7 +1035,9 @@ function baselineMvpOutputSchema(input: BaselineMvpReviewInput) {
       [
         input.resultEvidence.ref,
         ...(resultReceipt ? [resultReceipt.ref] : []),
-        ...(input.resultDerivation ? [input.resultDerivation.artifactRef] : []),
+        ...(input.resultDerivation
+          ? [input.resultDerivation.artifactRef, input.resultDerivation.buildRef]
+          : []),
       ].map(refKey),
     );
     const cited = new Set(output.evidenceRefs.map(refKey));
@@ -2253,6 +2275,9 @@ export async function requestApiResearchStep(
       agent.provider === 'codex-cli' && retainedInput
         ? {
             ...retainedInput,
+            ...(checked.availableProducers
+              ? { availableProducers: checked.availableProducers }
+              : {}),
             ...('currentTool' in retainedInput && retainedInput.currentTool
               ? {
                   currentTool: apiResearchPromptTool({

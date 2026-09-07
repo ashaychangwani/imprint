@@ -347,6 +347,12 @@ export async function researchApiMvpCall(input: {
     page: NonNullable<ApiResearchInput['requestCatalogPage']>;
   };
   requiredLinks?: ApiResearchInput['requiredLinks'];
+  producers?: () => {
+    toolName: string;
+    candidate: ApiResearchCandidate;
+    toolDir: string;
+    summary: string;
+  }[];
   inspectRequests?: (requestSeqs: readonly number[]) => ApiResearchInspectionEvidence;
   toolDir: string;
   agent: MasterTeachAgentOptions;
@@ -399,6 +405,11 @@ export async function researchApiMvpCall(input: {
       tool: input.tool,
       evidence,
       observations,
+      availableProducers: (input.producers?.() ?? []).map(({ toolName, candidate, summary }) => ({
+        toolName,
+        parameters: candidate.workflow.parameters,
+        summary,
+      })),
       ...(resultInspection ? { resultInspection } : {}),
       requestCatalog,
       requestCatalogTruncated:
@@ -504,7 +515,15 @@ export async function researchApiMvpCall(input: {
       throw new ApiResearchBlockedError(decision.reason, observations);
     }
     proposedBlockReason = undefined;
-    const candidate = decision.candidate;
+    const producer = decision.producerCall
+      ? input.producers?.().find(({ toolName }) => toolName === decision.producerCall?.toolName)
+      : undefined;
+    if (decision.action === 'call_producer' && !producer)
+      throw new Error('Requested producer is no longer available');
+    const candidate =
+      producer && decision.producerCall
+        ? { ...producer.candidate, parameterValues: decision.producerCall.parameters }
+        : decision.candidate;
     if (!candidate) throw new Error('API researcher returned no candidate');
     if (decision.action === 'proven' || decision.action === 'partial') {
       const observation = observations.find(({ id }) => id === decision.basedOnObservationId);
@@ -544,8 +563,15 @@ export async function researchApiMvpCall(input: {
       };
     }
 
-    input.report?.(`${input.tool.candidate.toolName}: testing API request`);
-    const workflowPath = writeCandidate(input.toolDir, candidate);
+    input.report?.(
+      producer
+        ? `${input.tool.candidate.toolName}: calling ${producer.toolName} for fresh upstream values`
+        : `${input.tool.candidate.toolName}: testing API request`,
+    );
+    const workflowPath = writeCandidate(
+      producer ? pathJoin(producer.toolDir, 'fresh-calls') : input.toolDir,
+      candidate,
+    );
     const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
     try {
       const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
@@ -563,6 +589,9 @@ export async function researchApiMvpCall(input: {
       });
       const observation: ApiResearchObservation = {
         id: randomUUID(),
+        ...(producer
+          ? { producerToolName: producer.toolName, invocationParameters: candidate.parameterValues }
+          : {}),
         candidateSha256: apiResearchCandidateSha256(candidate),
         executionMechanism: observed.executionMechanism,
         backendAttempts: observed.backendAttempts ?? [],

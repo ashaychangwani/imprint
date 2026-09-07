@@ -110,6 +110,103 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('calls a working producer with fresh agent-selected inputs before testing its consumer', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-fresh-producer-'));
+    const producer = apiCandidate('producer', 'fetch');
+    producer.workflow.toolName = 'lookup_fixture';
+    const consumer = apiCandidate('consumer', 'fetch');
+    consumer.parameterValues = { query: 'fresh-token' };
+    let calls = 0;
+    let turn = 0;
+    try {
+      const outcome = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        session,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        producers: () => [
+          {
+            toolName: 'lookup_fixture',
+            candidate: producer,
+            toolDir: join(toolDir, 'lookup'),
+            summary: 'Returns a live continuation.',
+          },
+        ],
+        dependencies: {
+          requestStep: async (input) => {
+            turn++;
+            if (turn === 1) {
+              expect(input.availableProducers?.[0]?.toolName).toBe('lookup_fixture');
+              return parseApiResearchOutput(
+                JSON.stringify({
+                  binding,
+                  action: 'call_producer',
+                  producerCall: {
+                    toolName: 'lookup_fixture',
+                    parameters: { query: 'current-query' },
+                  },
+                  reason: 'Get a fresh continuation.',
+                }),
+                input,
+              );
+            }
+            if (turn === 2) {
+              expect(input.observations[0]?.producerToolName).toBe('lookup_fixture');
+              expect(input.observations[0]?.result.preview).toContain('fresh-token');
+              expect(() =>
+                parseApiResearchOutput(
+                  JSON.stringify({
+                    binding,
+                    action: 'proven',
+                    candidate: consumer,
+                    basedOnObservationId: input.observations[0]?.id,
+                    reason: 'Producer alone is insufficient.',
+                  }),
+                  input,
+                ),
+              ).toThrow();
+              return {
+                binding,
+                action: 'test',
+                candidate: consumer,
+                reason: 'Use the fresh continuation.',
+              };
+            }
+            return parseApiResearchOutput(
+              JSON.stringify({
+                binding,
+                action: 'proven',
+                candidate: consumer,
+                basedOnObservationId: input.observations.at(-1)?.id,
+                reason: 'The consumer returned real records.',
+              }),
+              input,
+            );
+          },
+          runApiTool: async ({ parameters, workflowPath }) => {
+            calls++;
+            expect(parameters.query).toBe(calls === 1 ? 'current-query' : 'fresh-token');
+            expect(workflowPath.includes('lookup')).toBe(calls === 1);
+            return {
+              result: {
+                ok: true,
+                data: calls === 1 ? { token: 'fresh-token' } : { records: [{ id: 1 }] },
+              },
+              executionMechanism: 'fetch',
+            };
+          },
+        },
+      });
+      expect(calls).toBe(2);
+      expect(outcome.observation.producerToolName).toBeUndefined();
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
   it('keeps request testing separate and hands only the proven request to compilation', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-'));
     const first = apiCandidate('diagnostic');

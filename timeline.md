@@ -5878,3 +5878,34 @@ The MVP reviewer gets caller inputs, a 2,000-byte parsed-result preview, receipt
 references, and bounded parser source—not the complete request/research history.
 Browser caching exists but rejects jars lacking the configured validation
 markers; that gate caused six explicit cache rejections in the repeat run.
+
+## 2026-09-06 22:10 PDT — Fresh upstream calls, better review evidence, browser reuse
+
+Addressed the three remaining gaps from the failed repeat Flights teach.
+Researchers can now call a proven sibling API request with their own chosen
+parameters and inspect its fresh raw response before testing the consumer.
+This works before the sibling has a compiled parser. The agent chooses which
+returned values belong together; the runtime does not invent token rules or
+share browser state between tools or rungs. An upstream success cannot certify
+the downstream call. The master prompt explains how to reopen a consumer once
+its producer is available instead of retrying an old recorded token.
+
+The MVP reviewer now receives the checked workflow and request transform as
+well as parser source, the prior research explanation, and a larger actual
+result preview (32 KB instead of 2 KB). Prior explanations and request encoding
+are supporting evidence, not permission to accept copied input fields as proof.
+Fresh browser snapshots no longer need particular cookie names to be reused.
+Expiration and clearing after real replay failures remain unchanged.
+
+The full suite ran 1,914 tests: 1,913 passed and the existing intermittent
+process-cleanup stress test failed. Its separate rerun passed all 14 tests.
+Types, lint, dependency checks, website build, and desktop/mobile inspection
+passed. New neutral tests exercise fresh producer calls and reject using a
+producer result as consumer proof. No site-specific code or prompt was added.
+
+Next validation uses a new isolated home at
+`/tmp/imprint-fresh-inputs-VYbJm1/home`, with the same exact Flights recording
+as the failed repeat. No failed run or saved discovery checkpoint is resumed.
+Flights must show meaningful completion before Hotels. Preserve each failed
+attempt and diagnose the newest evidence before making another general fix.
+Disk currently has about 2.9 GB available; monitor it without deleting user data.

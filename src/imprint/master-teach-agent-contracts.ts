@@ -174,6 +174,8 @@ const PreparedRequestComparisonSchema = strictObject({
 });
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
+  producerToolName: SemanticToolCandidateSchema.shape.toolName.optional(),
+  invocationParameters: ScalarParameterValuesSchema.optional(),
   resultTextLength: z.number().int().nonnegative().optional(),
   candidateSha256: PromptShaSchema,
   executionMechanism: utf8Text(1, 128),
@@ -232,6 +234,15 @@ export const ApiResearchInputSchema = strictObject({
    * not an arbitrary attempt count. Retained Codex turns receive only the
    * newest observation while other providers receive the factual history. */
   observations: z.array(ApiResearchObservationSchema),
+  availableProducers: z
+    .array(
+      strictObject({
+        toolName: SemanticToolCandidateSchema.shape.toolName,
+        parameters: WorkflowSchema.shape.parameters,
+        summary: Reason,
+      }),
+    )
+    .optional(),
   /** A payload-free discovery index. Exact URL/body/response evidence remains
    * absent until the researcher explicitly asks to inspect a listed seq. */
   requestCatalog: z
@@ -296,7 +307,20 @@ const ApiResearchBindingSchema = strictObject({
 });
 export const ApiResearchOutputSchema = strictObject({
   binding: ApiResearchBindingSchema,
-  action: z.enum(['catalog', 'inspect', 'inspect_result', 'test', 'proven', 'partial', 'blocked']),
+  action: z.enum([
+    'catalog',
+    'inspect',
+    'inspect_result',
+    'call_producer',
+    'test',
+    'proven',
+    'partial',
+    'blocked',
+  ]),
+  producerCall: strictObject({
+    toolName: SemanticToolCandidateSchema.shape.toolName,
+    parameters: ScalarParameterValuesSchema,
+  }).optional(),
   resultQuery: strictObject({
     observationId: PromptIdSchema,
     offset: z.number().int().nonnegative().default(0),
@@ -581,7 +605,7 @@ const ClaimSchema = strictObject({
 });
 const CompletionActualResultSchema = strictObject({
   observed: z.boolean(),
-  preview: utf8Text(0, 2_000),
+  preview: utf8Text(0, 32_000),
   shape: utf8Text(1, 512),
   count: z.number().int().nonnegative().nullable(),
   truncated: z.boolean(),
@@ -617,6 +641,9 @@ const ResultDerivationSchema = strictObject({
   artifactRef: ContentAddressedRefSchema,
   source: utf8Text(0, 16_000),
   truncated: z.boolean(),
+  requestSource: utf8Text(0, 32_000).optional(),
+  requestSourceTruncated: z.boolean().optional(),
+  researchSummary: utf8Text(0, 16_000).optional(),
 });
 export const BaselineMvpReviewInputSchema = strictObject({
   run: CurrentPlanBindingSchema,

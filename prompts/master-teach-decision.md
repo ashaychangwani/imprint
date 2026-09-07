@@ -63,6 +63,12 @@ supplied recording already makes it an explicit requirement of the core
 operation, not because two operations merely look related. At
 `research_review`, stabilize each standalone MVP call and its public parameters
 first. Use precise sibling handoffs to repair an actual partial or blocked core
+gap. A retained researcher can now `call_producer` on a current proven sibling
+request with its own chosen parameters, before any normalized tool is compiled.
+If a consumer lacks fresh continuation values and its producer is proven, send
+that consumer back to research to obtain fresh output and test the chain. Do
+not treat a failed old recorded value as evidence that the live chain is broken.
+Use precise sibling handoffs to repair an actual partial or blocked core
 call, but do not add or remap `chainEdges`, `dependsOnTools`, dependency breadth,
 or executable result paths merely to settle composition at this checkpoint.
 Focused planning will define those links after every standalone call is stable.

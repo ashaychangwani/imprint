@@ -441,6 +441,17 @@ The public teaching path is one fresh foreground controller:
    smallest useful API call. Every tool gets this narrow first pass before
    optional breadth or producer-consumer details can consume the run.
 6. Research has three factual handoffs: `proven`, `partial`, and `blocked`.
+   Researchers can invoke proven sibling requests with agent-selected parameters
+   through `call_producer`, inspect the fresh raw response, and then test their
+   consumer. This works before normalized tools exist. Producer observations are
+   labeled separately and cannot certify consumer success. Only current proven
+   siblings are offered; browser state remains separated by tool and rung.
+   MVP review includes the checked workflow and request transform, parser source,
+   the prior research explanation (labeled as such), and up to 32 KB of actual
+   result text. Truncation is explicit; request encoding alone is not evidence
+   that the server honored a setting. Cached browser snapshots no longer need
+   particular cookie names to qualify for reuse; age and actual failures still
+   determine when to refresh them.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first

@@ -6,8 +6,8 @@
  *
  * Validity window: Akamai's ak_bmsc + bm_sv expire ~2h FIXED from first page
  * load (non-sliding — activity does not extend it), so we operate well under
- * that and re-mint after 90 min (JAR_MAX_AGE_SECONDS). A jar is only reusable
- * while its `_abck` is still validated (`~0~`); a jar that has gone stale
+ * that and re-mint after 90 min (JAR_MAX_AGE_SECONDS). Cookie names do not
+ * determine whether a cached session works; a jar that has gone stale
  * self-heals via the reactive `clearJar` on a replay 401/403/428/429.
  *
  * The file holds a LIVE session credential (validated _abck + session cookies).
@@ -53,7 +53,7 @@ function jarPath(siteDir: string): string {
   return pathJoin(siteDir, JAR_FILE);
 }
 
-/** Load a cached jar, or null if absent / malformed / aged-out / not validated.
+/** Load a cached jar, or null if absent / malformed / aged-out.
  *  The cached `ua` is reused for replay verbatim; a UA drift (Chrome auto-update
  *  mid-window) is rare and self-heals reactively on a replay 403, so we do NOT
  *  launch Chrome just to gate on UA here. */
@@ -69,14 +69,8 @@ export function loadJar(siteDir: string): MintedJar | null {
       log(`cached jar in ${siteDir} is ${Math.round(ageSeconds)}s old (>= ${maxAge}s) — re-mint`);
       return null;
     }
-    // Validated = `_abck~0~` OR `bm_sv` present (the latter survives `_abck`
-    // rotating back to `~-1~`). Fall back to the abckFlag check for caches
-    // written before the `validated` field existed.
-    const validated = raw.validated ?? raw.abckFlag === '0';
-    if (!validated) {
-      log(`cached jar not validated (_abck~${raw.abckFlag}~, no bm_sv) — re-mint`);
-      return null;
-    }
+    // Cookie names cannot tell us whether an arbitrary site's session works.
+    // Reuse the scoped, unexpired snapshot; actual replay failures clear it.
     return raw as MintedJar;
   } catch {
     return null;

@@ -1322,6 +1322,9 @@ describe('prompts and pre-plan discovery', () => {
       source:
         'export function extract(raw, context) { return { applied: context.params, items: raw.items }; }',
       truncated: false,
+      requestSource: '{"workflow":{"requests":[]}}',
+      requestSourceTruncated: false,
+      researchSummary: 'A controlled input change returned different real records.',
     };
     output.evidenceRefs.push(input.resultDerivation.artifactRef);
     await requestBaselineMvpReview(input, { analyzer });
@@ -3471,7 +3474,7 @@ describe('completion history and factual pass gate', () => {
     ).toThrow('tool name mismatch');
 
     const oversized = structuredClone(at(input.toolResultEvidence, 0));
-    oversized.payload.actualResult.preview = 'x'.repeat(2_001);
+    oversized.payload.actualResult.preview = 'x'.repeat(32_001);
     rehash(oversized);
     expect(CompletionToolResultEvidenceSchema.safeParse(oversized).success).toBe(false);
   });
