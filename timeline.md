@@ -6888,3 +6888,25 @@ same-itinerary booking identity still needs proof. Its CDP test timed out after
 about a closed CDP connection; do not assume an infrastructure exemption.
 No malformed-handoff recovery was observed. Continue the retained run toward
 the 22:55 UTC assessment / 23:25 UTC hard deadline. No code or artifacts changed.
+
+
+## 2026-09-07 15:55 PDT — Flights 11 hour assessment
+
+Near the one-hour mark, all four research handoffs and focused plans are
+accepted on unchanged `43ab0c7`. The master corrected the search-to-booking
+edge from `options[0].itinerary_selection` to the planned
+`items[0].itinerary_selection`. Three earlier drafts are available; final
+verification and publication are still pending. Continue because planning has
+completed and roughly 30 minutes remain for compilation and live checks; the
+23:25 UTC hard deadline is unchanged.
+
+Booking research moved beyond the earlier position-based click candidate to a
+parameterized booking URL. Its accepted result surface is rendered booking
+content, not a captured API response or a playbook. The successful changed case
+identifies LAX–SEA on November 5, Frontier F9 1177, and displayed provider fares
+and fare attributes. Root inspection matched its exact token to the fresh
+search producer's raw response and the same enclosing itinerary record with
+those route and machine identifiers. Private source response:
+`home-11/.../get_flight_booking_options/live-results/9106c3d3c6140641c04926fa2b3289cd37ea755a76cc2772a9a2c75d2bff60aa.txt`.
+The public serialized field still needs compiler and final chain proof.
+No repeated teach or independent audit success is claimed.
