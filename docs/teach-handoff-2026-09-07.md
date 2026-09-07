@@ -1,5 +1,52 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Active continuation — 04:39 PDT
+
+The current validation worktree is
+`~/.codex/worktrees/imprint-master-v066-validation`, on
+`codex/imprint-master-v066-validation`, created from a fresh fetch of
+`origin/codex/imprint-master-v066` at `34a6235`. Implementation is still
+`60392ef`; subsequent continuation commits are documentation only. The original
+handoff below remains historical evidence, not current process state.
+
+- Fresh Flights attempt 5 is running, started **11:19:07 UTC**. PID 54983; run
+  `745495f5-6efa-42e4-be6c-3125cbc88f40`; home `home-5`, log
+  `flights-teach-5.log`, launch record `flights-teach-5-manifest.json`, all in
+  `/tmp/imprint-fresh-inputs-VYbJm1`. Do not launch a duplicate or resume an old run.
+- Same exact recording and four-operation guidance; two workers; 90-minute
+  deadline. Target check at 11:49 UTC, progress decision at 12:19 UTC, hard
+  deadline approximately 12:49 UTC.
+- Location research is proven via fetch (433 ms); search research is proven
+  via CDP API (first call including setup: 45.4 s). Search first repaired
+  missing-state failures, then escalated after a fetch response. Date-grid
+  research is inspecting evidence. Booking has not yet demonstrated fresh
+  producer-consumer execution. No independent audit or repeatability claim yet.
+- Trace collector PID 54899 deliberately uses port 6438 and writes
+  `spans-validation.jsonl`; its script/log/PID files use `collector-validation`
+  or `collect-validation` names. Old `spans.jsonl` is intact.
+- New task heartbeat `imprint-fresh-validation` monitors every five minutes.
+  Keep it active while this work continues, and stop it at actual handoff or
+  cancellation. Do not restart the original deleted monitor.
+- Disk recovered from 339 MiB to roughly 30 GiB without deletion by this task.
+  Both exact recordings and prior evidence paths were verified.
+- Latest full baseline: **1,917 tests passed, zero failed**, 6,064 assertions
+  across 96 files; lint and type checking also passed. Test log:
+  `validation-full-tests.log` in the experiment directory.
+- Historical timing/token accounting is in
+  [teach-validation-accounting-2026-09-07.md](teach-validation-accounting-2026-09-07.md).
+  Include new traces and audits as they complete; retain the cost caveats.
+
+A separate synthetic reproduction confirmed that MCP idle and timeout cleanup
+look up CDP sessions by site, although the ladder stores them by site, tool,
+and bootstrap URL. Successful pooled calls arm no idle timer, and timeout
+cleanup closes no browser; shutdown does close it. Reproduction source is
+`/tmp/imprint-fresh-inputs-VYbJm1/reproduce-mcp-pool-cleanup.ts`, run with Bun
+and the new worktree path as its argument. It executes the actual extracted
+`buildServer` body with synthetic dependencies and no live network. Runtime
+code has not been changed midway through the controlled teach. Follow up
+with a small general correction and regression coverage after completing the
+unchanged-code validation, then validate any implementation change freshly.
+
 ## Start here
 
 Continue on `codex/imprint-master-v066`. The implementation worktree on the

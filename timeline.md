@@ -6232,3 +6232,20 @@ During audit preparation, source inspection found that MCP idle/timeout
 cleanup still looks up CDP browsers by site, while the ladder stores them
 by site, tool, and bootstrap URL. Keep this as a follow-up to reproduce;
 do not change implementation halfway through the controlled teach.
+
+## 2026-09-07 04:39 PDT — Flights research progresses; cleanup defect reproduced
+
+At roughly 19 minutes, attempt 5 has proven location and search research.
+Location used fetch in 433 ms. Search first hit missing-state errors, repaired
+the request, examined a fetch response, and proved a CDP API candidate; its
+first browser call took 45.4 seconds including setup. Date-grid research is
+checking recorded evidence. The master selected exactly the requested four
+operations and explicitly made booking depend on fresh search output. Actual
+booking execution, invalid-handoff recovery, and independent audit remain due.
+
+The synthetic MCP cleanup reproduction confirmed zero idle timers armed after
+a successful tool-scoped pooled call and zero browsers closed on timeout;
+server shutdown closes it. No runtime files were changed during this teach.
+The private reproduction and active process details are recorded in the handoff.
+Validation continues under the new heartbeat, with the original deadline and
+sequential teach/audit/Hotels order. Disk is about 30 GiB free.
