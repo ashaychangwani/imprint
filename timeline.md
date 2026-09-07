@@ -6402,3 +6402,20 @@ The grid researcher proved a seven-by-seven November response, but its transform
 still reduces each advertised inclusive window to its midpoint. Compilation
 and independent audit must establish the actual supported window sizes; the
 research claim alone does not establish arbitrary ranges. Preserve that check.
+
+### 2026-09-07 13:56 UTC — Flights 6 booking research succeeds
+
+All five master-selected operations now have research proof. The fresh booking
+composite that failed through direct POST returned a 70,951-byte booking API
+response through CDP navigation. It matches Frontier F9 3406 SEA–DEN on
+November 18 and F9 4545 DEN–SEA on November 25, with Frontier and Trip.com
+providers, redirect targets, and fares including $150 Basic and $230 Economy
+Bundle. This is an API-response capture, not a DOM playbook.
+
+The successful consumer still uses the self-contained nine-string selection
+from the current next-leg producer. The master is reviewing the research
+before planning. Three drafts exist; the producer parser contracts and the
+date-grid window claim still need compilation/review and independent audit.
+This progress justifies using the remaining original deadline; no extension
+or success claim is warranted yet. The malformed-handoff catch has not been
+observed in this run.
