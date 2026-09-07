@@ -47,6 +47,33 @@ code has not been changed midway through the controlled teach. Follow up
 with a small general correction and regression coverage after completing the
 unchanged-code validation, then validate any implementation change freshly.
 
+## Prepared correction checkpoint — 05:44 PDT
+
+`fc4ed1a` is committed in the separate detached checkout
+`~/.codex/worktrees/imprint-v066-mechanics-fixes`. It is **not yet integrated**
+into the validation branch, so Flights attempt 5 still runs implementation
+`60392ef` unchanged. Preserve this commit and checkout.
+
+The correction honors an explicit bootstrap URL before resolving later
+state-dependent request URLs; the live booking researcher hit this host
+limitation in both fetch-bootstrap and CDP replay. It also fixes MCP idle and
+timeout cleanup to use tool/context pool keys, and propagates cancellation
+without starting another API rung or evicting a replacement CDP session.
+The general fixes have 1,927 passing tests, 110 focused checks, clean lint and
+type checking, a successful website build, and inspected desktop/mobile views.
+The synthetic reproductions now succeed. Private validation logs and screenshots
+use `mechanics-*` in the experiment directory; the preview was stopped.
+
+At about 84 minutes, booking has returned a **normal** blocked handoff, and
+the master requested retained follow-up research. This does not exercise the
+malformed-output catch in `60392ef`. No independent audit has run yet.
+Keep the existing hard deadline at about 12:49 UTC. After this attempt ends,
+record its exact result and usage. Audit any published output on unchanged
+code. If Flights passes, repeat Hotels on unchanged code as requested.
+When ready to validate the corrections, cherry-pick `fc4ed1a` into the validation
+branch, preserving any intervening timeline entries, and start a **fresh**
+Flights teach in a new isolated home. Do not resume attempt 5 after applying it.
+
 ## Start here
 
 Continue on `codex/imprint-master-v066`. The implementation worktree on the
