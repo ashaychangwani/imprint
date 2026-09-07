@@ -5829,3 +5829,19 @@ the repeatability experiment's home, not the installed working tool directory.
 Log: `/tmp/imprint-repeatability-P2oX4B/hotels-teach.log`. Review at one hour;
 hard limit 90 minutes. Token capture remains enabled for separate final teach
 and audit cost reporting.
+
+### September 6, 18:36 PDT — Repeatability results and cost reconciliation
+
+Hotels run `6c301179-6af2-4d3d-a842-1d6252b58382` completed in 22m 1.0s.
+Its independent audit passed all four calls and three destination/date
+parameters. This repeats the narrow Hotels MVP; Flights did not repeat its
+earlier complete success. Neither result was obtained through artifact edits.
+
+Usage accounting includes cache reads/writes, all teaching agents, and the
+interrupted Flights compiler's retained usage that its final span omitted.
+Long-input pricing adjustments are included. Estimated API-equivalent teach
+costs: Flights at least $34.83, Hotels $6.94. Audits add about $0.48 combined.
+Flights is a lower bound because a deadline-interrupted request may not emit
+final usage. Full counts, limitations, timing and sources are recorded in
+`docs/repeatability-2026-09-06.md`. Stop this experiment's monitor and local
+trace receiver now that both requested teaches and audits have finished.
