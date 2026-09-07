@@ -6794,3 +6794,20 @@ completed but semantic proof remains pending. No tools are published. The
 30-minute target is missed. Continue on unchanged de8e789 toward the 20:56 UTC
 assessment and original 21:26 hard deadline. A pooled booking request took
 266 ms but failed semantically; do not count that as usable warm latency.
+
+
+### 2026-09-07 20:59 UTC — Flights 10 hour assessment
+
+Continue within the original 21:26 UTC hard deadline. All four research
+boundaries are proven and focused planning is complete; three drafts exist,
+with nothing published yet. Search and booking now agree on a six-field scalar
+bundle assembled from the same itinerary. Booking uses a parameterized page
+navigation and captures GetBookingResults, with Frontier and Booking.com fare
+options in its successful proof. The revised boundary was revalidated.
+
+The later different-route producer call timed out, so it supplies no new proof;
+retain the earlier successful fresh producer case and require the final chain
+check. About 27 minutes remain for compilation and live verification. The
+completed independent drafts and resolved booking contract justify continuing.
+The half-hour target was missed. No code changed, no malformed-output recovery
+was exercised, and independent audit/repeatability remain due.
