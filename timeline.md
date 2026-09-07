@@ -5960,3 +5960,19 @@ request still used fixed route/date settings. No tool has been published yet.
 The removed cookie gate has not returned. The log shows actual fetch-bootstrap
 requests and reuse of a jar lacking the old marker. A warm pooled-CDP request
 completed in 1.9 seconds. Disk remains limited at about 2.4 GB; nothing deleted.
+
+## 2026-09-06 23:27 PDT — Continue at the 60-minute checkpoint
+
+Attempt 2 has a final four-tool plan in two build waves. Booking research
+repaired its first-result-only limitation: it obtained fresh search output,
+selected the second itinerary, and confirmed the different carrier/flight in
+the returned booking records. The date grid also passed research with separate
+origin and destination contrasts. The unresolved calendar-picker variant did
+not become an extra published tool.
+
+At about 61 minutes, location passed live checking and semantic review and was
+published. Search completed its live request and entered semantic review.
+Continue rather than kill: the run has moved from research into checked,
+published output and still has about 29 minutes for remaining tools and final
+review. Keep the original 90-minute deadline. This is not yet overall success;
+the fresh independent audit remains necessary. Disk is about 2.2 GB free.
