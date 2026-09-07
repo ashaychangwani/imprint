@@ -6118,3 +6118,18 @@ All 140 focused research/agent tests pass, including a prompt regression test;
 type checking and lint pass. Website build passes and desktop/mobile renders
 were inspected. README and architecture guidance match. Start a fresh Hotels
 teach with the same recording in `hotels-home-2`; preserve the failed first run.
+
+## 2026-09-07 02:30 PDT — Hotels catches ambiguity and ships a narrower MVP
+
+Fresh run `09dff4f3-0298-40b4-96d7-2a4fb8e1039f` finished one ready, zero
+failed, within about 31 minutes. Research tried four versus two adults with
+the same dates, found unchanged real results, and returned partial rather
+than claiming occupancy worked. The master requested follow-up research and
+ultimately selected destination, check-in, and check-out only. The compiler
+shipped that narrower public contract. No external steering was supplied.
+
+This run uses CDP API execution rather than the earlier plain-fetch artifact;
+it is not a playbook. The independent audit now runs in `hotels-home-2`, with
+log `hotels-audit-2.log`. Its result is pending. The narrower contract avoids
+the unsupported guest-count promise but does not prove that feature works.
+Disk remains about 2.5 GiB free.
