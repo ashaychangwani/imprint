@@ -234,22 +234,25 @@ through the selected requests in any evidence-backed order and revise your
 candidate. They are context, not an instruction to include every request in the
 final workflow.
 
-`blocked` is exceptional. It means the fixed public boundary or available
-recording evidence prevents every remaining evidence-backed candidate from
-being tested. It does not mean that your current theory needs a capability the
-workflow lacks or that a later planner must preserve your first request graph.
-An opaque or page-produced-looking field is not proven
-necessary merely because requests which omitted it or replayed it failed. Do
-not block while a coherent untried combination remains among recorded
-literals, current bootstrap/response state, generated per-call values,
-operation-specific navigation/Referer state, or evidence-backed omission.
-The exhaustive audit applies to hypotheses that this tool's current evidence
-can actually test. It does not require sweeping every transport to manufacture
-a current value that only an unfinished sibling can produce; use the bounded
-sibling-evidence handoff above instead.
+`blocked` is an advisory request for a master decision, not a claim that the
+API is impossible. Use it when a concrete gap in the selected public boundary,
+sibling output, or available evidence needs that decision. Name the missing
+value or operation, the recorded/live evidence connecting it to this request,
+and what the master must clarify or revise. Distinguish what your current
+construction needs from what every possible implementation would need.
 
-If direct API constructions fail, check the existing browser-navigation request
-before blocking or recommending playbook. A request with `mode: "navigate"`
+Raise a contract gap as soon as you can explain it from the available evidence.
+You do not have to exhaust transport or encoding permutations before asking
+the master to revise an input that cannot carry the necessary context. If a
+useful tested candidate exists, preserve it as `partial`; otherwise return
+`blocked` with the actual observations. One failed request does not establish
+that an omitted field is universally required or that API execution is
+incompatible. This does not require sweeping every transport to manufacture
+an unfinished sibling's current output; use the bounded sibling-evidence
+handoff above instead.
+
+Before concluding that API execution is incompatible, check the existing
+browser-navigation request when direct API constructions fail. A request with `mode: "navigate"`
 loads its parameterized page URL in CDP, lets the page run its own JavaScript,
 and normally returns the final rendered HTML. When the page itself must
 construct one result request, explicitly set
@@ -514,30 +517,19 @@ host will hand the master the exact smallest workflow actually proven so far,
 tested parameter values, winning rung, backend attempt facts, and redacted
 response preview.
 
-Continue while a distinct evidence-backed request hypothesis remains and the
-run deadline permits. If observations show credible rate limiting or repeated
-bot challenges, report that fact rather than hammering the site. Do not call an
-API impossible merely because one construction failed.
+Choose the next investigation in light of its likely information value and
+the remaining shared run budget. Once the evidence identifies a contract gap,
+return it for a master decision instead of spending the remaining budget on
+variations that cannot settle that gap. When you keep testing, explain what
+new observation would distinguish the competing constructions. If observations
+show credible rate limiting or repeated bot challenges, report that fact.
 
-Before returning `blocked`, audit every prior candidate and state in `reason`:
-the exact claimed missing plan fact, what factual comparison isolated it as
-necessary, which materially different constructions were tested, and why the
-strongest remaining construction cannot be expressed by the current workflow.
-If no comparison isolated the claimed field, or if a strongest remaining
-construction is expressible, return `test` instead.
-This audit is bounded by the evidence currently available to this tool. A
-precise request for an unfinished sibling's current output is a plan fact, not
-an instruction to keep testing stale substitutes after the one coherent
-diagnostic above.
-
-The input may contain `blockReview.proposedReason`. That means your previous
-`blocked` answer has been returned to this same retained conversation for one
-final self-review. Re-read your own candidates and observations. Build a small
-matrix of the meaningful choices you changed and look specifically for
-untested coherent combinations across them. Do not repeat the proposed blocker
-unless that audit still leaves no expressible evidence-backed test. If it finds
-one, return `test` with that candidate. The host does not decide which
-hypothesis is correct; this pause exists so you validate your own conclusion.
+The input may contain `blockReview.proposedReason`. Recheck that your advisory
+handoff names an actual missing plan fact and accurately describes prior
+observations. If a small distinguishing test would resolve the uncertainty
+within the current boundary, you may choose it. Otherwise confirm the precise
+question for the master. This review does not require an exhaustive matrix of
+all coherent combinations or prove that every API route is impossible.
 
 Output shape:
 

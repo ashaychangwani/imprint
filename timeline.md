@@ -6529,3 +6529,31 @@ complete plan, with about 27 minutes left for further research, planning,
 compilation, and live verification. Continue because the new dependency
 boundary is meaningful progress, but retain the hard 16:14:54 UTC deadline.
 There is no published result or independent audit for attempt 7 yet.
+
+### 2026-09-07 16:22 UTC — Flights 7 failed; simplify contract handoffs
+
+Attempt 7 ended at its original deadline after 90.0002 minutes, before final
+planning or publication. All research eventually reported proof, but the master
+then requested the missing search-context producer mapping. The terminal reports
+zero ready/four non-ready although five operations had been researched after
+a split; retain that count discrepancy. Nothing was emitted to audit. No
+malformed researcher output exercised the original recovery catch.
+
+Reported usage: 15,580,269 input tokens including 12,171,520 cached reads,
+150,435 output, zero reported writes, and one interrupted semantic call without
+usage. Base API estimate $21.51; cumulative accounted total $122.02.
+
+The failure sequence exposed conflicting guidance: researchers were required to
+exhaust coherent constructions before returning a contract gap, while the master
+deferred composition and revised consumer inputs before the producer promise.
+Simplified those prompts. A concrete gap can return early for the master's
+judgment without claiming the API is impossible. The master compares observed
+journeys for a narrow MVP and coordinates affected input/output contracts in
+one decision. Fresh execution, exact tested-candidate proof, retained history,
+and final independent verification remain required. Runtime code is unchanged.
+
+Validation: 182 focused agent/research/controller tests pass; the final wording
+adjustment also passes 126 agent packaging tests. Lint passes. Website build
+and desktop/mobile visual checks pass with no page errors or overflow; the
+existing bundle warning remains. Full runtime suite last passed 1,929 tests
+on `6ca89ba`. Preview PID 71785 was stopped. The next validation must be fresh.

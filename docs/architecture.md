@@ -452,8 +452,14 @@ The public teaching path is one fresh foreground controller:
    credible discovered operation and explain its decisions.
 5. A retained focused researcher for each selected tool first proves the
    smallest useful API call. Every tool gets this narrow first pass before
-   optional breadth or producer-consumer details can consume the run.
-6. Research has three factual handoffs: `proven`, `partial`, and `blocked`.
+   optional breadth. Required producer-consumer contracts are coordinated as
+   soon as research identifies their inputs and outputs.
+6. Research has three handoffs: `proven`, `partial`, and `blocked`. A blocked
+   handoff may request a master decision about a concrete contract gap; it does
+   not claim every API construction is impossible. Researchers need not exhaust
+   transport permutations before reporting that gap. The master revises affected
+   producer and consumer contracts together and orders their proof causally.
+   Partial/proven candidates still require their exact successful observations.
    Researchers can invoke proven sibling requests with agent-selected parameters
    through `call_producer`, inspect the fresh raw response, and then test their
    consumer. This works before normalized tools exist. Producer observations are

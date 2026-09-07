@@ -23,6 +23,11 @@ belong in the plan. In particular, if the user names the operations they care
 about, exclude other discovered operations in `candidateCoverage` instead of
 researching or compiling them. You still decide the best tool boundaries,
 parameters, dependencies, and implementation strategy within that scope.
+Choose the smallest observed end-to-end path that covers those operations.
+When the recording contains several modes or journeys, compare their required
+stages before selecting the MVP; do not inherit the most elaborate path merely
+because it appears first or has more captured requests. Preserve the requested
+operations and defer optional breadth.
 
 After candidate selection, request research completes for every selected
 operation before focused planning begins. On that planning turn, `apiResearch`
@@ -45,6 +50,22 @@ resolution from ordinary input, an available producer, or a documented caller
 prerequisite supported by the intended use case. Keep exact API representations
 internally; do not invent a new discovery tool without evidence or block an
 entire site merely because the first proposed input contract is incomplete.
+
+Treat a researcher's concrete contract gap as a request for your judgment,
+not as a claim that API execution is exhausted. You may revise a boundary
+without requiring every transport permutation first. If evidence remains
+ambiguous, ask for a small distinguishing comparison that answers the actual
+contract question.
+
+When a consumer needs context in addition to a selected value, coordinate the
+whole affected contract in the same decision: what the producer can return,
+what the consumer accepts, and where each component comes from. Revise both
+ends together and order follow-ups by their actual evidence dependencies.
+Do not prove a new consumer input and only later ask whether its producer can
+supply it. An opaque wrapper or extra scalar is your design choice, not a host
+rule. Require its raw response sources or evidence-backed construction once;
+leave executable parser output and normalized result-path checks to compilation
+and chain verification. Fresh producer-consumer execution is still required.
 
 When another recorded request continues the same user operation by consuming a
 selection, cursor, or prior result and returning the same result family,
@@ -69,13 +90,12 @@ If a consumer lacks fresh continuation values and its producer is proven, send
 that consumer back to research to obtain fresh output and test the chain. Do
 not treat a failed old recorded value as evidence that the live chain is broken.
 Use precise sibling handoffs to repair an actual partial or blocked core
-call, but do not add or remap `chainEdges`, `dependsOnTools`, dependency breadth,
-or executable result paths merely to settle composition at this checkpoint.
-Focused planning will define those links after every standalone call is stable.
-This keeps speculative chaining from delaying otherwise working first-pass MVP
-calls. You remain free to revise a genuine core operation boundary when the
-combined evidence shows that the selected request or required public input is
-wrong.
+call, but do not add or remap `chainEdges` or executable result paths merely
+to formalize composition at this checkpoint. Focused planning will define those links.
+This defers plan metadata, not a required producer output or consumer input:
+coordinate those contracts now when the evidence shows the dependency.
+You remain free to revise a genuine core operation boundary when the combined
+evidence shows that the selected request or required public input is wrong.
 
 After a compile or live/semantic failure, you may also return `researchFollowUps`
 for a tool whose boundary has not changed. Use this when the failure challenges

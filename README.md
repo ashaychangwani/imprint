@@ -177,6 +177,10 @@ breadth can wait, but mislabeled data is a repair, not polish.
 If the Codex child reports missing stdin despite a non-empty prompt, Imprint
 retries that exact delivery once on the same conversation and deadline.
 
+Researchers can return a concrete input or dependency gap for a master decision
+without exhausting transport permutations. The master coordinates affected
+producer outputs and consumer inputs together; fresh live proof is still required.
+
 Semantic agents receive the current shared deadline and remaining time on each
 turn, including output repairs, so they can budget for compilation and live
 checks. Exhausting the run deadline is reported as a failed run; provider
