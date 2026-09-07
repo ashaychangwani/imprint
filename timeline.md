@@ -6249,3 +6249,25 @@ server shutdown closes it. No runtime files were changed during this teach.
 The private reproduction and active process details are recorded in the handoff.
 Validation continues under the new heartbeat, with the original deadline and
 sequential teach/audit/Hotels order. Disk is about 30 GiB free.
+
+## 2026-09-07 04:53 PDT — Thirty-minute target missed; fresh booking input verified
+
+Flights attempt 5 is still researching at about 33 minutes, so it has missed
+the 30-minute target. Continue within the original deadline: researchers are
+using actual failures to revise their requests. The 60-minute decision remains
+at 12:19 UTC and the hard deadline at approximately 12:49 UTC.
+
+Booking called the current search candidate for LAX to JFK on November 12.
+Inspection confirmed that the 108-character selection token used in both
+booking test candidates occurs in that fresh producer result, in the JetBlue
+B6 1024 row with matching airports and date. The private producer observation
+is `e34cbcbef3ea77262752516374bae6c0bf2bb9de3d09b9fe498cba4c0938bba6`.
+No live token was copied into this repository. This establishes fresh input
+use, but booking still returns HTTP 400 across the tested API rungs.
+
+Date-grid research distinguished protocol-error responses from a navigation
+selector timeout, inspected the rendered page, and found that its own encoded
+URL omitted/misassigned protobuf tags. It is testing a corrected request.
+These are real request-construction failures; do not waive them as transport
+or provider capacity problems. No malformed research handoff has reached the
+master yet in this attempt, and no tools have passed independent audit.
