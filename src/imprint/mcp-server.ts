@@ -18,9 +18,9 @@ import {
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
 import { resolveLadder, runWithLadder } from './backend-ladder.ts';
-import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { TimeoutError, withTimeoutCleanup } from './concurrency.ts';
 import { createLog } from './log.ts';
+import { McpCdpSessions } from './mcp-cdp-sessions.ts';
 import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCacheStatus, persistRuntimeBackendsCache } from './probe-backends.ts';
 import { checkSiteCredentialsReady } from './runtime.ts';
@@ -221,26 +221,18 @@ function buildServer(
   // Per-site stealth-fetch cache so the ~12s bootstrap runs once per site.
   const stealthCache = new Map<string, StealthFetch>();
 
-  // Per-site CDP browser pool: cdp-replay stores its live Chrome here after
-  // the first successful call so subsequent calls reuse it (~2-5s vs ~33s).
-  const cdpPool = new Map<string, CdpBrowserFetch>();
-  const cdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  const cdpSessions = new McpCdpSessions();
+  const cdpPool = cdpSessions.pool;
   const authContinuations = new AuthContinuationStore();
-  const CDP_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 
   // Per-tool memo of the winning backend for THIS server session. After the
   // first call discovers the right rung, later calls skip the doomed early ones
-  // (e.g. southwest's ~80s fetch-bootstrap FORBIDDEN before cdp-replay wins). Its
-  // lifetime is tied to `cdpPool`: the memoized cdp-replay is only cheap while
-  // its Chrome is pooled, so a site's memo is evicted when that pool entry is
-  // idle-closed (below) — otherwise the next call would start at a now-cold
-  // cdp-replay and re-pay the ~33s relaunch.
-  const winnerCache = new Map<string, ConcreteBackend>();
+  // Its lifetime follows that tool's CDP sessions: idle/timeout cleanup clears
+  // only the affected tool's memo.
+  const winnerCache = cdpSessions.winners;
 
-  // Browser-backed rungs share per-site state (CDP page/session, stealth token,
-  // winner memo, and backend cache). Parallel MCP calls can race that state and
-  // make Google Flights return fast empty result sets. Keep same-site execution
-  // sequential while allowing unrelated sites to proceed independently.
+  // Keep same-site calls sequential so concurrent calls cannot race a tool's
+  // browser, winner memo, or backend cache. Unrelated sites remain independent.
   const siteExecutionQueues = new Map<string, Promise<void>>();
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -316,10 +308,13 @@ function buildServer(
         }
 
         const ladder = resolveLadder('auto', tool.preferredOrder);
+        cdpSessions.beginCall(tool.site, tool.workflow.toolName);
+        const execution = new AbortController();
         const run = runWithLadder(ladder, tool, args, assetRoot, stealthCache, {
           cdpPool,
           winnerCache,
           initialState,
+          signal: execution.signal,
         });
         const auditDeadlineMs = auditToolDeadlineMs();
         let result: ToolResult;
@@ -332,14 +327,8 @@ function buildServer(
                 auditDeadlineMs,
                 `${tool.workflow.toolName} audit MCP call`,
                 () => {
-                  const cf = cdpPool.get(tool.site);
-                  if (cf) {
-                    cdpPool.delete(tool.site);
-                    cf.close().catch(() => {});
-                  }
-                  for (const key of winnerCache.keys()) {
-                    if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
-                  }
+                  execution.abort();
+                  void cdpSessions.closeTool(tool.site, tool.workflow.toolName);
                 },
               )
             : await run;
@@ -355,27 +344,8 @@ function buildServer(
             error: 'NETWORK',
             message: `${tool.workflow.toolName} exceeded the audit MCP internal deadline after ${Math.round((auditDeadlineMs ?? 0) / 1000)}s`,
           };
-        }
-        // Reset the idle timer for this site's pooled Chrome.
-        if (result.ok && usedBackend === 'cdp-replay' && cdpPool.has(tool.site)) {
-          const prev = cdpIdleTimers.get(tool.site);
-          if (prev) clearTimeout(prev);
-          const timer = setTimeout(() => {
-            const cf = cdpPool.get(tool.site);
-            if (cf) {
-              log(`closing idle CDP session for ${tool.site}`);
-              cf.close().catch(() => {});
-              cdpPool.delete(tool.site);
-              cdpIdleTimers.delete(tool.site);
-              // Drop this site's winner memo too: a memoized cdp-replay would now
-              // point at a closed Chrome and re-pay the cold relaunch.
-              for (const key of winnerCache.keys()) {
-                if (key.startsWith(`${tool.site}:`)) winnerCache.delete(key);
-              }
-            }
-          }, CDP_IDLE_TIMEOUT_MS);
-          timer.unref();
-          cdpIdleTimers.set(tool.site, timer);
+        } finally {
+          cdpSessions.finishCall(tool.site, tool.workflow.toolName);
         }
         if (!result.ok) {
           const continuationToken =
@@ -417,14 +387,7 @@ function buildServer(
   });
 
   async function closeCdpPool(): Promise<void> {
-    for (const [site, cf] of cdpPool) {
-      log(`shutdown: closing CDP session for ${site}`);
-      await cf.close().catch(() => {});
-    }
-    cdpPool.clear();
-    for (const timer of cdpIdleTimers.values()) clearTimeout(timer);
-    cdpIdleTimers.clear();
-    winnerCache.clear();
+    await cdpSessions.closeAll();
     authContinuations.clear();
   }
 

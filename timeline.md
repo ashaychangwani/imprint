@@ -6305,3 +6305,29 @@ are preserved. Do not attribute them to provider capacity. The hard deadline
 is still approximately 12:49 UTC; no extension was made. Booking correctness,
 malformed-handoff recovery, independent audit, and the grid-width contract
 remain to be established.
+
+## 2026-09-07 05:42 PDT — Browser mechanics fixes prepared in isolation
+
+The unchanged Flights attempt is still active. In the separate detached
+checkout `~/.codex/worktrees/imprint-v066-mechanics-fixes`, corrected two
+reproduced mechanical defects without changing the running implementation.
+
+An explicit bootstrap URL now resolves before later request URLs that need
+its captured state. The live booking researcher had hit this circular
+resolution in both browser-backed rungs. Synthetic regression tests verify
+that both rungs reach capture and pass the captured state into execution.
+MCP browser lifecycle now uses the ladder's site/tool/bootstrap-context keys
+for idle and timeout cleanup, preserving sibling tools. Timeout cancellation
+reaches API execution and prevents fallback after cancellation; late cancelled
+setup cannot evict a replacement session. No site-specific strategy was added.
+
+The original synthetic reproductions now show one idle timer armed, one
+browser closed by timeout cleanup, and the declared bootstrap origin resolved.
+All 1,927 tests pass (6,093 assertions, 97 files, 94.56 s), plus lint and type
+checking. The first added cancellation test deadlocked in its expectation
+setup; those task-owned test processes were stopped and their logs preserved.
+After correcting the test harness, 110 focused tests and the full suite pass.
+Website build and desktop/mobile checks pass, with no page errors or horizontal
+overflow. The temporary preview was stopped. Private evidence uses the
+`mechanics-*` prefix in the experiment directory. These changes still require
+a fresh teach after integration; do not resume attempt 5 on corrected code.

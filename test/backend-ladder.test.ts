@@ -175,6 +175,28 @@ describe('resolveLadder', () => {
 });
 
 describe('runWithLadder — single-rung explicit', () => {
+  it('passes cancellation into fetch and never escalates or memoizes a cancelled call', async () => {
+    const controller = new AbortController();
+    const reason = new Error('fixture deadline');
+    const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
+    const tool = makeFakeTool('fixture-cancel', behavior);
+    tool.toolFn = async (_params, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      controller.abort(reason);
+      return { ok: true, data: { items: ['late fixture result'] } };
+    };
+    const winners = new Map<string, ConcreteBackend>();
+
+    await expect(
+      runWithLadder(['fetch', 'stealth-fetch'], tool, {}, root, new Map(), {
+        signal: controller.signal,
+        winnerCache: winners,
+      }),
+    ).rejects.toBe(reason);
+    expect(winners.size).toBe(0);
+    expect(behavior.calls.stealth).toBe(0);
+  });
+
   it('never executes the playbook rung for authenticate workflows', async () => {
     const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
     const tool = makeFakeTool('auth-fixture', behavior);
@@ -1951,6 +1973,106 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     );
   });
 
+  it('cancels pending CDP setup without executing requests or evicting a replacement session', async () => {
+    let start!: () => void;
+    let finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let closed = 0;
+    let calls = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => {
+        start();
+        await pending;
+        return defaultedJar;
+      },
+      close: async () => {
+        closed++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('fixture', () => {
+      calls++;
+      return { ok: true, data: {} };
+    });
+    const controller = new AbortController();
+    const reason = new Error('fixture deadline');
+    const cdpPool = new Map();
+    const running = runWithLadder(
+      ['cdp-replay', 'fetch'],
+      tool,
+      { origin: 'fixture' },
+      root,
+      new Map(),
+      {
+        cdpPool,
+        signal: controller.signal,
+      },
+    );
+    const outcome = running.catch((error) => error);
+    await started;
+    const key = cdpReplayPoolKey(
+      'fixture',
+      'tool_fixture',
+      'https://fixture.example.com/search?origin=fixture&returnDate=&adults=1',
+    );
+    const replacement = { ...cdpPool.get(key), close: async () => {} };
+    cdpPool.set(key, replacement);
+    controller.abort(reason);
+    finish();
+    expect(await outcome).toBe(reason);
+    expect(calls).toBe(0);
+    expect(closed).toBe(1);
+    expect(cdpPool.get(key)).toBe(replacement);
+  });
+
+  for (const backend of ['fetch-bootstrap', 'cdp-replay'] as const) {
+    it(`${backend} captures bootstrap state before resolving the API request URL`, async () => {
+      const jar = { ...defaultedJar, html: '<div data-session="fixture-session"></div>' };
+      __setCdpJarMinterForTest(async () => jar);
+      __setCdpBrowserFetchFactoryForTest(() => ({
+        fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => jar,
+        close: async () => {},
+      }));
+      let captured: unknown;
+      const tool = defaultedBootstrapTool('fixture', (_params, opts) => {
+        captured = (opts.initialState as Record<string, unknown>)?.session_id;
+        return { ok: true, data: { items: ['fixture-item'] } };
+      });
+      tool.workflow.requests = [
+        {
+          method: 'GET',
+          url: 'https://fixture.example.com/items?session=${state.session_id}',
+          headers: {},
+        },
+      ];
+      tool.workflow.bootstrap = {
+        url: 'https://fixture.example.com/start',
+        captures: [
+          {
+            source: 'html_regex',
+            name: 'session_id',
+            pattern: 'data-session="([^"]+)"',
+            group: 1,
+            required: true,
+            capability: 'browser_bootstrap',
+          },
+        ],
+      };
+
+      const result = await runWithLadder([backend], tool, {}, root, new Map());
+      expect(result.result.ok).toBe(true);
+      expect(captured).toBe('fixture-session');
+    });
+  }
+
   it('uses workflow defaults before fetch-bootstrap substitutes bootstrap.url', async () => {
     let seenBootstrapUrl: string | undefined;
     let seenParams: Record<string, unknown> | undefined;
@@ -2936,5 +3058,27 @@ describe('pickBaseUrl', () => {
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
+  });
+
+  it('honors explicit bootstrap before resolving state-dependent requests or Referers', () => {
+    const tool = toolWith([
+      {
+        method: 'GET',
+        url: 'https://api.example.com/items?session=${state.session_id}',
+        headers: { Referer: 'https://unrelated.example.com/' },
+      },
+    ]);
+    tool.workflow.parameters = [
+      { name: 'page', type: 'string', description: 'Bootstrap page.', default: 'start' },
+    ];
+    tool.workflow.bootstrap = { url: 'https://app.example.com/${param.page}' };
+
+    expect(pickBaseUrl(tool)).toBe('https://app.example.com');
+  });
+
+  it('does not silently replace an unresolved explicit bootstrap with a request origin', () => {
+    const tool = toolWith([{ method: 'GET', url: 'https://api.example.com/items' }]);
+    tool.workflow.bootstrap = { url: '${param.bootstrap_url}' };
+    expect(() => pickBaseUrl(tool)).toThrow();
   });
 });

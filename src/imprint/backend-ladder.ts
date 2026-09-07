@@ -33,6 +33,7 @@ import {
   seedJarFromRecording,
 } from './cdp-jar-cache.ts';
 import { proxyUrl } from './chromium.ts';
+import { abortSignalError } from './concurrency.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
@@ -404,6 +405,7 @@ export async function runWithLadder(
   let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
   for (const backend of effectiveLadder) {
+    if (options?.signal?.aborted) throw abortSignalError(options.signal);
     if (skipUntilBackend && backend !== skipUntilBackend) continue;
     if (skipUntilBackend === backend) skipUntilBackend = null;
 
@@ -438,6 +440,7 @@ export async function runWithLadder(
           if (proxyFetch) fetchOpts.fetchImpl = proxyFetch;
           if (options?.initialState) fetchOpts.initialState = options.initialState;
           if (options?.credentials) fetchOpts.credentials = options.credentials;
+          if (options?.signal) fetchOpts.signal = options.signal;
           if (options?.onResponse) fetchOpts.onResponse = onResponse;
           if (options?.onPreparedRequest) fetchOpts.onPreparedRequest = onPreparedRequest;
           result = await tool.toolFn(params, fetchOpts);
@@ -451,6 +454,7 @@ export async function runWithLadder(
             options?.credentials,
             options?.onResponse ? onResponse : undefined,
             options?.onPreparedRequest ? onPreparedRequest : undefined,
+            options?.signal,
           );
           break;
         case 'cdp-replay':
@@ -483,10 +487,12 @@ export async function runWithLadder(
             options?.initialState || bootstrapState
               ? { ...options?.initialState, ...bootstrapState }
               : undefined;
+          if (options?.signal?.aborted) throw abortSignalError(options.signal);
           result = await tool.toolFn(paramsWithDefaults, {
             fetchImpl: sf.fetchImpl,
             initialState,
             credentials: options?.credentials,
+            signal: options?.signal,
             ...(options?.onResponse ? { onResponse } : {}),
             ...(options?.onPreparedRequest ? { onPreparedRequest } : {}),
           });
@@ -508,9 +514,11 @@ export async function runWithLadder(
         }
       }
     } catch (err) {
+      if (options?.signal?.aborted) throw abortSignalError(options.signal);
       const msg = err instanceof Error ? err.message : String(err);
       result = { ok: false, error: 'UNKNOWN', message: `${backend} threw: ${msg}` };
     }
+    if (options?.signal?.aborted) throw abortSignalError(options.signal);
     const durationMs = Date.now() - t0;
     lastResult = result;
     lastResultBackend = backend;
@@ -913,6 +921,7 @@ async function runFetchBootstrap(
   credentialOverride?: CredentialStore,
   onResponse?: (observation: ResponseObservation) => void,
   onPreparedRequest?: (observation: PreparedRequestObservation) => void,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
@@ -941,6 +950,7 @@ async function runFetchBootstrap(
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, cacheDir, recordingDir, attempt > 0);
+    if (signal?.aborted) throw abortSignalError(signal);
     if (!jar) {
       // Couldn't even launch the bootstrap browser → let the ladder escalate.
       const stateMissing = bootstrapFailureStateMissingResult(
@@ -990,10 +1000,12 @@ async function runFetchBootstrap(
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: makeJarUaFetch(jar.ua),
+      signal,
       ...(onResponse ? { onResponse } : {}),
       ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
+    if (signal?.aborted) throw abortSignalError(signal);
     if (result.ok) return result;
     if (attempt === 0 && jarLikelyStale(result)) {
       log('fetch-bootstrap replay was rejected (403/auth) — clearing jar and re-minting once');
@@ -1112,6 +1124,7 @@ async function runCdpReplay(
 
   try {
     const jar = await cf.mintJar();
+    if (signal?.aborted) throw abortSignalError(signal);
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
       cookies: [
@@ -1156,6 +1169,7 @@ async function runCdpReplay(
       ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
+    if (signal?.aborted) throw abortSignalError(signal);
     if (result.ok) {
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
@@ -1207,11 +1221,12 @@ async function runCdpReplay(
     return result;
   } catch (err) {
     // Session is dead — evict from pool so the next call creates a fresh one.
-    if (cdpPool) {
+    if (cdpPool?.get(poolKey) === cf) {
       cdpPool.delete(poolKey);
       log('cdp-replay: evicted dead session from pool');
     }
     await cf.close();
+    if (signal?.aborted) throw abortSignalError(signal);
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: 'NETWORK', message: `cdp-replay failed: ${msg}` };
   }
@@ -1503,15 +1518,9 @@ async function ensureStealthFetch(
   return sf;
 }
 
-/** Pick the URL to navigate when bootstrapping an anti-bot session.
- *  Akamai binds sensor tokens to the origin+path the browser navigated
- *  to, so we need an HTML page — not a JSON API endpoint.
- *
- *  Heuristic: skip leading requests whose path looks like a raw data
- *  endpoint (.json, .xml, /api/, /version) — those return JSON/XML
- *  without rendering an HTML page, so the anti-bot sensor JS never
- *  fires and the _abck cookie stays unvalidated. Fall back to
- *  requests[0] if every request looks like an API call. */
+/** Resolve the declared bootstrap origin before inspecting later request URLs.
+ * Those requests may depend on state that the bootstrap has yet to capture.
+ * Without an explicit bootstrap, retain the Referer/first-request fallback. */
 export function pickBaseUrl(
   tool: ResolvedTool,
   params: Record<string, string | number | boolean> = {},
@@ -1524,11 +1533,22 @@ export function pickBaseUrl(
     );
   }
 
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  if (tool.workflow.bootstrap) {
+    const url = substituteString(
+      tool.workflow.bootstrap.url,
+      paramsWithDefaults,
+      credentials,
+      [],
+      'url',
+    );
+    return new URL(url).origin;
+  }
+
   // Prefer the first request whose Referer is an HTML page — the Referer
   // is the page the user was on when the API call fired, so it's the
   // correct bootstrap target. Referer is set by the browser and always
   // points to a real navigable page.
-  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   for (const req of requests) {
     const referer = req.headers?.Referer ?? req.headers?.referer;
     if (referer) {

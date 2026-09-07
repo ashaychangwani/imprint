@@ -125,6 +125,9 @@ as proof. Uncertain mappings go back to the master for research or a narrower MV
 Invalid research handoffs also return to the master with their actual test
 history, rather than ending the whole teach or counting as an API failure.
 Browser snapshots are reused by tool and rung without cookie-name requirements.
+An explicit bootstrap URL runs before resolving request URLs that need its
+captured state. MCP closes an idle or timed-out tool's CDP sessions without
+closing another tool's browser, and a cancelled call does not start another rung.
 Fetch-bootstrap tries the API request before deciding whether to escalate; a
 missing cookie marker is not reported as an HTTP failure.
 Rewording auth or token notes reuses that proof; the master explicitly requests
