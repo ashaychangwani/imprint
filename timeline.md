@@ -6006,3 +6006,9 @@ The isolated example.com recorder test passed on rerun. Types, lint, dependency
 checks, website build, and desktop/mobile inspection passed. This is an evidence
 delivery fix, not a waiver of the semantic review. The next fresh attempt keeps
 the same recording and scope in a new isolated home.
+
+Checkpoint `6b7d30c`. Fresh Flights attempt 3 started at about 23:49 PDT
+(06:49 UTC September 7), PID 42062, with home
+`/tmp/imprint-fresh-inputs-VYbJm1/home-3` and log `flights-teach-3.log` in the
+same parent. The monitor follows this new attempt. No previous discovery,
+compiled tool, example, or agent conversation was supplied.
