@@ -7443,3 +7443,22 @@ A pooled grid transport completed in 2.826 seconds; independent cold/warm
 measurement remains due. Continue unchanged on fa7a627 to the 09:15:51 UTC
 assessment and 09:45:51 hard deadline. Disk 20.04 GiB. No actual capacity retry
 or malformed-handoff catch observed yet.
+
+
+## 2026-09-08 02:19 PDT — Flights 17 one-hour assessment
+
+At minute 63, booking returned a useful partial handoff after ten observations.
+A page-owned selection returned United UA2403 LAX–LAS October 22, a Basic
+Economy fare, baggage information and a booking handoff link. The researcher
+explicitly withheld full proof because the successful workflow clicked a fixed
+first result instead of using the supplied selected_flights identity. It asked
+for a dynamic selection test of a non-first flight. This is the demonstrated
+ignored-input gap that should reach the master before compilation.
+
+The master returned that precise gap to the retained researcher, which called
+fresh search again in 44.608 seconds. Location, search and API grid research
+remain proven; no tools published yet. The working booking path and focused
+identity repair justify continuing within the existing deadline, with about
+26 minutes remaining until 09:45:51 UTC. No implementation change, full chain
+pass, independent audit, capacity retry, or malformed-handoff catch. This was
+an ordinary valid partial handoff, not malformed-report recovery. Disk19.86 GiB.
