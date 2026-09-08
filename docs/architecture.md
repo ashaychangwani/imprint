@@ -486,6 +486,12 @@ The public teaching path is one fresh foreground controller:
    that request's source. The reviewer compares these facts with the current
    implementation; prior summaries alone are not comparative proof. Raw test
    history remains available in the research artifact across follow-ups.
+   For rendered extraction after actions, researchers establish completion of
+   the current collection and compilers preserve that condition. Updated
+   controls do not prove that records refreshed; hidden stale HTML during
+   loading remains a missing-proof or failure case for semantic review.
+   Agents choose the evidence-backed condition using existing navigation
+   mechanics; the runtime adds no fixed delay or site-specific classifier.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first

@@ -276,6 +276,14 @@ merely because a recorded header looks opaque.
 When the selected response is the only completion requirement, omit
 `waitUntil`; declare lifecycle, selector, or action waits only when research
 actually requires them after navigation.
+For rendered-document extraction after an action, an updated control proves
+only that control's state; it does not prove the result collection finished
+refreshing. Use an observed completion condition for the resulting collection
+and preserve the evidence tying those records to the current action. HTML may
+still contain hidden or previous results while the visible page is loading.
+Do not treat those records plus a changed widget as a proven parameter effect.
+If completion or result scope is uncertain, return that precise missing proof
+for a focused follow-up or a narrower MVP. Do not substitute a guessed delay.
 
 Keep its two recorded origins exact: the workflow request's top-level
 `recordingRequestSeq` is the document navigation actually sent, while

@@ -62,6 +62,12 @@ this build's live result. Use it to understand prior experiments without treatin
 its claims as independently verified facts. Do not demand that an API repeat
 every input in each result; distinguish missing proof from an observed mismatch.
 You may cite `resultDerivation.buildRef` for the checked request construction.
+For rendered results after an action, an updated control does not alone
+establish that the returned collection has refreshed. When the supplied
+evidence shows loading state or stale records, report that concrete missing
+link or mismatch; plausible records and a current widget value do not resolve
+it. Use observed completion evidence when supplied, without requiring a new
+comparison for every ordinary result or inventing a loading failure.
 
 When present, `resultDerivation.researchEvidence` supplies actual prior live
 observations, their invocation parameters, and the research request source.

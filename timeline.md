@@ -7573,7 +7573,7 @@ work. Cumulative through this teach is$317.40 and1,557.38 minutes across
 21 teaches/14 audits. Audit4 is pending. No implementation change, push or MR.
 
 
-## 2026-09-08 15:05 PDT — Hotels audit fails; stale results reproduced
+## 2026-09-08 15:03 PDT — Hotels audit fails; stale results reproduced
 
 Independent Hotels audit 4 failed 9/10 units: six correct calls, three working
 parameters, and adult count graded no-op after two/four/six-adult comparisons.
@@ -7596,3 +7596,22 @@ $317.67 base API estimate. Missing usage and cache-write caveats remain.
 No teach or audit is active. Implementation remains fa7a627; next inspect
 existing guidance and make a small general completion-evidence correction
 before fresh validation. No push, MR, deletion or resumed failed teach.
+
+
+## 2026-09-08 15:05 PDT — Require completed rendered results after control changes
+
+General research guidance now asks for observed collection completion after an
+action, rather than treating a changed widget plus plausible old HTML as proof.
+Compiler guidance preserves that researched condition and avoids stale/hidden
+records during loading. Baseline review distinguishes actual stale-capture
+evidence from speculation and does not require a new sweep of every parameter.
+Agents still choose the condition through existing navigation mechanics; there
+is no runtime change, fixed sleep or site-specific instruction. README,
+architecture and website match. No previous artifact is fed to fresh teachers.
+
+198 focused tests and 1,079 assertions passed in 1.52 seconds; lint and type
+checking passed. The first web command lacked bunx on PATH; its log remains.
+After setting the existing Bun PATH, build passed with the existing bundle-size
+warning. Desktop/mobile checks show no page errors or overflow; changed copy
+was visually inspected. Full-suite baseline remains the 1,940-test c61dd1e run.
+Fresh Flights validation follows this prompt change; no failed run resumes.
