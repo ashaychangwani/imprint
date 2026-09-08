@@ -7535,3 +7535,18 @@ Accounting through audit17b is $310.08, 1,525.25 elapsed minutes across twenty
 teaches/fourteen audits, including the sleep-interrupted first audit17. Active
 Hotels4 excluded until completion. Keep the failed evidence and distinct cold/
 warm timing obligation. No implementation change, push, or MR.
+
+
+## 2026-09-08 14:28 PDT — Hotels 4 rejects unproven adult-count support
+
+At minute 19, the first compiled Hotels check returned credible Seattle hotel
+records and dates, but requested three adults while the observed page context
+reported two. MVP review rejected that mismatch and returned it to the master;
+no tool is published. Research had only exercised two adults, the default, and
+its earlier proven label did not establish a changed count. This retains the
+known guest-count limitation instead of treating a populated result as a pass.
+
+The construction navigates to rendered hotel results through CDP; this is not
+an API response capture. The failed semantic check followed a 34.886-second
+transport completion. The master is revising the plan on unchanged fa7a627.
+Target 21:38:17, assess 22:08:17, hard deadline 22:38:17 UTC remain unchanged.
