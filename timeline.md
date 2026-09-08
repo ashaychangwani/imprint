@@ -7423,3 +7423,23 @@ combined recording and four-operation guidance; no old artifacts supplied.
 Prior teach/audit processes ended, tests and preview stopped, git was clean,
 collector 54899 healthy, disk 21.25 GiB. Target 08:45:51, assess 09:15:51, hard
 deadline 09:45:51 UTC. Existing heartbeat now follows this run. No push or MR.
+
+
+## 2026-09-08 01:50 PDT — Flights 17 target checkpoint
+
+At minute 34, location, search and date-grid research are proven; booking is
+still testing and no tools are published. Search captured actual shopping API
+records for LAX–LAS October 22 with observed segment dates and airports. Grid
+now captures CalendarGrid API data rather than relying on rendered fare cells.
+Its nine observations include separate destination and origin comparisons:
+SFO–LAX to SFO–JFK with October 19/27 fixed changed the selected price 65 to 363;
+SFO–JFK to SJC–JFK changed it 363 to 377 and other corresponding cells changed.
+The response itself carries the requested date pairs. These are research
+observations, not a generated-tool or independent audit pass.
+
+Booking called fresh search in 40.524 seconds, but a 75.217-second navigation
+failed and a direct request exhausted the ladder. Keep all failed attempts.
+A pooled grid transport completed in 2.826 seconds; independent cold/warm
+measurement remains due. Continue unchanged on fa7a627 to the 09:15:51 UTC
+assessment and 09:45:51 hard deadline. Disk 20.04 GiB. No actual capacity retry
+or malformed-handoff catch observed yet.
