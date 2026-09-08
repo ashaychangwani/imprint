@@ -7461,4 +7461,20 @@ remain proven; no tools published yet. The working booking path and focused
 identity repair justify continuing within the existing deadline, with about
 26 minutes remaining until 09:45:51 UTC. No implementation change, full chain
 pass, independent audit, capacity retry, or malformed-handoff catch. This was
-an ordinary valid partial handoff, not malformed-report recovery. Disk19.86 GiB.
+an ordinary valid partial handoff, not malformed-report recovery. Disk 19.86 GiB.
+
+
+## 2026-09-08 02:27 PDT — Flights 17 non-first booking research passes
+
+Booking follow-up returned Delta DL1926 LAX–LAS October 22, with Basic and
+Classic fare options, after selecting index 2 from fresh search. The consumer
+took 37.062 seconds. All four research handoffs are now proven; master review
+and final planning remain, with no published tools at the last check.
+
+Root matched the two opaque values (ignoring added base64 padding), carrier,
+flight number, route and [2026,10,22] date inside one 1,095-byte fresh producer
+record. Literal opaque strings differ because the candidate pads them. Private
+provenance is flights-17-chain-research-check.json. The consumer actually uses
+result_index to construct nth-child, not the token or flight number, so stable
+API-record-to-DOM ordering and generated-chain behavior remain audit obligations.
+No implementation change; retain the 09:45:51 UTC hard deadline.
