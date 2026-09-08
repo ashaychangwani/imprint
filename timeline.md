@@ -7550,3 +7550,24 @@ The construction navigates to rendered hotel results through CDP; this is not
 an API response capture. The failed semantic check followed a 34.886-second
 transport completion. The master is revising the plan on unchanged fa7a627.
 Target 21:38:17, assess 22:08:17, hard deadline 22:38:17 UTC remain unchanged.
+
+
+## 2026-09-08 14:42 PDT — Hotels 4 completes; independent audit starts
+
+Hotels 4 completed one search tool in 32.1286 minutes on unchanged fa7a627.
+After the rejected three-adult invocation, retained research opened the
+traveler control, adjusted the adult count, committed it, and waited for
+observed aria-valuenow=3. The repaired generated check returned Seattle,
+November16–19, three adults and 17 hotel records in 36.218 seconds. These are
+rendered results with DOM interaction, not an API response capture.
+
+The public contract advertises adults1–6; the independent audit must test that
+behavior, and a single three-adult pass is not full range proof. Earlier failed
+query-only evidence remains. Teach PID59310 ended. Audit4 started21:41:36 UTC,
+PID71457, same hotels-home-4 and implementation, with a45-minute cap.
+
+Teach usage was7,082,148 input, including6,097,408 cache reads, and47,294 output,
+$7.32 estimated. Optional finesse was interrupted after MVP promotion with no
+usage, bringing missing semantic calls to14 plus prior interrupted CLI/audit
+work. Cumulative through this teach is$317.40 and1,557.38 minutes across
+21 teaches/14 audits. Audit4 is pending. No implementation change, push or MR.

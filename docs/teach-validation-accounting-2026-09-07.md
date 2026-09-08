@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are twenty teaches and fourteen independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are twenty-one teaches and fourteen independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 is the exception: host sleep interrupted its monotonic trace clock, so its 52.37 minutes use launch time to final report modification time; the trace reports only 0.54 minutes. Input includes cache reads and writes; do not add the cache columns again. All 1,217 usage spans identify `gpt-5.6-sol`.
+Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 is the exception: host sleep interrupted its monotonic trace clock, so its 52.37 minutes use launch time to final report modification time; the trace reports only 0.54 minutes. Input includes cache reads and writes; do not add the cache columns again. All 1,246 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -42,7 +42,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights teach 17 | 4 ready; generated chain and independent audit passed | 88.17 | 14,110,343 | 11,640,192 | 0 | 171,275 | $17.96 |
 | Flights audit 17 | Sleep-interrupted timeout; no graded calls or reported usage | 52.37 | — | — | — | — | — |
 | Flights audit 17b | Full pass: 22/22 correct, no exclusions | 8.67 | 1,054,089 | 985,856 | 0 | 5,456 | $0.78 |
-| **Total** | **Includes failures/cancellations** | **1,525.25** | **242,135,707** | **197,937,024** | **0** | **2,705,412** | **$310.08** |
+| Hotels teach 4 | 1 ready; adult-control repair passed; independent audit pending | 32.13 | 7,082,148 | 6,097,408 | 0 | 47,294 | $7.32 |
+| **Total** | **Includes failures/cancellations** | **1,557.38** | **249,217,855** | **204,034,432** | **0** | **2,752,706** | **$317.40** |
 
 ## Cost assumptions and completeness
 
@@ -52,13 +53,13 @@ This is an API-equivalent estimate, not an invoice or measured Codex subscriptio
 
 Each span is counted once by trace/span ID. The trace file has no duplicate span IDs within a trace and no token-bearing ancestor of a counted usage span. Compiler and audit CLI usage carriers have no token-bearing children. Workflow spans are excluded. No counted usage is marked estimated.
 
-Thirteen failed or interrupted `llm.analyze` spans have no reported usage: three in cancelled Flights attempts, two optional Hotels refinement passes stopped after MVP promotion, the final deadline-interrupted booking call in Flights attempt 5, the search-contract follow-up in attempt 7, the cancelled Hotels attempt-3 research follow-up, the final master decision in Flights attempt 10, an optional location-parameter advisory call in Flights attempt 13, the final master revision in Flights attempt 14, the capacity-failed grid MVP review in Flights attempt 15, and the final deadline-interrupted booking chain review in attempt 16. Cancelled or interrupted provider work may have consumed unreported tokens; the recorded total is therefore incomplete for such work. Flights attempt 6 also terminated its newly started booking compiler at the deadline; its interrupted CLI work may have usage not captured in the reported session totals. Flights attempt 9 also interrupted its search compiler repair, so its CLI usage may be incomplete. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
+Fourteen failed or interrupted `llm.analyze` spans have no reported usage: three in cancelled Flights attempts, two optional Hotels refinement passes stopped after MVP promotion, the final deadline-interrupted booking call in Flights attempt 5, the search-contract follow-up in attempt 7, the cancelled Hotels attempt-3 research follow-up, the final master decision in Flights attempt 10, an optional location-parameter advisory call in Flights attempt 13, the final master revision in Flights attempt 14, the capacity-failed grid MVP review in Flights attempt 15, the final deadline-interrupted booking chain review in attempt 16, and the deferred optional Hotels attempt-4 finesse call. Cancelled or interrupted provider work may have consumed unreported tokens; the recorded total is therefore incomplete for such work. Flights attempt 6 also terminated its newly started booking compiler at the deadline; its interrupted CLI work may have usage not captured in the reported session totals. Flights attempt 9 also interrupted its search compiler repair, so its CLI usage may be incomplete. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
 
 The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 minutes. Both exceed the 30-minute target. The successful narrow Hotels teach took 28.46 minutes. Earlier approximate timeline times include observation delay and are superseded here for process duration. Flights teach 4 failed after 52.40 minutes. These different revisions do not demonstrate repeatability.
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, and `flights-audit-17b-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-four accounted traces contain 3,341 spans and thirty-four completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3/attempt-4 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, `flights-audit-17b-accounting.json`, and `hotels-teach-4-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-five accounted traces contain 3,447 spans and thirty-five completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -351,3 +352,21 @@ This establishes one full fresh Flights teach plus independent audit on
 fa7a627. Hotels and fresh-teach repeatability on that revision remain due.
 Audit cold calls were slower than subsequent calls, but aggregate MCP durations
 include pacing and setup; dedicated cold/warm backend measurements remain due.
+
+
+Hotels 4 completed its one selected search tool in 32.1286 minutes on the same
+fa7a627 implementation as the Flights pass. Initial research used two adults
+and accepted the default guest control. The first compiled check requested
+three adults but observed two, so final review correctly rejected it. The
+master returned the contradiction to retained research, which used recorded
+traveler controls to set the nondefault count and tested it with positive
+Seattle hotel results for November 16–19. The repaired MVP returned 17 hotel
+records and an observed three-adult control in 36.218 seconds.
+
+This workflow uses CDP navigation and DOM interactions with rendered HTML
+extraction, not an API response capture. Its public contract includes destination,
+check-in/out dates and adults 1–6. One successful three-adult case is not full
+range proof; independent audit remains due. The initial failed semantic result
+is preserved. Optional finesse was deferred after promotion, leaving one
+semantic usage span unreported. Audit 4 runs sequentially on the unchanged
+artifacts and is excluded from totals until complete.
