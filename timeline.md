@@ -7040,3 +7040,21 @@ artifacts/examples/diagnostics supplied. Attempt 12 process exited; no parallel
 experiment or preview. Collector PID 54899 healthy, disk 23.49 GiB. Target
 01:57:46 UTC, assess 02:27:46, hard deadline 02:57:46. Existing heartbeat updated.
 No code change, push, or MR.
+
+
+## 2026-09-07 19:04 PDT — Flights 13 target checkpoint
+
+At minute 34, location, search, and booking have accepted research; calendar
+remains in research, no published tools. Search captured a changed one-way
+LAX–JFK October 22 API response; its earlier same-tool pooled call took 10.532
+seconds, compared with a preceding 34.128-second cold call including setup.
+These research calls are not independent audit timing or repeated cold proof.
+
+Booking called fresh search (33.076 seconds) and proved rendered JetBlue B6 624
+offers after seven observations. Root matched its selection's decoded bytes
+and route/carrier/flight fields in one 1,117-byte nested producer record. The
+candidate adds base64 padding, so the token string is not literally unchanged;
+its decoded bytes are identical. Booking uses rendered navigation, not API
+response capture, and redirect-link extraction remains deferred. Keep this
+research evidence separate from generated-tool chain validation. No code change;
+continue to the 02:27:46 UTC assessment and 02:57:46 hard deadline.
