@@ -7240,3 +7240,25 @@ Location's changed query was `lax`, and its early draft compiled while research
 continued. Several grid/navigation attempts failed; their actual history remains
 in the run. No malformed-handoff catch exercised. Continue unchanged on
 `671ae38` to the 05:59:25 UTC assessment and 06:29:25 hard deadline. Disk 22.16 GiB.
+
+
+## 2026-09-07 23:03 PDT — Flights 15 one-hour assessment
+
+All four operations have accepted research and final compilation is underway
+at minute 64, with no published tools yet. Grid's controlled origin contrast
+now passes: LAX–SFO October 20–28 returned $60, while SEA–SFO on the same dates
+returned $113 and different matrix tokens. Its earlier SJC–SFO route had no
+flight results, explaining the missing grid control; that failed attempt remains.
+The MVP now promises three-letter IATA codes, not canonical entity identifiers.
+
+Booking research captured a fresh round-trip API result for Frontier 2858/4593,
+SFO–LAX November 10 and LAX–SFO November 17, including provider fares and links.
+The scalar selection contains search URL, outbound rank and return-origin name;
+it is reconstructed from rendered producer data, not a raw API token. Final
+planning corrects the proposed chain path from `flights[1]` to the actual
+`items[1].selected_flights`, preserving all values from one result. Nonzero-rank
+selection and stable itinerary association still require generated-chain audit.
+
+Useful work continues with about 26 minutes left; retain the existing
+06:29:25 UTC hard deadline. Disk 22.05 GiB. No code change, malformed-handoff
+catch, independent audit, or complete generated-chain pass yet.
