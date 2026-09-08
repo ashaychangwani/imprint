@@ -359,9 +359,8 @@ Follow these steps to compile the session:
      try { raw = JSON.parse(target.response.body); } catch { raw = target.response.body; }
      ```
    - Import `extract` from `./parser.ts`.
-   - Call `extract(raw)` and assert on the result.
-   - Assertions must reference real values from the narration: `expect(result.items.length).toBeGreaterThan(0)`, `expect(result.items.some(item => item.name.includes('known narrated value'))).toBe(true)`, `expect(result.items[0].price).toBeGreaterThan(0)`.
-   - Aim for at least 5 assertions — more is better.
+   - Call `extract(raw)` and check explicit expected values grounded in the supplied response or narration. Nonempty output and plausible types alone do not establish correct field meanings.
+   - Choose contrasting records that distinguish plausible interpretations of ambiguous fields. Check that summaries agree with their underlying records and that related fields describe the same item. Do not obtain expected values from the parser's output or repeat its unverified index mapping in the test. Reuse the recorded and researched fixtures; no extra live call is needed. Omit unsupported optional fields, or report missing core evidence to the master, rather than inventing a default.
    - **Empty-result behavior.** `extract()` should return a clean empty collection for a no-match / empty upstream response — an empty array, or the success shape with its items array empty / count 0 — and never a single placeholder record full of nulls. When the recording does not contain an empty response, create a synthetic case with the same top-level shape as the recorded success and assert the parser yields empty, not a phantom row. Choose a descriptive test name; no title token is required.
      ```typescript
      test('returns an empty list instead of a phantom record', () => {

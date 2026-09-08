@@ -405,6 +405,38 @@ describe('API research boundary reuse', () => {
     expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
   });
 
+  it('retains request proof when planning adds contextual recording references', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Use the tested request.' };
+    tool.candidate.requestSeqs = [2];
+    tool.candidate.dependencySeqs = [3];
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
+    const research = researchFor(tool);
+    research.researchInputsSha256 = apiResearchInputsSha256(tool);
+    research.researchedBoundary.requestSeqs = [2];
+    research.researchedBoundary.dependencySeqs = [3];
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
+
+    // Research discovered request 1. Planning adopts it and adds another
+    // recording reference for context without adding an executable request.
+    tool.candidate.requestSeqs = [1, 2];
+    tool.candidate.dependencySeqs = [4];
+    const implementation = {
+      strategyKind: 'api',
+      requestProvenance: [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }],
+    } as ImplementationPlanPayload;
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeTrue();
+    expect(apiResearchMatchesPlan(tool, implementation, research)).toBeTrue();
+
+    const expandedExecution = structuredClone(implementation);
+    expandedExecution.requestProvenance.push({ artifactRequestIndex: 1, recordingRequestSeq: 4 });
+    expect(apiResearchMatchesPlan(tool, expandedExecution, research)).toBeFalse();
+    tool.candidate.requestSeqs = [2];
+    expect(apiResearchCoversToolBoundary(tool, research)).toBeFalse();
+  });
+
   it('matches both navigation and selected-response recording origins', () => {
     const tool = focusedTool(1);
     tool.strategy = { kind: 'api', reason: 'Use the proven browser-created request.' };

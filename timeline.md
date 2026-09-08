@@ -7101,3 +7101,32 @@ context references even when the proven executable request remains included.
 Test this mechanically before changing reuse. Also inspect parser-test quality:
 search verified selection construction but never checked its stop-count mapping.
 No new teach or code change yet; preserve `f022180` results unchanged.
+
+
+## 2026-09-07 20:13 PDT — Reuse proven requests across context-only recording changes
+
+A synthetic regression reproduced attempt 13's redundant research: adding
+contextual recording references invalidated a still-covered tested request.
+The controller now checks that proven request origins remain in the selected
+evidence without requiring every new contextual reference to have existed
+before research. Exact executable request/response provenance matching remains
+a separate compilation guard; new public parameters, changed transport facts,
+and discarded proven origins still invalidate coverage. The regression also
+rejects adding a new executed request while reusing the old proof.
+
+An older end-to-end fixture implicitly used an extra context reference as a
+transport change. Its simulated agent now declares the changed authentication
+transport reference explicitly, retaining its partial-research/history checks.
+Parser guidance replaces weak nonempty-output examples with contrasting fixture
+records, explicit expected values, and consistency between summaries and their
+underlying data. No domain-specific parser rule or generated artifact was added.
+README, architecture, and website copy match.
+
+Focused checks passed 213 tests / 1,334 assertions. The first full suite again
+hit the existing TERM-ignoring-grandchild test. Its parent had exited after a
+fixed 50 ms without confirming the grandchild installed the signal handler.
+The fixture now waits for its ready message; 14 cleanup tests passed. No process
+cleanup runtime change was made, and the old failure remains logged. The full
+rerun passed 1,935 tests / 6,141 assertions across 97 files in 90.07 seconds.
+Type checking, lint, web build, and desktop/mobile checks passed; preview stopped.
+No fresh teach ran while editing or testing. Next validation starts fresh.

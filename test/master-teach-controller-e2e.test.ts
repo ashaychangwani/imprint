@@ -5851,6 +5851,8 @@ describe('fresh foreground master controller end to end', () => {
               tool.candidate.dependencySeqs = [4];
               tool.compileContext = {
                 ...tool.compileContext,
+                // This changes transport evidence, not just the recording inventory.
+                authRequestSeqs: [4],
                 tokenExtractionNotes: 'Bootstrap transport state with recording request 4.',
               };
               requestSeqs = [4, 1];
@@ -5930,6 +5932,8 @@ describe('fresh foreground master controller end to end', () => {
               target.candidate.dependencySeqs = [4];
               target.compileContext = {
                 ...target.compileContext,
+                // This changes transport evidence, not just the recording inventory.
+                authRequestSeqs: [4],
                 tokenExtractionNotes: 'Bootstrap transport state with recording request 4.',
               };
               target.implementationPlan = undefined;
@@ -6011,7 +6015,7 @@ describe('fresh foreground master controller end to end', () => {
         },
       );
 
-      expect(terminal.status).toBe('completed');
+      expect(terminal).toMatchObject({ status: 'completed' });
       expect(plannerCalls).toEqual([
         PRODUCER_ID,
         PRODUCER_ID,

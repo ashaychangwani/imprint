@@ -649,6 +649,16 @@ This supplies construction evidence without interpreting field meaning or
 replacing final chain verification. Compatible draft reuse and master-directed
 recall remain unchanged; new evidence does not itself select a repair strategy.
 
+Research boundary coverage distinguishes recording context from execution.
+Adding request or dependency references does not invalidate an already tested
+workflow when its request origins, parameter names/types, and transport facts
+remain covered. The implementation must still match the exact proven request
+sequence and selected-response origins before compilation. New public inputs,
+changed transport facts, or removal of a proven origin still invalidate coverage.
+Parser-test guidance uses contrasting fixture records to distinguish field
+meanings and check summaries against their underlying data, without another live
+call or runtime rules for domain-specific values.
+
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.
 A completed sibling cannot schedule teardown of another call's active browser.

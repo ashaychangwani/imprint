@@ -143,9 +143,11 @@ describe('compiler process termination', () => {
           "process.on('SIGTERM', () => {}); process.stdout.write('ready'); setInterval(() => {}, 1000)";
         const rootScript = [
           "const { spawn } = require('node:child_process')",
-          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: ${detachedGrandchild}, stdio: ['ignore', 'inherit', 'inherit'] })`,
+          `const child = spawn(process.execPath, ['-e', ${JSON.stringify(grandchildScript)}], { detached: ${detachedGrandchild}, stdio: ['ignore', 'pipe', 'inherit'] })`,
           "process.stdout.write(String(child.pid) + '\\n')",
-          'setTimeout(() => process.exit(0), 50)',
+          // Exit only after the grandchild has installed the handler this
+          // fixture claims to exercise; startup time varies under suite load.
+          "child.stdout.once('data', () => process.exit(0))",
         ].join(';');
         const root = spawnOwnedProcess(process.execPath, ['-e', rootScript], {
           stdio: ['ignore', 'pipe', 'pipe'],

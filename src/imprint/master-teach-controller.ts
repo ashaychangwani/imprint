@@ -1960,7 +1960,9 @@ export function apiResearchMatchesPlan(
  * Research is evidence for a public operation boundary, not for planner prose.
  * A later plan may narrow a proven operation by fixing researched parameters to
  * constants, but it may not add an unresearched public parameter or discard the
- * recorded request that actually passed.
+ * recorded request that actually passed. Additional recording references are
+ * context, not additional executed requests; apiResearchMatchesPlan separately
+ * checks the implementation's exact request provenance.
  */
 export function apiResearchCoversToolBoundary(
   tool: EditableTeachingTool,
@@ -1988,28 +1990,11 @@ export function apiResearchCoversToolBoundary(
     ...tool.candidate.requestSeqs,
     ...tool.candidate.dependencySeqs,
   ]);
-  const researchedBoundarySeqs = new Set([
-    ...research.researchedBoundary.requestSeqs,
-    ...research.researchedBoundary.dependencySeqs,
-  ]);
-  const researchedRequestSeqs = new Set(
-    research.workflow.requests.flatMap(({ recordingRequestSeq, navigation }) => [
-      ...(recordingRequestSeq === undefined ? [] : [recordingRequestSeq]),
-      ...(navigation?.networkResponse
-        ? [navigation.networkResponse.recordingResponseRequestSeq]
-        : []),
-    ]),
-  );
-  return (
-    research.workflow.requests.every(
-      ({ recordingRequestSeq, navigation }) =>
-        (recordingRequestSeq === undefined || plannedRequestSeqs.has(recordingRequestSeq)) &&
-        (!navigation?.networkResponse ||
-          plannedRequestSeqs.has(navigation.networkResponse.recordingResponseRequestSeq)),
-    ) &&
-    [...plannedRequestSeqs].every(
-      (seq) => researchedBoundarySeqs.has(seq) || researchedRequestSeqs.has(seq),
-    )
+  return research.workflow.requests.every(
+    ({ recordingRequestSeq, navigation }) =>
+      (recordingRequestSeq === undefined || plannedRequestSeqs.has(recordingRequestSeq)) &&
+      (!navigation?.networkResponse ||
+        plannedRequestSeqs.has(navigation.networkResponse.recordingResponseRequestSeq)),
   );
 }
 
