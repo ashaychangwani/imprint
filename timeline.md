@@ -7152,3 +7152,24 @@ option-associated selection values. Booking has no proven fresh producer
 selection yet. The master is reviewing these ordinary partial/blocked handoffs;
 this has not exercised the malformed-handoff catch. Continue unchanged toward
 the 04:14:06 UTC assessment and 04:44:06 hard deadline.
+
+
+## 2026-09-07 21:17 PDT — Flights 14 one-hour assessment
+
+At minute 62, location and date-grid research remain proven, search is partial,
+and no tools are published. Eleven search observations include three further
+90–92-second API-capture timeouts; the proven rendered search still lacks flight
+numbers and a selection token tied to an option. Booking correctly refused to
+substitute stale recorded tokens or unrelated calendar-cell tokens.
+
+The master revised the boundary: ordinary route/date inputs plus a displayed
+result index should let booking select a fresh result in the page and capture
+its booking API response. This is an agent-chosen strategy, not a runtime rule.
+Search is narrowed to proven rendered fields and must establish the index;
+booking must prove the selected itinerary matches that index. These revised
+contracts remain unproven, including stability across separate calls. Preserve
+that audit obligation rather than treating the plan as success.
+
+Continue unchanged on `d2e0f33` to the existing 04:44:06 UTC hard deadline.
+Disk 22.66 GiB. No malformed-handoff catch or complete generated chain yet;
+no independent audit started and no prior artifacts were supplied to teachers.
