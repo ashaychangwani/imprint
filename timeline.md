@@ -7353,3 +7353,15 @@ Booking still advertises both selection_token and selected_flights. Its research
 contrast showed the first value did not affect the selected flight when the
 second was held fixed; retain this audit obligation. Keep the existing 08:02:41
 UTC deadline, with about 13 minutes remaining. No code change or extra teach.
+
+
+## 2026-09-08 00:55 PDT — Flights 16 booking MVP passes; chain binding fails
+
+Booking published after a 33.009-second live check returned American 6316,
+SFO–LAX November 12, with three fare options and seller handoff links. Three
+tools are now published. The generated chain did not invoke booking: its plan
+looked for itineraries[0].selected_flights at a missing producer-output path.
+The factual failure reached the master, which is revising the plan along with
+the grid's navigation failure. This is ordinary chain repair, not the original
+malformed-research-handoff recovery path. About eight minutes remain before
+08:02:41 UTC. No independent audit yet; keep the token-parameter limitation.
