@@ -1,6 +1,32 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 18:29 PDT
+## Current continuation — 20:05 PDT
+
+Same validation worktree/branch, implementation **`f022180`**. Flights 13 failed
+at **90.2479 minutes**, one published location tool/three not ready. Search MVP
+rejected contradictory stop counts versus its segment records. Calendar
+transport finished after the deadline; booking was not compiled. PID 71301
+exited. Partial audit 13, PID 6634 also exited, passed **3/3 units** (two calls,
+one parameter), no exclusions. This is not a full Flights pass.
+
+Accounting through audit 13: **$239.45** base API equivalent, **1,118.62 minutes**,
+sixteen teaches/nine audits; interrupted/cache caveats retained. Fresh booking
+research matched one producer record, but the generated chain remains unproven.
+No malformed-handoff catch exercised. No code change, push, or MR.
+
+Before another teach, investigate whether newly selected contextual recording
+references unnecessarily invalidate research whose actual request and public
+parameters remain covered. The concrete attempt-13 booking plans changed
+request refs [218] to [1,218] and dependency refs [206] to [245], while its proven
+workflow already used request 1. Parameter names/types and transport/auth facts
+were unchanged. Exact candidate comparison is private
+`flights-13-booking-revalidation-comparison.json`. Test any correction generally;
+do not weaken executable request or parameter proof. Also inspect compiler
+parser tests, which missed contradictory reported summary values. No next teach
+started. Collector 54899 remains healthy; all experiment processes exited.
+
+
+## Previous continuation — 18:29 PDT
 
 Same validation worktree/branch, implementation **`f022180`**, no push or MR.
 Flights 12 **failed at 90.2061 minutes, zero ready/four not ready**; PID 26817

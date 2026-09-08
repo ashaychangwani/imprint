@@ -7077,3 +7077,27 @@ literal token and itinerary fields inside one 1,108-byte producer record. The
 master is reviewing research before planning. Useful proof is still advancing,
 so continue unchanged to the existing 02:57:46 UTC hard deadline. Disk 23.19 GiB.
 No malformed-handoff catch or complete generated-tool chain has been exercised.
+
+
+## 2026-09-07 20:05 PDT — Flights 13 failed; partial audit passed
+
+Attempt 13 failed at 90.2479 minutes, location published/three not ready. Search
+MVP rejected stop counts contradicting the parsed segment records. Calendar
+compiled and transported in 36.434 seconds, but deadline prevented review;
+booking was not compiled. This is the second fresh failure on unchanged
+`f022180`. Research-level same-record booking proof does not make it a pass.
+
+Independent partial audit 13 (PID 6634, now exited) passed two location calls
+and one query parameter, 3/3 units, in 0.8338 minutes. No excluded calls. It
+cannot establish the other tools. Teach usage $16.15, audit $0.13 base API
+equivalent; cumulative recorded estimate $239.45 across sixteen teaches/nine
+audits. The optional location-parameter advisor was interrupted without usage.
+All failed evidence retained, no signal, no push or MR.
+
+Investigating a general proof-reuse issue before another teach: the master added
+recording references while preserving booking's parameter and transport facts,
+yet research ran again. The coverage guard currently rejects newly selected
+context references even when the proven executable request remains included.
+Test this mechanically before changing reuse. Also inspect parser-test quality:
+search verified selection construction but never checked its stop-count mapping.
+No new teach or code change yet; preserve `f022180` results unchanged.
