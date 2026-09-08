@@ -1,6 +1,42 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 20:05 PDT
+## Current continuation — 20:15 PDT
+
+Same validation worktree/branch, latest implementation **`d2e0f33`**. Context-only
+recording-reference changes no longer invalidate otherwise covered request
+proof. Exact executable request/response provenance, public parameters, and
+transport facts remain guarded. A synthetic regression reproduced the issue.
+Parser guidance now asks for contrasting fixture records and consistency between
+summaries and underlying data. No site-specific runtime rule or generated tool
+was added. The earlier `f022180` consumer evidence and browser lifetime fixes
+remain included.
+
+**1,935 tests / 6,141 assertions passed** across 97 files in 90.07 seconds, plus
+lint, type checking, web build and desktop/mobile checks. The first full run
+again failed the existing grandchild-process fixture; its fixed 50 ms parent
+exit did not wait for the child's signal handler. The fixture now waits for
+its ready message; cleanup tests and full rerun passed. No process-cleanup
+runtime change. All failed test logs remain in the private evidence directory.
+Preview stopped, no push or MR.
+
+**Fresh Flights 14** started **03:14:06 UTC September 8**, PID **11431**, new
+`/tmp/imprint-fresh-inputs-VYbJm1/home-14`, same exact recording and guidance.
+Verify `flights-teach-14-manifest.json` and log. Target **03:44:06 UTC**, assess
+**04:14:06**, hard deadline **04:44:06**. No prior artifacts/examples/diagnostics
+supplied. Collector PID **54899** healthy, disk **22.88 GiB** before launch.
+Existing heartbeat updated. No overlapping experiment.
+
+Flights 13 failed with one published location tool; its partial audit passed
+3/3 units, only two location calls and one parameter. Search MVP contradicted
+its own segment records; calendar review and booking were unfinished. Both
+processes exited. Accounting through audit 13 is **$239.45** base API equivalent,
+**1,118.62 minutes**, sixteen teaches/nine audits; attempt 14 excluded until
+complete. Fresh full Flights/Hotels passes and repeated successes remain due.
+No malformed-handoff catch exercised. Preserve failed evidence and do not
+resume older teaches.
+
+
+## Previous continuation — 20:05 PDT
 
 Same validation worktree/branch, implementation **`f022180`**. Flights 13 failed
 at **90.2479 minutes**, one published location tool/three not ready. Search MVP
