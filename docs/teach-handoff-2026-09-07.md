@@ -17,6 +17,13 @@ recording and guidance. Verify `flights-teach-13-manifest.json` and log. Target
 mechanical defect explaining the slow research was established, so this tests
 unchanged code. No previous artifacts/examples/diagnostics supplied. Collector
 PID 54899 healthy; disk **23.49 GiB** before launch. Existing heartbeat updated.
+At the **02:28 UTC one-hour assessment**, all four research results are accepted,
+none published. Calendar now captures the requested seven-date GetCalendarGrid,
+with a tested non-default trip length. Fresh SFO–BOS DL977 booking matched the
+producer's literal token and same-record fields, verified by root. Booking is
+rendered navigation; search/calendar capture APIs. The master is reviewing before
+planning. Continue unchanged to 02:57:46; disk 23.19 GiB.
+
 Do not resume attempt 12; preserve all evidence. Accounting
 through attempt 12 is **$223.17** base API equivalent, **1,027.54 minutes** across
 fifteen teaches/eight audits. No malformed-handoff catch exercised. The prior

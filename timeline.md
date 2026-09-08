@@ -7058,3 +7058,22 @@ its decoded bytes are identical. Booking uses rendered navigation, not API
 response capture, and redirect-link extraction remains deferred. Keep this
 research evidence separate from generated-tool chain validation. No code change;
 continue to the 02:27:46 UTC assessment and 02:57:46 hard deadline.
+
+
+## 2026-09-07 19:28 PDT — Flights 13 one-hour assessment
+
+All four operations now have accepted research, none published. The calendar
+follow-up repaired its earlier unused controls: it captured GetCalendarGrid
+with all seven requested departure dates October 29–November 4, a return grid
+centered on a non-default five-day trip, and concrete fares. This is actual
+date-grid API evidence, replacing the earlier insufficient calendar-picker
+proof. Wider windows remain outside the MVP. Entity identifier mapping is
+recording-grounded; changed live identifier coverage still needs audit.
+
+The master requested another fresh booking chain. The new SFO–BOS October 29
+search took 40.000 seconds; rendered Delta DL977 booking took 32.635 seconds,
+with matching $159 fare and five fare choices. Root independently matched the
+literal token and itinerary fields inside one 1,108-byte producer record. The
+master is reviewing research before planning. Useful proof is still advancing,
+so continue unchanged to the existing 02:57:46 UTC hard deadline. Disk 23.19 GiB.
+No malformed-handoff catch or complete generated-tool chain has been exercised.
