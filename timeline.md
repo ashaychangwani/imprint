@@ -7193,7 +7193,7 @@ unknown. Continue inspecting the actual parser and audit failures before choosin
 another fresh run. No code change, push or MR.
 
 
-## 2026-09-07 22:02 PDT — Audit 14 failed; clarify general parser evidence guidance
+## 2026-09-07 21:58 PDT — Audit 14 failed; clarify general parser evidence guidance
 
 Partial audit 14 failed 13/14 checks: six correct calls, one empty San Francisco
 location call, and seven working parameters; no exclusions. Five grid calls
@@ -7214,3 +7214,14 @@ runtime parser rules or site-specific instructions. README, architecture and
 website copy match. Thirty focused tests / 134 assertions, lint, type checking,
 web build and desktop/mobile visual checks passed. Preview stopped. This prompt
 correction still needs a fresh teach; no failed run will be resumed.
+
+
+## 2026-09-07 22:00 PDT — Fresh Flights 15 launched on 671ae38
+
+Fresh attempt 15 started 04:59:25 UTC September 8, PID 50697, new `home-15`.
+Exact recording and original four-operation guidance unchanged. No prior tools,
+examples, or diagnostics supplied. Teach/audit 14, diagnostics, tests and preview
+all ended before launch. Collector 54899 healthy; disk 22.45 GiB. Target 05:29:25,
+assessment 05:59:25, hard deadline 06:29:25 UTC. Existing heartbeat updated.
+No push or MR. The previous entry's timestamp was corrected to its actual
+21:58 PDT checkpoint time.

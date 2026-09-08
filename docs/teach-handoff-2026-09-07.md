@@ -1,6 +1,35 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 21:48 PDT
+## Current continuation — 22:00 PDT
+
+Latest implementation **`671ae38`** clarifies general parser evidence guidance:
+keep requested/derived context separate from observed attributes, preserve
+valid records with absent optional fields, and compare fixture variants and
+input mismatches. No site-specific rules or generated-tool modifications.
+Thirty focused tests / 134 assertions, lint, type checking, web build and
+mobile/desktop visual checks passed; preview stopped.
+
+**Fresh Flights 15** started **04:59:25 UTC September 8**, PID **50697**, new
+`/tmp/imprint-fresh-inputs-VYbJm1/home-15`, exact recording and original four-tool
+guidance unchanged. Verify `flights-teach-15-manifest.json` and log. Target
+**05:29:25**, assess **05:59:25**, hard deadline **06:29:25 UTC**. No previous
+artifacts/examples/diagnostics supplied. Collector **54899** healthy, disk
+**22.45 GiB**. Existing heartbeat updated, no overlapping experiment.
+
+Partial audit 14 **failed 13/14 units**: six correct calls, one empty San Francisco
+lookup, seven working parameters, no exclusions. All five grid calls passed.
+PID 48039 exited. Root diagnostic fetched five real location records using the
+unchanged transform; parser rejected all because one row omitted its optional
+child list. A synthetic two-record fixture reproduced that loss. Private
+`flights-14-location-diagnostic*` and `parser-14-synthetic-diagnostic*` preserve
+this evidence. Failed generated artifacts remain unchanged.
+
+Accounting through audit 14: **$255.63** base API equivalent, **1,212.40 minutes**,
+seventeen teaches/ten audits. Attempt 15 excluded until complete. Full fresh
+Flights/Hotels passes, repeated success and independent cold/warm timing remain
+due. No malformed-handoff catch exercised. No push or MR.
+
+## Previous continuation — 21:48 PDT
 
 Implementation remains **`d2e0f33`**. Flights 14 failed at **89.9993 minutes**,
 two published tools (location lookup and date grid), search date proof rejected,
