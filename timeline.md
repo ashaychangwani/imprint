@@ -7489,3 +7489,27 @@ record contains Southwest WN4319 and its selected_flights composite with index
 after a 33.522-second CDP call. Booking compilation is underway. No generated
 chain or independent audit pass yet. Keep the 09:45:51 UTC deadline, with
 about seven minutes remaining. No code change or duplicate run.
+
+
+## 2026-09-08 14:00 PDT — Flights 17 passes; sleeping host interrupts its audit
+
+Flights 17 completed at 09:44:02 UTC after 88.1734 minutes, four tools ready.
+The generated chain selected Southwest WN4319 SFO–LAX October 29 from fresh
+search and returned three matching booking offers in 42.731 seconds. The
+standalone booking check returned five Delta offers in 33.926 seconds. This
+is a complete teach pass, not yet an independent audit or repeatability pass.
+
+macOS entered clamshell sleep at 09:44:07 UTC. Subsequent task actions advanced
+only through intermittent wake windows. Audit 17 started at 11:10:05 UTC and
+wrote an empty timeout report at 12:02:27, with no tool calls or token usage.
+Power events support host suspension as the cause. Preserve 52.37 minutes
+from launch to report separately from its 0.54-minute monotonic trace. No
+claim of zero actual cost. The original report and transcript were copied to
+flights-audit-17-timeout before retry; all other evidence remains.
+
+Now awake, a fresh auditor 17b started at 20:58:45 UTC, PID 57825, on unchanged
+home-17 and fa7a627. No overlapping teach/audit. Flights 17 recorded $17.96;
+cumulative reported estimate is $309.30 across twenty teaches/thirteen audits,
+1,516.58 elapsed minutes including the sleeping audit. Its usage is missing
+in addition to thirteen historical semantic calls. Audit 17b is pending.
+No push or MR. After full audit success, proceed to Hotels on unchanged code.

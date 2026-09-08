@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are nineteen teaches and twelve independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are twenty teaches and thirteen independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 1,143 usage spans identify `gpt-5.6-sol`.
+Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 is the exception: host sleep interrupted its monotonic trace clock, so its 52.37 minutes use launch time to final report modification time; the trace reports only 0.54 minutes. Input includes cache reads and writes; do not add the cache columns again. All 1,216 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -39,7 +39,9 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights audit 15 | 3/3 correct; location tool only | 0.62 | 80,234 | 69,120 | 0 | 549 | $0.08 |
 | Flights teach 16 | Deadline: 3 ready; grid route proof failed, chain review unfinished | 90.00 | 13,147,148 | 10,827,008 | 0 | 165,778 | $16.93 |
 | Flights audit 16 | 14/14 correct; 3 tools, booking inputs varied jointly | 5.51 | 786,639 | 679,552 | 0 | 2,992 | $0.76 |
-| **Total** | **Includes failures/cancellations** | **1,376.04** | **226,971,275** | **185,310,976** | **0** | **2,528,681** | **$291.34** |
+| Flights teach 17 | 4 ready; generated chain passed; independent audit pending | 88.17 | 14,110,343 | 11,640,192 | 0 | 171,275 | $17.96 |
+| Flights audit 17 | Sleep-interrupted timeout; no graded calls or reported usage | 52.37 | — | — | — | — | — |
+| **Total** | **Includes failures/cancellations** | **1,516.58** | **241,081,618** | **196,951,168** | **0** | **2,699,956** | **$309.30** |
 
 ## Cost assumptions and completeness
 
@@ -55,7 +57,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-16 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, and `flights-audit-16-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-one accounted traces contain 3,099 spans and thirty-one completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, and `flights-audit-17-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-three accounted traces contain 3,338 spans and thirty-three completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -298,3 +300,37 @@ unrelated token left the selected flight unchanged. Preserve the original
 14/14 report with this qualification; do not reinterpret it as complete
 parameter proof or full Flights success. Grid was unpublished and unaudited.
 Cold/setup and warm backend timings remain separate outstanding measurements.
+
+
+Flights 17 on `fa7a627` completed all four tools and the generated chain in
+88.1734 minutes, at 09:44:02 UTC September 8, before the 09:45:51 deadline.
+Research returned the booking fixed-first-selection gap to the master, then
+proved a non-first Delta selection using fresh producer output. All 73 usage
+spans reported totals with no token-bearing ancestors; no semantic call lacked
+usage. Optional advice remained deferred. The original malformed-handoff catch
+and actual capacity retry were not exercised in this successful teach.
+
+Location uses fetch; search and grid capture page-owned API responses. Booking
+performs a parameter-derived DOM selection then captures GetBookingResults.
+Its individual MVP returned five Delta DL1926 LAX–LAS October 22 fare options
+in 33.926 seconds. The generated chain used the fresh second search itinerary
+for Southwest WN4319 SFO–LAX October 29 and returned three matching booking
+offers in 42.731 seconds. DOM index ordering across distinct queries still
+requires independent audit. Research's two opaque values came from one fresh
+1,095-byte record but had added base64 padding; they do not drive the DOM click.
+
+Audit 17 started 11:10:05 UTC and wrote its timeout report at 12:02:27 UTC.
+macOS power logs show clamshell sleep beginning 09:44:07 UTC, followed by brief
+dark wakes and immediate returns to sleep. The auditor emitted only its opening
+statement, with no tool calls or grades. Its 45-minute deadline was handled
+after 52.37 wall minutes; the root trace measured only 32.70 seconds. This
+exposes a timing-accounting limitation during host suspension, not evidence of
+a generated-tool failure. No audit usage was reported, so its cost is unknown,
+not measured zero. Preserve this missing audit session in addition to the
+thirteen historical semantic calls and interrupted compiler usage.
+
+The first report/transcript are copied under `flights-audit-17-timeout`; the
+original log, trace and selected local power events remain preserved. Audit
+17b starts a new auditor on the unchanged generated tools after the machine
+woke. It is excluded from totals until complete; this retry cannot erase the
+sleep-interrupted attempt or establish fresh-teach repeatability by itself.
