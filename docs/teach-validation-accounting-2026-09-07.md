@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are eighteen teaches and eleven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are nineteen teaches and eleven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 1,076 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 1,142 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -37,7 +37,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights audit 14 | 13/14 correct; location lookup failed | 3.78 | 390,228 | 322,688 | 0 | 3,087 | $0.46 |
 | Flights teach 15 | Early capacity failure: 1 ready, 3 not ready | 67.51 | 11,341,302 | 8,334,336 | 0 | 128,762 | $17.94 |
 | Flights audit 15 | 3/3 correct; location tool only | 0.62 | 80,234 | 69,120 | 0 | 549 | $0.08 |
-| **Total** | **Includes failures/cancellations** | **1,280.53** | **213,037,488** | **173,804,416** | **0** | **2,359,911** | **$273.65** |
+| Flights teach 16 | Deadline: 3 ready; grid route proof failed, chain review unfinished | 90.00 | 13,147,148 | 10,827,008 | 0 | 165,778 | $16.93 |
+| **Total** | **Includes failures/cancellations** | **1,370.53** | **226,184,636** | **184,631,424** | **0** | **2,525,689** | **$290.58** |
 
 ## Cost assumptions and completeness
 
@@ -47,13 +48,13 @@ This is an API-equivalent estimate, not an invoice or measured Codex subscriptio
 
 Each span is counted once by trace/span ID. The trace file has no duplicate span IDs within a trace and no token-bearing ancestor of a counted usage span. Compiler and audit CLI usage carriers have no token-bearing children. Workflow spans are excluded. No counted usage is marked estimated.
 
-Twelve failed or interrupted `llm.analyze` spans have no reported usage: three in cancelled Flights attempts, two optional Hotels refinement passes stopped after MVP promotion, the final deadline-interrupted booking call in Flights attempt 5, the search-contract follow-up in attempt 7, the cancelled Hotels attempt-3 research follow-up, the final master decision in Flights attempt 10, an optional location-parameter advisory call in Flights attempt 13, the final master revision in Flights attempt 14, and the capacity-failed grid MVP review in Flights attempt 15. Cancelled or interrupted provider work may have consumed unreported tokens; the recorded total is therefore incomplete for such work. Flights attempt 6 also terminated its newly started booking compiler at the deadline; its interrupted CLI work may have usage not captured in the reported session totals. Flights attempt 9 also interrupted its search compiler repair, so its CLI usage may be incomplete. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
+Thirteen failed or interrupted `llm.analyze` spans have no reported usage: three in cancelled Flights attempts, two optional Hotels refinement passes stopped after MVP promotion, the final deadline-interrupted booking call in Flights attempt 5, the search-contract follow-up in attempt 7, the cancelled Hotels attempt-3 research follow-up, the final master decision in Flights attempt 10, an optional location-parameter advisory call in Flights attempt 13, the final master revision in Flights attempt 14, the capacity-failed grid MVP review in Flights attempt 15, and the final deadline-interrupted booking chain review in attempt 16. Cancelled or interrupted provider work may have consumed unreported tokens; the recorded total is therefore incomplete for such work. Flights attempt 6 also terminated its newly started booking compiler at the deadline; its interrupted CLI work may have usage not captured in the reported session totals. Flights attempt 9 also interrupted its search compiler repair, so its CLI usage may be incomplete. Cache writes are zero as emitted by Imprint, which can normalize an absent provider field to zero; this does not independently prove that no cache was written.
 
 The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 minutes. Both exceed the 30-minute target. The successful narrow Hotels teach took 28.46 minutes. Earlier approximate timeline times include observation delay and are superseded here for process duration. Flights teach 4 failed after 52.40 minutes. These different revisions do not demonstrate repeatability.
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-15 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, and `flights-audit-15-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-nine accounted traces contain 2,876 spans and twenty-nine completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-16 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, and `flights-teach-16-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty accounted traces contain 3,096 spans and thirty completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -259,3 +260,24 @@ five locations, covering the optional-child variant that failed in attempt 14.
 Other tools and the generated chain remain unproven. A subsequent SDK adapter
 correction preserves terminal error origin for existing capacity retries; this
 failed teach is retained and will not be resumed after the change.
+
+
+Flights 16 on `c61dd1e` failed at 90.0001 minutes with location, search and
+booking published; the grid was rejected. Final planning completed around minute
+70. The first grid live call timed out after 121.456 seconds. Its repaired call
+returned 43 fare cells in 34.724 seconds, but the result only identified SEA–DEN
+through caller parameters, so the reviewer correctly rejected unsupported route
+provenance. Search was recompiled to expose the promised selection path; its
+second live check passed in 43.671 seconds after the first chain binding failed
+before invoking booking. The repaired chain reached booking in 33.010 seconds,
+but the final semantic review was interrupted at the deadline without usage.
+
+Individual booking MVP returned three American 6316 SFO–LAX November 12 fare
+options in 33.009 seconds. Neither that pass nor the repaired chain's transport
+completion establishes an end-to-end pass. The research contrast had also shown
+selection_token to be unnecessary when selected_flights stayed fixed; the master
+retained both public parameters because both were encoded. This contract remains
+an audit obligation. No actual capacity retry or malformed-research-handoff catch
+was observed in this run. All 66 reported usage spans are counted once with no
+nested token-bearing ancestor. Partial audit 16 started after the teach exited
+and is excluded from these totals until complete.

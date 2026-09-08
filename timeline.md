@@ -7365,3 +7365,22 @@ The factual failure reached the master, which is revising the plan along with
 the grid's navigation failure. This is ordinary chain repair, not the original
 malformed-research-handoff recovery path. About eight minutes remain before
 08:02:41 UTC. No independent audit yet; keep the token-parameter limitation.
+
+
+## 2026-09-08 01:04 PDT — Flights 16 deadline failure; independent audit started
+
+Flights 16 exited at 90.0001 minutes with three tools ready and grid not ready.
+The grid repair returned 43 fares but showed the requested SEA–DEN route only
+by copying caller parameters; MVP review rejected the missing response evidence.
+Search repair exposed its promised chain path and passed a second live check.
+The chain then reached booking in 33.010 seconds, but final semantic review hit
+the deadline. No full chain pass, capacity retry, or malformed-handoff recovery.
+
+Teach PID 85648 exited by itself. Independent partial audit 16 started at
+08:03:16 UTC, PID 18711, on unchanged home-16 and implementation c61dd1e. It
+audits the three published tools; missing grid still means full scope failed.
+Teach 16 recorded 13,147,148 input tokens, including 10,827,008 cache reads, and
+165,778 output tokens: $16.93 base API estimate. Cumulative through this teach
+is $290.58 and 1,370.53 minutes across nineteen teaches/eleven audits. Thirteen
+failed semantic calls now have missing usage; zero emitted writes remain
+uncertain. Audit 16 is not yet counted. Preserve all failed evidence.
