@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are twenty-one teaches and fourteen independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are twenty-one teaches and fifteen independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 is the exception: host sleep interrupted its monotonic trace clock, so its 52.37 minutes use launch time to final report modification time; the trace reports only 0.54 minutes. Input includes cache reads and writes; do not add the cache columns again. All 1,246 usage spans identify `gpt-5.6-sol`.
+Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 is the exception: host sleep interrupted its monotonic trace clock, so its 52.37 minutes use launch time to final report modification time; the trace reports only 0.54 minutes. Input includes cache reads and writes; do not add the cache columns again. All 1,247 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -42,8 +42,9 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights teach 17 | 4 ready; generated chain and independent audit passed | 88.17 | 14,110,343 | 11,640,192 | 0 | 171,275 | $17.96 |
 | Flights audit 17 | Sleep-interrupted timeout; no graded calls or reported usage | 52.37 | — | — | — | — | — |
 | Flights audit 17b | Full pass: 22/22 correct, no exclusions | 8.67 | 1,054,089 | 985,856 | 0 | 5,456 | $0.78 |
-| Hotels teach 4 | 1 ready; adult-control repair passed; independent audit pending | 32.13 | 7,082,148 | 6,097,408 | 0 | 47,294 | $7.32 |
-| **Total** | **Includes failures/cancellations** | **1,557.38** | **249,217,855** | **204,034,432** | **0** | **2,752,706** | **$317.40** |
+| Hotels teach 4 | 1 ready; independent audit failed on adult count | 32.13 | 7,082,148 | 6,097,408 | 0 | 47,294 | $7.32 |
+| Hotels audit 4 | 9/10 correct; adult count failed | 3.30 | 231,301 | 193,152 | 0 | 1,943 | $0.27 |
+| **Total** | **Includes failures/cancellations** | **1,560.68** | **249,449,156** | **204,227,584** | **0** | **2,754,649** | **$317.67** |
 
 ## Cost assumptions and completeness
 
@@ -59,7 +60,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3/attempt-4 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, `flights-audit-17b-accounting.json`, and `hotels-teach-4-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-five accounted traces contain 3,447 spans and thirty-five completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3/attempt-4 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, `flights-audit-17b-accounting.json`, `hotels-teach-4-accounting.json`, and `hotels-audit-4-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The thirty-six accounted traces contain 3,450 spans and thirty-six completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -366,7 +367,33 @@ records and an observed three-adult control in 36.218 seconds.
 This workflow uses CDP navigation and DOM interactions with rendered HTML
 extraction, not an API response capture. Its public contract includes destination,
 check-in/out dates and adults 1–6. One successful three-adult case is not full
-range proof; independent audit remains due. The initial failed semantic result
+range proof; independent audit subsequently failed. The initial failed semantic result
 is preserved. Optional finesse was deferred after promotion, leaving one
-semantic usage span unreported. Audit 4 runs sequentially on the unchanged
-artifacts and is excluded from totals until complete.
+semantic usage span unreported. Audit 4 ran sequentially on the unchanged
+artifacts and is included in the totals.
+
+
+Hotels audit 4 failed 9/10 units in 3.3041 minutes: six correct invocations,
+three working parameters and adult count graded no-op. Destination and both
+dates passed separate comparisons; two, four and six adults returned identical
+hotel records and prices. No failures were excluded. Its $0.2687 estimate is
+included above. The parser reads the actual adult widget; it does not literally
+copy the caller input, despite the auditor describing the context as an echo.
+
+A private diagnostic ran the unchanged generated tool for two then six adults,
+with separate immediate and ten-second-delayed page snapshots. Both calls
+returned 17 records while visible page text still said Loading results. After
+ten seconds, two adults showed 328 results and six adults showed 2,470 results,
+including vacation rentals with occupancy attributes. This demonstrates
+premature extraction of stale HTML, not merely legitimate no-op price variance.
+The transform waits for the adult control value, which is insufficient to
+establish that the result collection has refreshed. Adult support remains
+unproven; the independent failure is retained without an audit reroll.
+
+The diagnostic used the same tool and CDP rung, taking 41.077 seconds cold
+including setup and 5.605 seconds with its pooled browser. Those are transport
+measurements for semantically stale results, not successful warm-call timings.
+The extra ten-second waits are diagnostic observations, not a proposed runtime
+fix. No LLM calls were made. Script, snapshots and timings remain under
+`/tmp/imprint-fresh-inputs-VYbJm1/hotels-4-diagnostic*` and
+`diagnose-hotels-4.ts`; browser sessions were closed afterward.

@@ -7571,3 +7571,28 @@ $7.32 estimated. Optional finesse was interrupted after MVP promotion with no
 usage, bringing missing semantic calls to14 plus prior interrupted CLI/audit
 work. Cumulative through this teach is$317.40 and1,557.38 minutes across
 21 teaches/14 audits. Audit4 is pending. No implementation change, push or MR.
+
+
+## 2026-09-08 15:05 PDT — Hotels audit fails; stale results reproduced
+
+Independent Hotels audit 4 failed 9/10 units: six correct calls, three working
+parameters, and adult count graded no-op after two/four/six-adult comparisons.
+The process ended in 3.3041 minutes. Preserve its report and transcript.
+
+The unchanged artifact diagnostic returned 17 hotel records for two and six
+adults while the page still said Loading results. Ten seconds later the actual
+collections differed: 328 results for two adults, 2,470 for six, with vacation
+rentals in the latter. The parser reads the real guest widget but captures
+stale records before refresh. Waiting for the control value is insufficient.
+This is concrete stale-capture evidence, not a reason to reroll the audit.
+
+Cold transport including setup took 41.077 seconds; same-tool/same-rung pooled
+transport took 5.605 seconds. Neither is a semantic success. Private snapshots,
+script and timing file remain; diagnostic browser pool closed. No LLM usage.
+
+Accounting now includes 21 teaches and 15 audits: 1,560.68 elapsed minutes,
+249,449,156 input tokens including 204,227,584 cache reads, 2,754,649 output,
+$317.67 base API estimate. Missing usage and cache-write caveats remain.
+No teach or audit is active. Implementation remains fa7a627; next inspect
+existing guidance and make a small general completion-evidence correction
+before fresh validation. No push, MR, deletion or resumed failed teach.
