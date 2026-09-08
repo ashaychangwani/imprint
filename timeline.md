@@ -7626,3 +7626,21 @@ healthy on port 6438; disk 21.09 GiB. Target 22:36:44, assess 23:06:44, hard
 deadline 23:36:44 UTC. Watch actual result completion, fresh producer selections
 and master repair evidence. After full independent Flights audit success,
 repeat Hotels on unchanged implementation. Repeated successes remain due.
+
+
+## 2026-09-08 15:36 PDT — Flights 18 approaches the target
+
+Near minute 30, location and search research are marked proven and drafts have
+started, but no tools are published. Location lookup returned LAX records by
+direct fetch in 393 ms. Search captures GetShoppingResults through CDP; its
+latest comparison changed return date November 12 to 19 with SFO–LAX and
+November 5 departure fixed. The completed API response contains route/date
+context and changed ranked fare records. All advertised inputs still require
+independent audit; a researcher label is not a generated-tool pass.
+
+Grid research tried several direct constructions and is still inspecting its
+evidence. Booking has called fresh search in 52.812 seconds; no consumer result
+is proven yet. Run 23a6e804-2f36-4d35-b74e-0d597ad92196, PID 74618 continues
+unchanged on 6d422b4. Disk about 21 GiB. Keep the 23:06:44 UTC one-hour
+assessment and 23:36:44 hard deadline. No malformed-handoff catch or actual
+capacity retry observed. No second teach/audit, push or MR.
