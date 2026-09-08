@@ -7294,3 +7294,13 @@ Both synthetic reproductions failed before the corrections and passed after.
 1,940 tests / 6,162 assertions across 98 files in 95.36 seconds. Type checking,
 lint, web build and desktop/mobile checks passed; preview stopped. README and
 architecture match. Next validation must be fresh; Flights 15 will not resume.
+
+
+## 2026-09-07 23:32 PDT — Fresh Flights 16 launched on c61dd1e
+
+Fresh attempt 16 started 06:32:41 UTC September 8, PID 85648, new `home-16`.
+Exact recording and original four-operation scope unchanged; no prior tools,
+examples, or diagnostics supplied. Prior teach, audit, tests and previews ended.
+Collector 54899 healthy; disk 21.74 GiB. Target 07:02:41, assess 07:32:41, hard
+deadline 08:02:41 UTC. Existing heartbeat now tracks this run and the actual
+capacity-retry obligations. No push or MR.

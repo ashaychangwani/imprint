@@ -1,6 +1,40 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 22:00 PDT
+## Current continuation — 23:32 PDT
+
+Latest implementation **`c61dd1e`** repairs missed Codex capacity retries in both
+ordinary SDK semantic calls and compiler terminal events. The SDK adapter keeps
+typed terminal failure origin for the existing provider retry policy instead of
+losing it in `Error(message)`. The compiler recognizes the complete known Codex
+capacity diagnostic without treating embedded prose as provider evidence.
+Retries retain the same conversation and existing deadline; no model switch.
+
+Both reproductions failed before the fixes and passed after. **1,940 tests /
+6,162 assertions** passed across 98 files in 95.36 seconds, including 105 focused
+checks. Lint, type checking, web build and desktop/mobile checks passed; all
+previews stopped. README and architecture match.
+
+**Fresh Flights 16** started **06:32:41 UTC September 8**, PID **85648**, new
+`/tmp/imprint-fresh-inputs-VYbJm1/home-16`. Verify `flights-teach-16-manifest.json`
+and log. Same exact recording and original four-operation guidance, no previous
+artifacts/examples/diagnostics supplied. Target **07:02:41**, assess **07:32:41**,
+hard deadline **08:02:41 UTC**. Collector **54899** healthy, disk **21.74 GiB**.
+Existing heartbeat updated; no overlapping teach/audit or unfinished tests.
+
+Flights 15 on `671ae38` stopped early at **67.5145 minutes** on genuine model
+capacity, with location published and three not ready. Search compiler and grid
+MVP reviewer both encountered the missed retry. Partial audit 15 passed **3/3**
+units: San Francisco and Tokyo calls plus query parameter, no exclusions. It is
+not a full Flights pass. Teach **50697** and audit **81231** exited.
+
+Accounting through audit 15: **$273.65** base API equivalent, **1,280.53 minutes**,
+eighteen teaches/eleven audits. Attempt 16 excluded. Twelve failed/interrupted
+semantic calls lack usage; interrupted CLI usage includes attempt-15 search.
+Zero emitted cache writes may represent absent fields. All evidence retained.
+Full Flights/Hotels fresh successes, repeated runs, and independent cold/warm
+timings remain due. No malformed-handoff catch exercised. No push or MR.
+
+## Previous continuation — 22:00 PDT
 
 Latest implementation **`671ae38`** clarifies general parser evidence guidance:
 keep requested/derived context separate from observed attributes, preserve
