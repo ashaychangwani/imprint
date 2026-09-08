@@ -7173,3 +7173,21 @@ that audit obligation rather than treating the plan as success.
 Continue unchanged on `d2e0f33` to the existing 04:44:06 UTC hard deadline.
 Disk 22.66 GiB. No malformed-handoff catch or complete generated chain yet;
 no independent audit started and no prior artifacts were supplied to teachers.
+
+
+## 2026-09-07 21:48 PDT — Flights 14 failed; partial audit started
+
+Attempt 14 ended by itself at 89.9993 minutes: location and date grid published,
+search rejected, booking not compiled. Search discarded server-rendered dates
+and copied the requested date, so MVP review could not prove the requested day.
+The final master repair was interrupted. All four research handoffs had passed,
+but final compilation began near minute 82; research proof is not a full pass.
+No malformed-handoff catch exercised, no signal sent, all evidence retained.
+
+Partial audit 14 started 04:46:10 UTC, PID 48039, on the two published tools in
+`home-14`. Teach PID 11431 exited; no overlap. Disk 22.50 GiB. Teach accounting:
+13,189,021 input, 11,104,896 cache-read, 147,378 output, zero emitted cache-write,
+$15.73 base API equivalent. Cumulative $255.17 across seventeen teaches/nine
+completed audits; active audit excluded. One interrupted master usage remains
+unknown. Continue inspecting the actual parser and audit failures before choosing
+another fresh run. No code change, push or MR.

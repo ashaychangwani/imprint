@@ -1,6 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 20:15 PDT
+## Current continuation — 21:48 PDT
+
+Implementation remains **`d2e0f33`**. Flights 14 failed at **89.9993 minutes**,
+two published tools (location lookup and date grid), search date proof rejected,
+booking not compiled. PID **11431 exited**, no signal sent. All four research
+handoffs had passed after the master changed booking to route/date/result index;
+that does not establish a generated chain or stable selection across calls.
+Search copied the requested date while discarding dates in returned flight labels.
+Final master repair was interrupted. No malformed-handoff catch exercised.
+
+**Partial audit 14 is active**, PID **48039**, started **04:46:10 UTC September 8**,
+same `home-14`. Verify `flights-audit-14-manifest.json` and log. Only the two
+published tools are available. No overlapping teach; inspect actual failures
+before a new fresh experiment. Collector PID **54899** remains active, disk
+**22.50 GiB**. All prior evidence preserved, no push or MR.
+
+Accounting through teach 14: **$255.17** base API equivalent across seventeen
+teaches/nine completed audits. Active audit 14 excluded. Cache and interrupted
+usage caveats remain. Full Flights/Hotels success and repeatability remain due.
+
+## Previous continuation — 20:15 PDT
 
 Same validation worktree/branch, latest implementation **`d2e0f33`**. Context-only
 recording-reference changes no longer invalidate otherwise covered request
