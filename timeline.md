@@ -7320,3 +7320,22 @@ completion alone is not semantic proof or an independent warm-call audit.
 No provider-capacity retry or malformed-handoff repair has been observed yet.
 Continue unchanged on `c61dd1e` toward the 07:32:41 UTC assessment and
 08:02:41 hard deadline. Disk 21.50 GiB.
+
+
+## 2026-09-08 00:37 PDT — Flights 16 one-hour assessment
+
+All four research handoffs now pass, none published. Booking's follow-up called
+fresh search and captured completed American 6316 SFO–LAX November 12 booking
+API data, including seller, fare details and handoff URL. Root matched the
+unpadded token, route, carrier, flight number and [2026,11,12] date inside one
+nested producer record. The candidate adds two base64 padding characters, so
+the token is not literally unchanged. Private provenance is retained in
+`flights-16-chain-research-check.json`; this is research, not a generated chain.
+
+A decisive booking contrast substituted an unrelated token while holding the
+flight-selection data fixed and returned the same selected flight. Thus the
+token is not load-bearing in this construction; the master must resolve that
+public-contract gap before claiming parameter support. Grid's current proof is
+rendered date-cell data, not API response capture. The master is reviewing
+research before planning. Continue unchanged to 08:02:41 UTC with about 25 minutes
+left; disk 21.37 GiB. No capacity retry or malformed-handoff catch observed yet.
