@@ -7003,3 +7003,30 @@ selection/context. The booking agent called search again (33.416 seconds),
 inspected its backing record, and is testing the resulting booking invocation.
 This is useful progress, so continue unchanged to the existing 01:23:42 UTC hard
 deadline. No malformed-handoff catch has been exercised. Disk 23.53 GiB free.
+
+
+## 2026-09-07 18:27 PDT — Flights 12 deadline failure, evidence retained
+
+Attempt 12 ended by itself after 90.2061 minutes, zero ready/four not ready.
+No external signal was sent: the process exited before the planned deadline
+stop could target it. An in-flight browser check completed after the deadline,
+then the next provider review rejected the expired budget. No tools were
+published, so no independent audit is possible.
+
+The master repaired the research-level round-trip/one-way mismatch, and root
+inspection independently matched both dependent opaque values in one 1,052-byte
+fresh producer record. Booking API capture passed in 33.701 seconds. The final
+producer compiler received the tested consumer context. This verifies delivery
+of the new evidence, but not a complete generated chain. All research and
+planning occupied about 86 minutes before final compilation; master/focused
+planner calls totaled 28.98 worker-minutes including earlier overlaps. Location
+and search checks transported successfully but did not finish MVP review.
+
+Recorded usage: 22,877,668 input, including 19,092,864 cache reads, 170,195 output,
+zero emitted cache writes; $26.18 base API equivalent. Cumulative recorded total
+is $223.17 across fifteen teaches/eight audits, with prior accounting caveats.
+No missing semantic usage spans in this attempt. No malformed research handoff,
+symlink failure, or closed-CDP error observed; ordinary selector/navigation
+failures remained. No new mechanical defect explaining the long research was
+established, so the next validation will be a fresh run on unchanged `f022180`,
+without passing these diagnostics to its agents. Preserve the failed result.

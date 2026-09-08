@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are fourteen teaches and eight independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fifteen teaches and eight independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 755 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 858 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -30,7 +30,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights audit 10 | 8/15 correct; booking untestable | 12.53 | 958,099 | 922,496 | 0 | 4,651 | $0.60 |
 | Flights teach 11 | Deadline: 3 ready; booking MVP and chain failed | 90.00 | 11,978,209 | 9,372,416 | 0 | 159,771 | $17.37 |
 | Flights audit 11 | 19/19 correct; 3 tools, one navigation failure excluded | 7.46 | 829,193 | 727,296 | 0 | 4,284 | $0.78 |
-| **Total** | **Includes failures/cancellations** | **937.33** | **152,654,477** | **124,592,000** | **0** | **1,745,336** | **$196.99** |
+| Flights teach 12 | Deadline: 0 ready; final validation unfinished | 90.21 | 22,877,668 | 19,092,864 | 0 | 170,195 | $26.18 |
+| **Total** | **Includes failures/cancellations** | **1,027.54** | **175,532,145** | **143,684,864** | **0** | **1,915,531** | **$223.17** |
 
 ## Cost assumptions and completeness
 
@@ -46,7 +47,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-11 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-two accounted traces contain 2,182 spans and twenty-two completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-12 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-three accounted traces contain 2,367 spans and twenty-three completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -156,3 +157,29 @@ failure was classified `infra` and excluded, and one invalid date-order call
 was excluded as bad input. The failure remains in the raw evidence and does
 not establish reliable cold execution. Booking was not published or audited;
 this is not a full Flights pass or fresh-run repeatability.
+
+
+Flights 12 on `f022180` failed after 90.2061 minutes, zero published tools.
+Research proved all four operations, including a fresh one-way search-to-booking
+API call after the master rejected the earlier round-trip/one-way mismatch.
+Root inspection matched both opaque values inside one 1,052-byte JSON record
+in the fresh 3,666,964-byte producer result; the consumer returned booking fares.
+This does not substitute for a generated-tool chain or independent audit.
+
+Research and repeated focused/master planning left final compilation until about
+minute 86. Earlier location/search/grid drafts took 2.77 / 4.53 / 3.76 minutes;
+final search compilation took 3.59 minutes and received `consumerResearch` in
+its recorded compiler input. The master and focused planners consumed 28.98
+worker-minutes across the run; overlap means this is not elapsed time. Booking
+was not compiled. Location verification fetched successfully in 206 ms, and
+search navigation completed in 33.039 seconds, but deadline prevented completed
+MVP review/publication. The in-flight browser call ran past the deadline before
+the next provider call rejected it; the process ended by itself, with no external
+signal sent. No missing semantic usage spans were recorded in this trace.
+
+No tools were published, so no independent audit was possible. The original
+malformed-handoff catch and complete consumer-context correction remain
+unproven by an end-to-end pass. No symlink or closed-CDP failure recurred, while
+ordinary navigation/selector failures remained. All failed calls are retained.
+Local `flights-12-chain-research-check.json` and `flights-12-decision-timing.json`
+retain bounded provenance and decision timing without altering generated tools.

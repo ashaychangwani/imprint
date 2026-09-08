@@ -1,6 +1,25 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 16:54 PDT
+## Current continuation — 18:27 PDT
+
+Same validation worktree/branch, implementation **`f022180`**, no push or MR.
+Flights 12 **failed at 90.2061 minutes, zero ready/four not ready**; PID 26817
+exited by itself, no signal sent. No published tools, hence no independent audit.
+Fresh research-level search-to-booking proof passed, with both dependent values
+matched by root in one retained record. The final search compiler received
+`consumerResearch`; a complete generated-tool chain remains unproven. Final
+compilation began near minute 86 after lengthy research and planning.
+
+The next step is a fresh Flights run on unchanged `f022180`, since no additional
+mechanical defect explaining these selector/navigation failures was established.
+Do not resume attempt 12 or supply its diagnostics to teaching agents. Verify
+collector PID 54899 and disk before launch; preserve all evidence. Accounting
+through attempt 12 is **$223.17** base API equivalent, **1,027.54 minutes** across
+fifteen teaches/eight audits. No malformed-handoff catch exercised. The prior
+active-run paragraphs below are historical; verify the next manifest/process.
+
+
+## Previous continuation — 16:54 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, based only on remote `34a6235`.
