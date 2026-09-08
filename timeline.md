@@ -7339,3 +7339,17 @@ public-contract gap before claiming parameter support. Grid's current proof is
 rendered date-cell data, not API response capture. The master is reviewing
 research before planning. Continue unchanged to 08:02:41 UTC with about 25 minutes
 left; disk 21.37 GiB. No capacity retry or malformed-handoff catch observed yet.
+
+
+## 2026-09-08 00:49 PDT — Flights 16 publishes location and search
+
+At minute 76, location lookup and one-way flight search passed MVP review and
+were published. Search returned 21 coherent LAX–LAS November 3 itineraries with
+prices and distinct selection data. Final planning completed around minute 70.
+The grid live check failed after 121.452 seconds of navigation; booking is now
+compiling. No independent audit or generated-chain pass yet.
+
+Booking still advertises both selection_token and selected_flights. Its research
+contrast showed the first value did not affect the selected flight when the
+second was held fixed; retain this audit obligation. Keep the existing 08:02:41
+UTC deadline, with about 13 minutes remaining. No code change or extra teach.
