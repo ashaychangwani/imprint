@@ -6971,3 +6971,18 @@ unchanged exact recording and four-operation guidance. No old tools/examples/
 diagnostics supplied to agents. Disk 24.09 GiB free, collector PID 54899 healthy.
 Target 00:23:42 UTC September 8, assess 00:53:42, hard deadline 01:23:42.
 The existing heartbeat follows this fresh validation. No push or MR.
+
+
+## 2026-09-07 17:27 PDT — Flights 12 passed the target, research continues
+
+At minute 33, location lookup and search have accepted research; calendar and
+booking remain in research, with no published tools yet. Location lookup used
+fetch. Search proved rendered round-trip results through CDP after direct API
+attempts failed; this is rendered navigation, not API response capture. Calendar
+has repeated roughly 90-second CDP failures, so the pool correction has not
+eliminated navigation failures. No closed-CDP or symlink errors seen so far.
+
+Booking has made fresh search producer calls (32.514 and 32.125 seconds), but
+there is no completed booking candidate yet to verify its same-record selection
+contract. No malformed researcher handoff has occurred. Keep this run unchanged;
+the 60-minute assessment remains 00:53:42 UTC and hard deadline 01:23:42.
