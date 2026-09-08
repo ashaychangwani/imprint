@@ -656,8 +656,11 @@ remain covered. The implementation must still match the exact proven request
 sequence and selected-response origins before compilation. New public inputs,
 changed transport facts, or removal of a proven origin still invalidate coverage.
 Parser-test guidance uses contrasting fixture records to distinguish field
-meanings and check summaries against their underlying data, without another live
-call or runtime rules for domain-specific values.
+meanings and response shapes, preserve records whose optional fields are absent,
+and check summaries against their underlying data. Requested context and derived
+values cannot replace observed attributes or prove an input was applied. Small
+synthetic missing-field and input-mismatch cases complement existing fixtures
+without another live call or runtime rules for domain-specific values.
 
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.

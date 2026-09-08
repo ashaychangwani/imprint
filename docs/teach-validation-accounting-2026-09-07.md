@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are seventeen teaches and nine independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are seventeen teaches and ten independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 1,011 usage spans identify `gpt-5.6-sol`.
+Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rather than rounded timeline observations. Input includes cache reads and writes; do not add the cache columns again. All 1,012 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -34,7 +34,8 @@ Elapsed time comes from each completed `cli.teach` or `cli.audit` root span, rat
 | Flights teach 13 | Deadline: 1 ready; search MVP failed | 90.25 | 12,421,027 | 10,225,536 | 0 | 163,657 | $16.15 |
 | Flights audit 13 | 3/3 correct; location tool only | 0.83 | 83,531 | 62,976 | 0 | 947 | $0.13 |
 | Flights teach 14 | Deadline: 2 ready; search date proof failed | 90.00 | 13,189,021 | 11,104,896 | 0 | 147,378 | $15.73 |
-| **Total** | **Includes failures/cancellations** | **1,208.61** | **201,225,724** | **165,078,272** | **0** | **2,227,513** | **$255.17** |
+| Flights audit 14 | 13/14 correct; location lookup failed | 3.78 | 390,228 | 322,688 | 0 | 3,087 | $0.46 |
+| **Total** | **Includes failures/cancellations** | **1,212.40** | **201,615,952** | **165,400,960** | **0** | **2,230,600** | **$255.63** |
 
 ## Cost assumptions and completeness
 
@@ -50,7 +51,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-14 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, and `flights-teach-14-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-six accounted traces contain 2,697 spans and twenty-six completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-14 and Hotels attempt-3 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, and `flights-audit-14-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The twenty-seven accounted traces contain 2,700 spans and twenty-seven completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -225,4 +226,17 @@ Separate index 0 and index 1 research calls captured fresh booking API responses
 for Delta 1696 and American 2218, respectively. These are research successes,
 not a generated chain or stable identity across independent search calls.
 Final compilation started near minute 82, leaving insufficient repair time.
-Partial audit 14 began afterward and is excluded from these totals until done.
+Partial audit 14 completed afterward and is included in these totals.
+
+
+Partial audit 14 failed 13/14 units in 3.7822 minutes: six correct calls, one
+broken call, and seven working parameters. San Francisco location lookup
+returned zero records; London lookup and five grid calls passed. No excluded
+calls or untestable parameters. A subsequent direct fetch diagnostic using the
+unchanged generated transform/parser returned HTTP 200 and 2,032 bytes in
+168.478 ms, with five real location records but zero parsed results. One row
+omitted its optional child list; the parser's whole-list predicate consequently
+rejected all rows. A manually constructed two-record fixture reproduced the
+same loss when one child list was absent. Diagnostics made no LLM calls and
+are not audit reruns or a replacement pass. Private evidence is
+`flights-14-location-diagnostic*` and `parser-14-synthetic-diagnostic*`.

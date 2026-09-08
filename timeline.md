@@ -7191,3 +7191,26 @@ $15.73 base API equivalent. Cumulative $255.17 across seventeen teaches/nine
 completed audits; active audit excluded. One interrupted master usage remains
 unknown. Continue inspecting the actual parser and audit failures before choosing
 another fresh run. No code change, push or MR.
+
+
+## 2026-09-07 22:02 PDT — Audit 14 failed; clarify general parser evidence guidance
+
+Partial audit 14 failed 13/14 checks: six correct calls, one empty San Francisco
+location call, and seven working parameters; no exclusions. Five grid calls
+passed. Audit PID 48039 exited after 3.7822 minutes, adding $0.46. Total recorded
+base estimate $255.63 across seventeen teaches/ten audits. No full Flights pass.
+
+The unchanged location transform returned five real records via direct fetch
+in 168.478 ms, but its parser returned none because one row lacked an optional
+child list. A synthetic two-row fixture reproduced that all-or-nothing rejection.
+Search's separate date failure came from replacing response attributes with
+caller context. Private diagnostic scripts and raw responses remain preserved;
+no generated tool was repaired or supplied to a teaching agent.
+
+The compiler prompt now distinguishes requested/derived values from observed
+attributes and asks fixture comparisons to cover absent optional fields and
+input mismatches. It asks agents to preserve valid records independently; no
+runtime parser rules or site-specific instructions. README, architecture and
+website copy match. Thirty focused tests / 134 assertions, lint, type checking,
+web build and desktop/mobile visual checks passed. Preview stopped. This prompt
+correction still needs a fresh teach; no failed run will be resumed.
