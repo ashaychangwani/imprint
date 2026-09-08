@@ -39,6 +39,11 @@ For example, `query: "blue large shirts"` is not evidence that the returned
 products are blue or large. Ground the claim in returned record attributes or
 independently observed effective settings; otherwise name that mapping as
 unproven. A response's provenance alone does not establish its meaning.
+In the handoff, identify the response paths or short excerpts that establish
+what the core records are for, so the compiler can preserve that evidence in
+its result. A populated collection plus a requested scope in the URL or form
+is not enough. If the result's scope remains unsupported, keep the working
+candidate as partial and name the missing evidence before parser compilation.
 
 Break coincidental equality before naming an ambiguous field. For example,
 an unlabeled `6` in a shipment response could mean six cartons or six total
@@ -66,9 +71,14 @@ parameter breadth or every extra variant. Return `action: "partial"` only when
 one exact tested candidate is genuinely useful but still cannot fulfill the
 selected MVP's core result or a required downstream obligation. Preserve that
 exact candidate and observation and list each blocking gap in `missingProof`.
-Do not use `partial` for optional filters, extra modes, or more aggressive
-request minimization; note those as deferred best-effort work in `reason` and
-let planning and compilation proceed. Proven independent tools may prepare
+Do not use `partial` for optional filters, extra modes, or speculative request
+minimization; note those as deferred best-effort work in `reason` and let
+planning and compilation proceed. Evidence that an advertised input is ignored
+is a contract gap, not optional minimization. Preserve the exact working
+candidate and report that gap to the master; encoding an input or obtaining it
+from a producer does not establish that the construction needs or honors it.
+
+Proven independent tools may prepare
 drafts while other research continues, within the same two worker slots.
 Drafts still require master approval and normal verification before publication.
 The master waits for every operation's

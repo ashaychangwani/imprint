@@ -7384,3 +7384,33 @@ Teach 16 recorded 13,147,148 input tokens, including 10,827,008 cache reads, and
 is $290.58 and 1,370.53 minutes across nineteen teaches/eleven audits. Thirteen
 failed semantic calls now have missing usage; zero emitted writes remain
 uncertain. Audit 16 is not yet counted. Preserve all failed evidence.
+
+
+## 2026-09-08 01:17 PDT — Audit 16 passes partial scope; research contract clarified
+
+Partial audit 16 passed its reported 14/14 units in 5.5064 minutes: eight calls
+and six parameter grades, no exclusions. Location and all three search inputs
+passed. Fresh booking selections returned Frontier 3308 and Southwest 4319
+fares for SFO–LAX October 15. Both booking inputs changed together, so their
+individual effects remain unproven despite the report marking both working.
+Grid remains missing. Audit PID 18711 exited. Recorded cumulative estimate
+is $291.34, including all nineteen teaches and twelve audits.
+
+Research called the grid proven using page/form scope; the final reviewer
+required independently grounded result scope. Handoffs now explicitly identify
+the response evidence a compiler must preserve, or return that core gap early.
+The master also retained a demonstrated unnecessary booking input as deferred
+minimization. Research and master guidance now distinguish speculative
+minimization from an observed ignored-input contract gap. Audit guidance keeps
+valid paired inputs coherent while separating their combined effect from proof
+of each individual input. No site-specific rules or runtime changes.
+
+Existing prompt/schema and agent/audit tests passed: 198 tests, 1,079 assertions
+across four files in 2.10 seconds. Type checking and lint passed. Web build
+initially caught an unescaped apostrophe in changed copy; corrected rebuild
+passed with its existing large-bundle warning. Failed build evidence retained.
+Fresh validation follows these prompt changes; no failed run will be resumed.
+
+Desktop/mobile visual checks passed with no page errors or horizontal overflow;
+preview stopped. The larger full suite remains the c61dd1e 1,940-test baseline;
+these edits only change prompts and matching documentation.

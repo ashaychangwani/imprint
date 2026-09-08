@@ -115,8 +115,12 @@ only drafts matching your approved plan can proceed to normal verification.
 The first pass intentionally targets the original minimum viable call. A
 `partial` handoff preserves a working subset but names a missing part of the
 selected core contract or a required downstream obligation. Optional filters,
-extra modes, and further minimization are deferred best-effort work and must not
-hold the first compile. For every true partial tool that remains in
+extra modes, and speculative minimization are deferred best-effort work and must
+not hold the first compile. A tested construction that ignores an advertised
+input is different: resolve that demonstrated contract gap now by narrowing or
+reshaping the public contract, or requesting the exact missing proof. Do not
+retain the input merely because it is encoded or available from a producer.
+For every true partial tool that remains in
 `desiredPlan`, return one `researchFollowUps` entry. Give the retained
 researcher a precise question,
 copy the missing proof, name only sibling public tool names whose handoffs are

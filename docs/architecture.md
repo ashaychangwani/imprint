@@ -55,6 +55,12 @@ claiming those mappings proven, rather than waiting for a repair follow-up.
 It checks returned meaning, including unchanged core values, not just input
 echoes. This is agent guidance, not a host-enforced call count or an exhaustive
 parameter sweep. Rate-limited uncertainty remains explicit for the master.
+Research handoffs identify response paths or excerpts establishing what the core
+records are for; compilers preserve that evidence instead of substituting request
+scope. A demonstrated ignored input is a contract gap for the master, even if it
+is encoded or producer-supplied. Speculative request minimization can still wait.
+Auditors keep bound input pairs coherent while distinguishing joint behavior
+from individual parameter attribution; an unresolved member remains untestable.
 The contrast should distinguish each claimed core mapping from a default or
 coincidental match. One changed input does not prove all inputs. Researchers
 preserve the working request and identify unresolved mappings for focused

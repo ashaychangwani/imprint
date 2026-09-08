@@ -149,6 +149,10 @@ Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
 Research uses a small contrasting core-input check before claiming parameter
 mappings are proven; optional parameter breadth remains deferred.
+Handoffs identify the response evidence that establishes the core records' scope
+for the compiler to preserve. Demonstrated ignored inputs return for contract
+revision; they are not deferred as optional minimization. Audits distinguish a
+bound pair's combined behavior from proof of each input's individual effect.
 That contrast must distinguish claimed mappings from defaults; changing one
 input does not prove the others, and unproven mappings return for follow-up.
 The master reviews that evidence even when research labels itself proven;
