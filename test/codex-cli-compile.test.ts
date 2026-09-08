@@ -17,6 +17,17 @@ const interruption = (event: Record<string, unknown>) =>
   parseCodexTerminalOutput(JSON.stringify(event)).interruption;
 
 describe('Codex terminal provider facts', () => {
+  it('recognizes the Codex terminal model-capacity response without trusting embedded prose', () => {
+    const message = 'Selected model is at capacity. Please try a different model.';
+    expect(interruption({ type: 'turn.failed', error: { message } })).toBe('capacity_or_overload');
+    for (const text of [`MCP result: ${message}`, JSON.stringify({ message })]) {
+      expect(interruption({ type: 'turn.failed', error: { message: text } })).toBeUndefined();
+    }
+    expect(
+      interruption({ type: 'turn.failed', error_code: 'invalid_request', error: { message } }),
+    ).toBeUndefined();
+  });
+
   it('marks structured provider overload but ignores arbitrary terminal target-site text', () => {
     expect(
       interruption({

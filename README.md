@@ -212,6 +212,8 @@ request and public inputs remain covered; executable request changes still need
 matching proof. Parser tests compare contrasting fixture records and check that
 reported summaries agree with their underlying data. They retain records with
 absent optional fields and distinguish requested context from observed attributes.
+Provider capacity failures retry the same conversation within the existing
+deadline; deterministic request and access errors remain terminal.
 Compile-time browser cleanup waits for concurrent calls to finish; one completed
 request cannot idle-close another request's active browser.
 MCP failures include the completed backend attempts and timings, so a final

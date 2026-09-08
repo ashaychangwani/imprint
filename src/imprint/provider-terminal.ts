@@ -73,6 +73,14 @@ function codexProviderEnvelope(event: JsonRecord): JsonRecord | undefined {
   }
   const error = record(event.error);
   if (!error) return undefined;
+  // Codex emits this provider diagnostic without provider/source metadata.
+  // Match the complete terminal message, not capacity words in tool prose.
+  if (
+    event.type === 'turn.failed' &&
+    error.message === 'Selected model is at capacity. Please try a different model.'
+  ) {
+    return error;
+  }
   const provider = typeof error.provider === 'string' ? error.provider.toLowerCase() : '';
   const source = typeof error.source === 'string' ? error.source.toLowerCase() : '';
   if ((provider === 'openai' || provider === 'codex') && source === 'provider') return error;

@@ -3,6 +3,7 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { Codex, type Thread } from '@openai/codex-sdk';
+import { runCodexSdkTurn } from './codex-sdk-turn.ts';
 import { runOwnedCli } from './compiler-process.ts';
 import {
   ProviderReportedError,
@@ -492,13 +493,17 @@ ${cliFinalArtifactInstruction()}`;
         try {
           turn = await runCodexTurnWithWatchdog(
             (signal) =>
-              retryMissingCodexStdin(combinedPrompt, () => thread.run(combinedPrompt, { signal }), {
-                signal,
-                onRetry: () =>
-                  console.error(
-                    '[imprint] Codex received no stdin prompt; retrying the same conversation once',
-                  ),
-              }),
+              retryMissingCodexStdin(
+                combinedPrompt,
+                () => runCodexSdkTurn(thread, combinedPrompt, { signal }),
+                {
+                  signal,
+                  onRetry: () =>
+                    console.error(
+                      '[imprint] Codex received no stdin prompt; retrying the same conversation once',
+                    ),
+                },
+              ),
             { signal: opts.signal },
           );
         } catch (err) {

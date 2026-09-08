@@ -7262,3 +7262,35 @@ selection and stable itinerary association still require generated-chain audit.
 Useful work continues with about 26 minutes left; retain the existing
 06:29:25 UTC hard deadline. Disk 22.05 GiB. No code change, malformed-handoff
 catch, independent audit, or complete generated-chain pass yet.
+
+
+## 2026-09-07 23:32 PDT — Flights 15 capacity failure; both retry adapters repaired
+
+Flights 15 stopped at 67.5145 minutes with one published location tool and three
+not ready. Both the search compiler and grid MVP reviewer received the actual
+Codex message "Selected model is at capacity. Please try a different model."
+The SDK discarded the terminal event's origin by throwing a plain error; the
+compiler terminal adapter ignored the same message without provider metadata.
+About 22.5 minutes remained, so this was a missed retry, not deadline exhaustion.
+
+Partial audit 15 passed 3/3 units: San Francisco and Tokyo calls plus the query
+parameter, no exclusions. San Francisco returned five locations, covering the
+optional-child case that failed in attempt 14. Only location was published;
+this is not full Flights success. Teach PID 50697 and audit PID 81231 exited.
+Recorded cumulative estimate is $273.65 across eighteen teaches/eleven audits,
+1,280.53 minutes. The failed semantic call and interrupted search compiler may
+have unreported usage; all evidence remains preserved.
+
+The SDK adapter now consumes its streamed terminal events and preserves typed
+turn failures for the existing retry policy. Successful items and cache/token
+usage keep the SDK aggregation; retries use the same thread and prompt. The
+compiler adapter recognizes the complete known Codex capacity diagnostic in the
+terminal error object. Embedded prose and deterministic errors remain outside
+capacity retry. No site strategy rules, model switch, or deadline extension.
+
+Both synthetic reproductions failed before the corrections and passed after.
+105 focused tests / 459 assertions passed. The first SDK-only full suite passed
+1,939 tests; after adding the compiler correction the final full suite passed
+1,940 tests / 6,162 assertions across 98 files in 95.36 seconds. Type checking,
+lint, web build and desktop/mobile checks passed; preview stopped. README and
+architecture match. Next validation must be fresh; Flights 15 will not resume.

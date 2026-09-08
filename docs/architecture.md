@@ -536,6 +536,16 @@ repairs refresh these facts without resetting conversation history. Agents
 choose how to use the remaining time; the host adds no attempt quotas or
 site-specific strategy. Compiler and nested-verifier deadline errors retain
 their deadline cause instead of being relabeled as provider capacity failures.
+The Codex SDK adapter consumes streamed turn events through `codex-sdk-turn.ts`,
+retaining typed terminal failure messages as provider evidence. The SDK's
+`run()` shortcut discards that origin by throwing a plain error. Capacity errors
+therefore reach the existing bounded retry policy on the same thread and prompt,
+while successful items and usage retain the SDK's normal aggregation. Ordinary
+agent/tool items and arbitrary thrown errors do not acquire provider status.
+Deterministic request/access failures and cancellation keep their existing handling.
+The compiler terminal adapter also recognizes the complete Codex model-capacity
+diagnostic in `turn.failed.error.message` when provider metadata is absent. It
+does not interpret embedded tool prose or stringified error objects.
 
 A teach command never resumes an earlier run. Old run directories are
 diagnostic evidence only. The command stays in the foreground until it reports
