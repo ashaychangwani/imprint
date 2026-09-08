@@ -7386,7 +7386,7 @@ failed semantic calls now have missing usage; zero emitted writes remain
 uncertain. Audit 16 is not yet counted. Preserve all failed evidence.
 
 
-## 2026-09-08 01:17 PDT — Audit 16 passes partial scope; research contract clarified
+## 2026-09-08 01:15 PDT — Audit 16 passes partial scope; research contract clarified
 
 Partial audit 16 passed its reported 14/14 units in 5.5064 minutes: eight calls
 and six parameter grades, no exclusions. Location and all three search inputs
@@ -7414,3 +7414,12 @@ Fresh validation follows these prompt changes; no failed run will be resumed.
 Desktop/mobile visual checks passed with no page errors or horizontal overflow;
 preview stopped. The larger full suite remains the c61dd1e 1,940-test baseline;
 these edits only change prompts and matching documentation.
+
+
+## 2026-09-08 01:16 PDT — Fresh Flights 17 launched on fa7a627
+
+Fresh attempt 17 started 08:15:51 UTC, PID 21121, new home-17. Same explicit
+combined recording and four-operation guidance; no old artifacts supplied.
+Prior teach/audit processes ended, tests and preview stopped, git was clean,
+collector 54899 healthy, disk 21.25 GiB. Target 08:45:51, assess 09:15:51, hard
+deadline 09:45:51 UTC. Existing heartbeat now follows this run. No push or MR.
