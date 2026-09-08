@@ -7304,3 +7304,19 @@ examples, or diagnostics supplied. Prior teach, audit, tests and previews ended.
 Collector 54899 healthy; disk 21.74 GiB. Target 07:02:41, assess 07:32:41, hard
 deadline 08:02:41 UTC. Existing heartbeat now tracks this run and the actual
 capacity-retry obligations. No push or MR.
+
+
+## 2026-09-08 00:07 PDT — Flights 16 target checkpoint
+
+At minute 34, location and search research are proven; grid and booking are
+still testing, with no published tools. Search captured the actual shopping
+API response for one-way LAX–LAS November 3, including flight numbers, prices
+and per-itinerary selections, after two observations. Its cold CDP call took
+41.772 seconds. Location's London query passed direct fetch in 357 ms.
+
+Grid and booking have several navigation failures, including 75–122-second
+waits; keep those attempts in the evidence. A 1.197-second pooled transport
+completion alone is not semantic proof or an independent warm-call audit.
+No provider-capacity retry or malformed-handoff repair has been observed yet.
+Continue unchanged on `c61dd1e` toward the 07:32:41 UTC assessment and
+08:02:41 hard deadline. Disk 21.50 GiB.
