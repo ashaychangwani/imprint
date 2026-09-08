@@ -7644,3 +7644,27 @@ is proven yet. Run 23a6e804-2f36-4d35-b74e-0d597ad92196, PID 74618 continues
 unchanged on 6d422b4. Disk about 21 GiB. Keep the 23:06:44 UTC one-hour
 assessment and 23:36:44 hard deadline. No malformed-handoff catch or actual
 capacity retry observed. No second teach/audit, push or MR.
+
+
+## 2026-09-08 16:11 PDT — Flights 18 one-hour assessment
+
+At minute 63, location, round-trip search and date-grid research are proven;
+three drafts exist but no tool is published. Grid returned 49 API cells for
+November 2–8 departures and November 16–22 returns. A destination-only
+SFO–LAX versus SFO–JFK contrast changed matching cell fares; independent
+parameter coverage remains due.
+
+Booking returned an ordinary factual block: the outbound producer selection
+does not identify the later return flight required for complete round-trip
+booking options. This was not the malformed-handoff recovery catch. The master
+retained the three independent operations, revised booking to outbound_selection
+plus a zero-based return_choice_index, and sent the exact gap back to its same
+researcher. Request 139 should produce return records; request 154 should consume
+one indexed record's coherent fresh token and descriptor. No positive complete
+booking result or fresh generated chain is established. Recent CDP attempts
+failed after 121.496, 33.140 and 120.898 seconds; all evidence remains.
+
+Continue unchanged on 6d422b4: the three drafts and explicit remaining contract
+test justify the remaining 26 minutes, but full success is at risk. Hard
+deadline stays 23:36:44 UTC; no extension, model switch or parallel teach/audit.
+PID 74618 active, disk about 21 GiB. No actual capacity retry observed.
