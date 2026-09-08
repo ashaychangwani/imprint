@@ -7030,3 +7030,13 @@ symlink failure, or closed-CDP error observed; ordinary selector/navigation
 failures remained. No new mechanical defect explaining the long research was
 established, so the next validation will be a fresh run on unchanged `f022180`,
 without passing these diagnostics to its agents. Preserve the failed result.
+
+
+## 2026-09-07 18:29 PDT — Fresh Flights 13 on unchanged f022180
+
+Attempt 13 started 01:27:46 UTC September 8, PID 71301, new isolated `home-13`.
+Exact recording and original four-operation guidance unchanged. No earlier
+artifacts/examples/diagnostics supplied. Attempt 12 process exited; no parallel
+experiment or preview. Collector PID 54899 healthy, disk 23.49 GiB. Target
+01:57:46 UTC, assess 02:27:46, hard deadline 02:57:46. Existing heartbeat updated.
+No code change, push, or MR.

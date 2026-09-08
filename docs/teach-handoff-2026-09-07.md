@@ -1,6 +1,6 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 18:27 PDT
+## Current continuation — 18:29 PDT
 
 Same validation worktree/branch, implementation **`f022180`**, no push or MR.
 Flights 12 **failed at 90.2061 minutes, zero ready/four not ready**; PID 26817
@@ -10,10 +10,14 @@ matched by root in one retained record. The final search compiler received
 `consumerResearch`; a complete generated-tool chain remains unproven. Final
 compilation began near minute 86 after lengthy research and planning.
 
-The next step is a fresh Flights run on unchanged `f022180`, since no additional
-mechanical defect explaining these selector/navigation failures was established.
-Do not resume attempt 12 or supply its diagnostics to teaching agents. Verify
-collector PID 54899 and disk before launch; preserve all evidence. Accounting
+**Fresh Flights 13** started **01:27:46 UTC September 8**, PID **71301**,
+new `/tmp/imprint-fresh-inputs-VYbJm1/home-13`, unchanged `f022180`, exact
+recording and guidance. Verify `flights-teach-13-manifest.json` and log. Target
+**01:57:46**, assess **02:27:46**, hard deadline **02:57:46 UTC**. No additional
+mechanical defect explaining the slow research was established, so this tests
+unchanged code. No previous artifacts/examples/diagnostics supplied. Collector
+PID 54899 healthy; disk **23.49 GiB** before launch. Existing heartbeat updated.
+Do not resume attempt 12; preserve all evidence. Accounting
 through attempt 12 is **$223.17** base API equivalent, **1,027.54 minutes** across
 fifteen teaches/eight audits. No malformed-handoff catch exercised. The prior
 active-run paragraphs below are historical; verify the next manifest/process.
