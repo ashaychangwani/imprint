@@ -1,6 +1,60 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 23:32 PDT
+## Current continuation — September 8, 15:07 PDT
+
+Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
+branch `codex/imprint-master-v066-validation`, based only on remote `34a6235`.
+Latest implementation **6d422b4** adds general guidance for completed rendered
+collections after actions. Research must distinguish an updated control from
+finished results, compiler preserves the researched completion condition, and
+MVP review uses supplied stale/loading evidence without inventing failures.
+No runtime delay or site-specific rule. Matching README, architecture and web
+copy updated. 198 tests/1,079 assertions, lint/types, web build and desktop/mobile
+checks passed. Full-suite baseline remains c61dd1e: 1,940 tests/6,162 assertions.
+No push or MR.
+
+Flights 17 on fa7a627 completed all four tools and a fresh booking chain in
+88.1734 minutes. Full independent audit 17b passed 22/22 (13 calls, 9 parameters),
+no exclusions. First and second fresh selections returned matching booking
+options. Original audit 17 timed out during host sleep without graded calls or
+reported usage; its evidence is preserved separately. This is one fresh pass
+on an earlier implementation, not repeatability on the current revision.
+
+Hotels 4 on unchanged fa7a627 taught one tool in 32.1286 minutes but independent
+audit failed 9/10. Destination and both dates worked; adults 2/4/6 returned
+identical records/prices. A private unchanged-artifact diagnostic established
+premature extraction: both calls returned 17 records while visible results were
+loading. Ten seconds later, two adults showed 328 results and six showed 2,470,
+including vacation rentals. The transform only waited for the changed adult
+widget. This is concrete stale-capture evidence, not an audit reroll opportunity.
+Private `hotels-4-diagnostic*` files and `diagnose-hotels-4.ts` preserve evidence;
+diagnostic pool closed. Cold/warm transports were 41.077/5.605 seconds but
+semantically stale, so successful warm timings remain due.
+
+**ACTIVE Flights 18**, PID **74618**, started **22:06:44 UTC September 8** on
+6d422b4, unused `/tmp/imprint-fresh-inputs-VYbJm1/home-18`. Verify the process
+and `flights-teach-18-manifest.json` before acting. Exact combined recording and
+four-operation guidance unchanged. Target 22:36:44, assess 23:06:44, hard deadline
+23:36:44 UTC. No other teach/audit runs. Collector PID 54899, port 6438, appends
+`spans-validation.jsonl`; existing heartbeat follows the current run. Disk was
+21.09 GiB at launch. Do not restart or duplicate it.
+
+Accounting through Hotels audit 4 is $317.67 base API equivalent, 1,560.68
+elapsed minutes, 21 teaches/15 audits. Fourteen semantic calls plus interrupted
+CLI/audit work lack usage; zero emitted cache writes may mean missing reporting.
+See the accounting document for exact totals, all failures and pricing caveats.
+Active Flights 18 is excluded until complete.
+
+Next: monitor fresh producer-to-consumer values and actual completion evidence,
+then independently audit. If Flights passes, fresh Hotels 5 on unchanged code,
+then further fresh teaches/audits for repeatability. Any code/prompt change
+requires a new teach. Keep narrow MVP scope, agent strategy, runtime mechanics,
+sequential runs and two workers. Do not feed prior tools/examples/diagnostics to
+teachers. No live malformed-handoff catch or capacity retry has been exercised
+by recent successful runs. Keep all failed evidence; no deletion, vNext changes,
+push, MR or merge.
+
+## Previous continuation — 23:32 PDT
 
 Latest implementation **`c61dd1e`** repairs missed Codex capacity retries in both
 ordinary SDK semantic calls and compiler terminal events. The SDK adapter keeps
