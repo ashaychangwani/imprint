@@ -6986,3 +6986,20 @@ Booking has made fresh search producer calls (32.514 and 32.125 seconds), but
 there is no completed booking candidate yet to verify its same-record selection
 contract. No malformed researcher handoff has occurred. Keep this run unchanged;
 the 60-minute assessment remains 00:53:42 UTC and hard deadline 01:23:42.
+
+
+## 2026-09-07 17:56 PDT — Flights 12 one-hour assessment
+
+At minute 62, all four tools have first-pass research, but no tools are published.
+Calendar finally proved a rendered SFO–LAX date-grid matrix after 15 observations;
+booking captured a live GetBookingResults API response for Delta DL2980 LAX–SEA
+on October 20, two adults, with $217/$297 fare products and links. These are
+research results, not independently audited generated tools.
+
+The master correctly rejected chain sufficiency: search's accepted proof was
+round-trip while booking's was one-way, so independent success did not prove a
+compatible fresh dependency. It requested a fresh one-way search and same-record
+selection/context. The booking agent called search again (33.416 seconds),
+inspected its backing record, and is testing the resulting booking invocation.
+This is useful progress, so continue unchanged to the existing 01:23:42 UTC hard
+deadline. No malformed-handoff catch has been exercised. Disk 23.53 GiB free.

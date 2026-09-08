@@ -32,6 +32,13 @@ hard deadline about **01:23:42**. Collector PID **54899**, port **6438**, writes
 `spans-validation.jsonl`. Existing heartbeat follows this fresh run. Disk had
 **24.09 GiB** free at launch.
 
+At the **00:56 UTC one-hour assessment**, all four tools have first-pass research,
+none published. Calendar proved rendered grid results; booking captured the API.
+The master identified a round-trip search versus one-way booking mismatch and
+requested fresh same-record dependency proof before planning. Booking called the
+producer again and is testing that result. Continue unchanged to the existing
+90-minute deadline; no malformed-handoff catch exercised. Disk 23.53 GiB free.
+
 Flights 11 remains a failed teach, three ready/booking not ready. Partial audit
 11 passed **19/19** graded units in **7.4647 minutes**, but excluded one cold
 grid navigation failure and one invalid date-order call. Booking was unavailable.
