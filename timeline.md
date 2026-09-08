@@ -7478,3 +7478,14 @@ provenance is flights-17-chain-research-check.json. The consumer actually uses
 result_index to construct nth-child, not the token or flight number, so stable
 API-record-to-DOM ordering and generated-chain behavior remain audit obligations.
 No implementation change; retain the 09:45:51 UTC hard deadline.
+
+
+## 2026-09-08 02:38 PDT — Flights 17 publishes three tools
+
+At minute 83, location lookup, search and API date grid passed final MVP review
+and published. Search returned 38 SFO–LAX October 29 itineraries; the second
+record contains Southwest WN4319 and its selected_flights composite with index
+2. Grid returned 49 November date pairs, including November 10/18 at USD377,
+after a 33.522-second CDP call. Booking compilation is underway. No generated
+chain or independent audit pass yet. Keep the 09:45:51 UTC deadline, with
+about seven minutes remaining. No code change or duplicate run.
