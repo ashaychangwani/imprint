@@ -7513,3 +7513,25 @@ cumulative reported estimate is $309.30 across twenty teaches/thirteen audits,
 1,516.58 elapsed minutes including the sleeping audit. Its usage is missing
 in addition to thirteen historical semantic calls. Audit 17b is pending.
 No push or MR. After full audit success, proceed to Hotels on unchanged code.
+
+
+## 2026-09-08 14:09 PDT — Flights full audit passes; fresh Hotels 4 started
+
+Full audit 17b passed 22/22 deterministic units in 8.6720 minutes: thirteen
+correct calls and nine working parameters, no failures or exclusions. Its
+prose miscounted 24 units/eleven parameters; actual arrays establish 22/nine.
+Both first and second fresh booking selections returned matching Frontier3308
+and Southwest4319 fare offers. These were booking-option reads, not ticket
+purchases. All four grid inputs passed separate comparisons. This is one full
+Flights teach and audit pass on fa7a627, not fresh-teach repeatability.
+
+Audit PID57825 ended. Fresh Hotels4 started 21:08:17 UTC, PID59310, unused
+hotels-home-4, exact June4 recording, no guidance, unchanged fa7a627. Collector
+54899 healthy; disk21.37 GiB. Target21:38:17, assess22:08:17, hard22:38:17 UTC.
+No earlier generated artifacts or diagnostics supplied. Destination/date MVP
+remains the proven target; guest-count support is unproven.
+
+Accounting through audit17b is $310.08, 1,525.25 elapsed minutes across twenty
+teaches/fourteen audits, including the sleep-interrupted first audit17. Active
+Hotels4 excluded until completion. Keep the failed evidence and distinct cold/
+warm timing obligation. No implementation change, push, or MR.
