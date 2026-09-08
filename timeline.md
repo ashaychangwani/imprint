@@ -7225,3 +7225,18 @@ all ended before launch. Collector 54899 healthy; disk 22.45 GiB. Target 05:29:2
 assessment 05:59:25, hard deadline 06:29:25 UTC. Existing heartbeat updated.
 No push or MR. The previous entry's timestamp was corrected to its actual
 21:58 PDT checkpoint time.
+
+
+## 2026-09-07 22:34 PDT — Flights 15 target checkpoint
+
+At minute 35, location lookup and search research are proven; grid and booking
+are still testing, with no published tools. Search returned rendered SFO–LAX
+round-trip results for November 10–17 after five observations. Both grid and
+booking called that same-run search request for fresh upstream values, taking
+32.286 and 33.164 seconds respectively; booking's tested selection association
+and result remain unproven. Do not treat the producer call alone as a chain pass.
+
+Location's changed query was `lax`, and its early draft compiled while research
+continued. Several grid/navigation attempts failed; their actual history remains
+in the run. No malformed-handoff catch exercised. Continue unchanged on
+`671ae38` to the 05:59:25 UTC assessment and 06:29:25 hard deadline. Disk 22.16 GiB.
