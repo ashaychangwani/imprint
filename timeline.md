@@ -7733,3 +7733,27 @@ Run 6e730a5b-4105-4f07-b998-8e23f7f3c00b, PID 97393 continues unchanged on
 6d422b4. Machine is now on battery, 54%, awake; disk about 21 GiB. Keep the
 06:45:13 UTC assessment and 07:15:13 hard deadline. No malformed handoff or
 actual capacity retry observed. No second teach/audit, push or MR.
+
+
+## 2026-09-10 23:46 PDT — Flights 19 one-hour assessment and booking selection gap
+
+Near one hour, retained booking research produced credible Frontier F9 2334
+LAX–LAS October 22 fare offers after a fresh sibling search (34.682 seconds)
+and a 33.470-second consumer. Its GetBookingResults response identifies the
+itinerary and Basic/Economy Bundle offers, including USD52/87. Root matched
+both opaque values, ignoring added base64 padding, inside one fresh 1,062-byte
+producer record with route, flight number and [2026,10,22]. Literal values
+differ; private flights-19-chain-research-check.json records the comparison.
+
+The candidate still uses a fixed first-result selector. It decodes and checks
+the two inputs but does not use flight identity to select a matching DOM row.
+Research calls non-first selection optional; this remains a core gap for an
+advertised chosen-flight input. The master is reviewing that proven label.
+No generated booking pass, published tool or independent audit exists yet.
+The earlier ordinary blocked handoff reached the master for retained research;
+this does not exercise malformed-output recovery. No actual capacity retry.
+
+Continue unchanged on 6d422b4 within the remaining half-hour: all four have
+positive core research evidence, with an explicit booking selection gap still
+to resolve. Keep 07:15:13 UTC hard deadline. Host is awake on battery at 51%,
+PID 97393 active. No duplicate run, code change, push or MR.
