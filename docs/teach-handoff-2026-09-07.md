@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 14:38 PDT
+## Current continuation — September 11, 15:04 PDT
+
+No active teach/audit. Partial audit 26 failed 12/13 graded: missing UA1260
+departure, two capture timeouts, three search parameters untestable. Booking
+unpublished. Accounting through audit 26 is $536.3473856 base estimate across
+32 teaches/25 audits, with prior missing-usage and pricing caveats unchanged.
+
+Private diagnosis reproduced the missing zero minute and a timed-out background
+capture while the page displayed 30 JFK–LAX results. See newest timeline and
+private flights-26-network-* / flights-26-parser-capture-diagnostic.json. No
+private evidence or previous tools may be supplied to the next teacher.
+
+Current correction supplies bounded pageDiagnostic facts after failed teaching
+calls, preserving failure and agent strategy choice. Existing parser guidance
+addresses evidenced protocol-default omissions. 287 tests/1,325 assertions,
+lint, typecheck, web build and desktop/mobile checks passed. page-diagnostic-*
+logs/screenshots retained. Preview 94956, diagnostic 55735 and audit 12303 ended.
+Next commit checkpoint and start fresh Flights 27 in unused home-27, using exact
+recording/guidance and 30/60/90-minute limits. Independently audit then Hotels 7
+on unchanged code after full Flights success. Never resume 26 or reroll its audit.
+No push, MR, merge or deletion. Original malformed-handoff recovery remains
+unexercised live; repeated fresh successful runs remain due.
+
+## Previous checkpoint — September 11, 14:38 PDT
 
 **ACTIVE partial Flights audit 26**, PID12303, started21:38:34UTC, cap
 **22:23:34UTC**, home-26, unchanged **7eeb982**. Verify private

@@ -3483,6 +3483,11 @@ function returnedToolFailure(
     );
   }
   details.push(`Message: ${bounded(result.message, 700)}`);
+  if (result.pageDiagnostic) {
+    details.push(
+      `Current rendered page after failure (not the requested API response): ${bounded(JSON.stringify(result.pageDiagnostic), 4_000)}`,
+    );
+  }
   if (result.nextAction) details.push(`Next action: ${bounded(result.nextAction, 200)}`);
   if (result.missing?.length) {
     const shown = result.missing.slice(0, 8).map((item) => ({

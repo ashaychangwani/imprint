@@ -208,6 +208,19 @@ function resultFact(
         error: result.error,
         message: preview(result.message, credentialValues).slice(0, 4_000),
         preview: '',
+        ...(result.pageDiagnostic
+          ? {
+              pageDiagnostic: {
+                url: resultText(result.pageDiagnostic.url, credentialValues).slice(0, 300),
+                title: resultText(result.pageDiagnostic.title, credentialValues).slice(0, 300),
+                bodyText: resultText(result.pageDiagnostic.bodyText, credentialValues).slice(
+                  0,
+                  3_000,
+                ),
+                truncated: result.pageDiagnostic.truncated,
+              },
+            }
+          : {}),
       };
 }
 

@@ -569,6 +569,14 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
+      /** Current rendered page after a failed teaching call, not an API response
+       * or evidence that the requested operation succeeded. Cookies are omitted. */
+      pageDiagnostic?: {
+        url: string;
+        title: string;
+        bodyText: string;
+        truncated: boolean;
+      };
       /** Value-free stage receipts for requests attempted before this failure. */
       requestStageFacts?: RequestStageFact[];
       /** Recording-derived state and generic action progress. Echo this object

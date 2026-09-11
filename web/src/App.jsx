@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Turn recorded actions into API tools, with browser playbooks as the final fallback. Agents check complete fresh responses, verify that inputs mean what they promise, and test dependent results. Useful core tools come first; optional features follow.',
+    body: 'Turn recorded actions into API tools, with browser playbooks as the final fallback. Agents inspect fresh responses and failure evidence, verify that inputs mean what they promise, and test dependent results. Useful core tools come first; optional features follow.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {

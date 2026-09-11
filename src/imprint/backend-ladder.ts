@@ -33,8 +33,9 @@ import {
   seedJarFromRecording,
 } from './cdp-jar-cache.ts';
 import { proxyUrl } from './chromium.ts';
-import { abortSignalError } from './concurrency.ts';
+import { abortSignalError, withAbortSignal } from './concurrency.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
+import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import {
@@ -1155,7 +1156,7 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
-    const result = await tool.toolFn(paramsWithDefaults, {
+    let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: cf.fetchImpl,
@@ -1195,12 +1196,43 @@ async function runCdpReplay(
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else if (cdpPool) {
       let sessionAlive = !cdpToolResultImpliesDeadSession(result);
-      if (!sessionAlive && cf.inspectPage) {
+      const inspectPage = cf.inspectPage;
+      if ((!sessionAlive || onResponse) && inspectPage) {
         try {
-          await cf.inspectPage();
+          // Reuse the liveness read for teaching diagnostics. Bound it by both
+          // the caller deadline and a short inspection budget; never navigate
+          // or choose a replacement response on behalf of the agent.
+          const inspectionSignal = AbortSignal.timeout(3_000);
+          const page = await withAbortSignal(
+            () => inspectPage.call(cf),
+            signal ? AbortSignal.any([signal, inspectionSignal]) : inspectionSignal,
+          );
           sessionAlive = true;
+          if (onResponse) {
+            const knownValues = new Map(
+              Object.entries(credentials.values).map(([name, value]) => [
+                value,
+                `\${credential.${name}}`,
+              ]),
+            );
+            const clean = (value: string): string =>
+              redactFreeformText(value, knownValues).redacted;
+            const url = clean(page.url);
+            const title = clean(page.title);
+            const bodyText = clean(page.bodyText);
+            result = {
+              ...result,
+              pageDiagnostic: {
+                url: url.slice(0, 300),
+                title: title.slice(0, 300),
+                bodyText: bodyText.slice(0, 3_000),
+                truncated: url.length > 300 || title.length > 300 || bodyText.length > 3_000,
+              },
+            };
+          }
         } catch {
-          // A failed liveness probe confirms that the transport is unusable.
+          if (signal?.aborted) throw abortSignalError(signal);
+          // Inspection failure does not replace the original tool failure.
         }
       }
 

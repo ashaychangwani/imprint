@@ -1313,6 +1313,9 @@ describe('focused API research', () => {
               }
               if (turn === 2) {
                 expect(input.observations[0]?.result.message).toBe('HTTP 403');
+                expect(input.observations[0]?.result.pageDiagnostic?.bodyText).toBe(
+                  'Results for ${credential.password}',
+                );
                 return {
                   binding,
                   action: 'blocked',
@@ -1328,6 +1331,7 @@ describe('focused API research', () => {
             },
             runApiTool: async () => ({
               executionMechanism: 'fetch',
+              credentialValues: { password: 'fixture-password' },
               backendAttempts: [
                 {
                   backend: 'fetch',
@@ -1340,6 +1344,12 @@ describe('focused API research', () => {
                 ok: false as const,
                 error: 'FORBIDDEN',
                 message: 'HTTP 403',
+                pageDiagnostic: {
+                  url: 'https://fixture.invalid/results',
+                  title: 'Results',
+                  bodyText: 'Results for fixture-password',
+                  truncated: false,
+                },
               },
             }),
           },
@@ -1356,6 +1366,12 @@ describe('focused API research', () => {
         error: 'FORBIDDEN',
         message: 'HTTP 403',
         preview: '',
+        pageDiagnostic: {
+          url: 'https://fixture.invalid/results',
+          title: 'Results',
+          bodyText: 'Results for ${credential.password}',
+          truncated: false,
+        },
       });
       const handoff = ApiResearchHandoffSchema.parse({
         toolName: tool.candidate.toolName,

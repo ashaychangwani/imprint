@@ -197,6 +197,12 @@ export const ApiResearchObservationSchema = strictObject({
     error: utf8Text(1, 256).optional(),
     message: utf8Text(1, 4_000).optional(),
     preview: utf8Text(0, 12_000),
+    pageDiagnostic: strictObject({
+      url: z.string().max(300),
+      title: z.string().max(300),
+      bodyText: z.string().max(3_000),
+      truncated: z.boolean(),
+    }).optional(),
   }),
 });
 export type ApiResearchObservation = z.infer<typeof ApiResearchObservationSchema>;

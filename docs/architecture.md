@@ -703,6 +703,16 @@ A small framed-protocol parser test must expose discarding records after an empt
 or metadata-only envelope. The agent derives valid framing and record-combination
 expectations from evidence; the runtime does not prescribe a first/last-frame or
 concatenation rule.
+On failed CDP calls with teaching diagnostics enabled, the existing browser
+inspection contributes bounded URL, title and visible text to `pageDiagnostic`.
+It omits cookies, replaces known typed credentials, and takes at most three
+seconds within the caller deadline. Failed or unavailable inspection preserves
+the original failure. Research observations and master repair feedback retain
+these facts as current page evidence, never as the requested API response or a
+successful result. Agents choose any revised request strategy. Parser guidance
+also distinguishes unsupported missing fields from evidenced protocol defaults,
+with a focused omission case in existing parser tests.
+
 Research and the first planned live case distinguish parameter influence from
 the advertised meaning. For a range, changing its width can reveal whether
 returned records honor the bounds or only move a fixed result region. Agents

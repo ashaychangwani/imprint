@@ -2264,6 +2264,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
 
     expect(r.result.ok).toBe(false);
     expect(inspections).toBe(1);
+    expect(r.result).not.toHaveProperty('pageDiagnostic');
     expect(
       cdpPool.get(
         cdpReplayPoolKey(
@@ -2274,6 +2275,84 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       )?.inspectPage,
     ).toBe(inspectPage);
     expect(closes).toBe(0);
+  });
+
+  it('keeps failed teaching calls failed while attaching bounded page evidence without cookies', async () => {
+    let inspections = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      inspectPage: async () => {
+        inspections++;
+        return {
+          url: 'https://fixture.invalid/results?key=fixture-password',
+          title: 'Available results',
+          bodyText: `30 results for fixture-password ${'item '.repeat(1_000)}`,
+          cookies: [
+            {
+              name: 'session',
+              value: 'fixture-cookie-secret',
+              domain: 'fixture.invalid',
+              path: '/',
+            },
+          ],
+        };
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Navigation timed out waiting for a background response.',
+    }));
+    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool: new Map(),
+      credentials: { site: 'flights', cookies: [], values: { password: 'fixture-password' } },
+      onResponse: () => {},
+    });
+    expect(inspections).toBe(1);
+    expect(r.result.ok).toBe(false);
+    if (r.result.ok) throw new Error('expected original failure');
+    expect(r.result.error).toBe('NETWORK');
+    expect(r.result.message).toBe('Navigation timed out waiting for a background response.');
+    expect(r.result.pageDiagnostic?.title).toBe('Available results');
+    expect(r.result.pageDiagnostic?.bodyText).toContain('30 results for ${credential.password}');
+    expect(r.result.pageDiagnostic?.bodyText.length).toBe(3_000);
+    expect(r.result.pageDiagnostic?.truncated).toBe(true);
+    expect(JSON.stringify(r.result)).not.toContain('fixture-password');
+    expect(JSON.stringify(r.result)).not.toContain('fixture-cookie-secret');
+    expect(r.result.pageDiagnostic).not.toHaveProperty('cookies');
+  });
+
+  it('honors caller cancellation during failed-page inspection', async () => {
+    let closed = false;
+    const controller = new AbortController();
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      inspectPage: () => {
+        controller.abort(new Error('fixture caller deadline'));
+        return new Promise(() => {});
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closed = true;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Background response missing.',
+    }));
+    await expect(
+      runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+        cdpPool: new Map(),
+        onResponse: () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('fixture caller deadline');
+    expect(closed).toBe(true);
   });
 
   it('evicts a NETWORK failure when the browser liveness probe also fails', async () => {
@@ -2296,7 +2375,10 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     }));
     const cdpPool = new Map();
 
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), { cdpPool });
+    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+      onResponse: () => {},
+    });
 
     expect(cdpPool.size).toBe(0);
     expect(closes).toBe(1);

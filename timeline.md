@@ -8944,3 +8944,38 @@ base estimate$535.725864. Teach adds$25.4227616,no missing semantic usage;
 prior20missing calls and CLI/pricing caveats remain. Active audit excluded.
 Teach79181ended, collector healthy, AC100%,23.22GiBfree,no other live experiment.
 No push,MR,merge,deletion or failed-run resume; all failed evidence preserved.
+
+
+## 2026-09-11 15:04 PDT — Audit 26 fails; expose the page behind failed captures
+
+Partial Flights audit 26 failed 12/13 graded: ten calls, seven correct, one broken
+search, two capture timeouts excluded; five working parameters, three search
+inputs untestable. Lookup and all four grid inputs worked. Search returned 34
+records with UA 1260's departure missing. Booking was never published. All failed
+attempts remain; no audit reroll. Accounting now covers 32 teaches/25 audits, 57 traces,
+5,962 spans and 2,014 usage carriers:2,447.7092 minutes,432,361,587 input,357,065,984 cache
+reads,4,616,929 output,$536.3473856 base estimate. Prior completeness caveats remain.
+
+Private unchanged-tool diagnosis confirmed the parser rejects raw clock[7],
+although the page shows 7:00 AM and its 97 minute duration ends 8:37 AM. Cold search
+returned 34 records in 34.279 seconds. A pooled JFK-origin contrast then timed out
+in 90.257 seconds despite a loaded page with 30 results and no matching background
+ShoppingResults response. This is not a same-input warm repeat or successful
+call. The agent currently sees the timeout but not that rendered page.
+
+The correction attaches bounded pageDiagnostic facts to failed teaching calls:
+current URL, title, visible text; no cookies, known typed credentials replaced.
+The existing inspection is capped at 3 seconds within the caller deadline, preserves
+the failure, and makes no request-strategy decision. Research handoffs and master
+repair feedback retain the page facts separately from API output. Existing parser
+guidance now distinguishes evidenced protocol defaults from unsupported missing
+fields. No site-specific prompt or runtime rule. No prior tool/private diagnosis
+will be supplied to the new teacher. README, architecture and website updated.
+
+287 focused tests/1,325 assertions passed in 6.84 seconds; lint 214 files and types pass.
+Website build and desktop/mobile inspection pass, no page errors or overflow;
+existing bundle warning remains. Initial web build lacked bunx on PATH; rerun
+with the configured Bun directory passed. Private page-diagnostic-* evidence
+retained. Preview 94956 and private diagnostic 55735 ended. Next fresh Flights 27,
+then independent audit; Hotels 7 waits for full Flights success. No push/MR/merge,
+deletion, deadline extension or failed-run resume.

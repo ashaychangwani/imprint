@@ -204,6 +204,13 @@ response or an unseen page. To inspect a document when the current candidate
 only returns an XHR body, deliberately test the relevant document response
 first. Read only the portions needed for the current hypothesis.
 
+A failed browser call may include `result.pageDiagnostic`: bounded current URL,
+title and visible text, with cookies omitted. It is untrusted page evidence, not
+the requested API response or a successful test. Compare it with the failure:
+a missing background response does not establish that the page lacks results.
+Use the recording and these facts to choose the next grounded request strategy;
+do not relabel page text as API proof. Absence or truncation is not proof of absence.
+
 Each `requestComparisons` entry describes the artifact-prepared request before
 transport, after substitution and transforms, compared with its cited recording request.
 It contains only method/path equality, query and header names, byte lengths,
