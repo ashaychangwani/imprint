@@ -8863,3 +8863,26 @@ Previous teach/audit and diagnostic ended. Collector healthy, 23.79 GiB free,
 AC 100%, no extra live browser. Accounting through failed audit 25 remains
 $510.3031024 base estimate; active teach excluded. All failures preserved.
 No push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 13:35 PDT — Flights 26 reaches target with research still incomplete
+
+At the 30-minute target no tools are published. Lookup and search research are
+proven. Search's draft reads multiple framed documents and includes an explicit
+metadata-before-records parser test; its current research itself contains a
+metadata frame followed by itineraries. This exercises the latest guidance in
+the draft, but generated live validation and independent audit remain due.
+
+Grid research returned an honest partial result after eight observations: the
+successful 8,905-byte API response contains a seven-by-seven matrix around
+November 10/18, with the selected pair priced at 309 USD. Route scope and the
+last row-status field's meaning remain unresolved; the same-date route contrast
+timed out. Booking obtained fresh search output on its second producer attempt
+but has not returned a proven handoff. Several capture attempts timed out; no
+provider-capacity event or malformed-handoff catch is observed. All failures
+remain retained. No private parent diagnosis or new implementation was supplied.
+
+Run fd90ea31-8520-4c7b-bb25-a2f740ff137e, PID 79181, unchanged 7eeb982. Keep
+21:05:41 UTC assessment and 21:35:41 hard deadline. Host on AC 100%, about
+24 GiB free, collector healthy, no other live experiment. Accounting unchanged
+through audit 25; active teach excluded. No push, MR, merge, deletion or resume.

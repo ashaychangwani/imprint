@@ -1,6 +1,14 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 13:06 PDT
+## Current continuation — September 11, 13:35 PDT
+
+At the 30-minute target, Flights 26 remains active with no published tools.
+Lookup/search research proven; grid partial after eight observations, with dates,
+fares and selections proven but route scope and row-status meaning unresolved.
+Booking obtained fresh producer output on retry and is still testing. Search's
+draft reads multiple frames and contains the metadata-before-records test; live
+verification/audit still due. Run fd90ea31-8520-4c7b-bb25-a2f740ff137e. Keep
+21:05:41 UTC assessment and 21:35:41 hard deadline. Read newest timeline entry.
 
 **ACTIVE fresh Flights 26**, PID 79181, started 20:05:41 UTC in unused home-26,
 implementation **7eeb982**. Verify private flights-teach-26-manifest.json/log.
