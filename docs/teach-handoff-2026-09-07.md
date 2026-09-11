@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 15:04 PDT
+## Current continuation — September 11, 15:05 PDT
+
+**ACTIVE fresh Flights 27**, PID 16039, implementation **0ce9fe9**, started
+22:04:44 UTC in unused home-27. Target **22:34:44**, assess **23:04:44**, hard
+deadline **23:34:44 UTC**. Verify private flights-teach-27-manifest.json/log.
+Exact combined recording and four-operation guidance; no previous generated
+tools, shipped examples or private diagnostic findings supplied to the teacher.
+
+Monitor whether failed captures now return pageDiagnostic to the retained
+researcher/master, and whether agents repair the request strategy from that
+factual evidence. It must remain separate from API proof. Check sparse/default
+field parsing, complete framed responses, and fresh coherent booking selections.
+Independently audit generated tools after completion, preserving every failure.
+Then Hotels 7 on unchanged code after a full Flights pass. Repeated fresh success
+is still due. Original malformed-handoff recovery remains unexercised live.
+
+287 tests/1,325 assertions, lint, types, web build and desktop/mobile visual checks
+passed. Collector PID 54899 healthy, AC 100%, 23.05 GiB free. Prior teach/audit,
+private diagnostic and preview ended. Accounting through failed audit 26 remains
+$536.3473856 base estimate (32 teaches/25 audits); active teach excluded. See
+newest timeline/accounting for missing-usage and pricing limits. No push, MR,
+merge, deletion, deadline extension or failed-run resume.
+
+## Previous checkpoint — September 11, 15:04 PDT
 
 No active teach/audit. Partial audit 26 failed 12/13 graded: missing UA1260
 departure, two capture timeouts, three search parameters untestable. Booking

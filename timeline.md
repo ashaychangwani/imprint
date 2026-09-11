@@ -8979,3 +8979,19 @@ with the configured Bun directory passed. Private page-diagnostic-* evidence
 retained. Preview 94956 and private diagnostic 55735 ended. Next fresh Flights 27,
 then independent audit; Hotels 7 waits for full Flights success. No push/MR/merge,
 deletion, deadline extension or failed-run resume.
+
+
+## 2026-09-11 15:05 PDT — Fresh Flights 27 begins with failure-page evidence
+
+Implementation 0ce9fe9 launched in unused home-27 at 22:04:44 UTC, PID 16039.
+Target 22:34:44, assessment 23:04:44, hard deadline 23:34:44 UTC. Exact combined
+recording and four-operation scope; no previous tools, examples or private parent
+diagnosis supplied. Check whether actual capture failures now expose page facts
+and whether agents use them for a grounded repair; page text is not API proof.
+Inspect sparse/default time parsing and coherent fresh booking dependency values.
+
+Independent audit follows, then Hotels 7 on unchanged code after full Flights
+success. Repeated success remains due. Collector healthy, AC 100%, 23.05 GiB
+free, prior teach/audit/diagnostic/preview stopped. Accounting remains through
+failed audit 26 at $536.3473856 base estimate; active run excluded. No push, MR,
+merge, deletion, failed-run resume or deadline extension.
