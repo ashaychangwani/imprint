@@ -8886,3 +8886,30 @@ Run fd90ea31-8520-4c7b-bb25-a2f740ff137e, PID 79181, unchanged 7eeb982. Keep
 21:05:41 UTC assessment and 21:35:41 hard deadline. Host on AC 100%, about
 24 GiB free, collector healthy, no other live experiment. Accounting unchanged
 through audit 25; active teach excluded. No push, MR, merge, deletion or resume.
+
+
+## 2026-09-11 14:04 PDT — Near-hour assessment: booking contrast closes research gap
+
+Flights 26 remains active near minute 59, with all four research handoffs proven
+and the master reviewing before planning. No published tools yet. Continue to
+the existing 21:35:41 UTC hard deadline: the booking gap has just closed, lookup
+and search drafts exist, and about 31 minutes remain for compilation/live checks.
+The 30-minute target was missed. No extension or parent implementation change.
+
+Booking's first positive integrated search/booking workflow selected Frontier
+F9 3292 LAX–LAS October 20, but several Southwest comparison attempts timed out.
+The master returned the insufficient contrast to the retained researcher despite
+its proven label. A new F9 1184 test then returned a fresh 89,101-byte search
+response and a 77,251-byte booking response identifying that different flight at
+17:15–18:33, with Frontier and Booking.com offers. This establishes flight-number
+influence against the earlier F9 3292 09:15–10:36 result, not every advertised
+input or arbitrary connecting itinerary. The transform still searches decoded
+tokens by substring; full identity-boundary safety is not established by this
+pair. Generated compilation, live verification and independent audit remain due.
+
+Research observation e6fe3706 is the new positive result; earlier 282afd57 and
+all failed comparisons remain preserved. No private parent diagnosis supplied
+to the teacher. No live malformed-handoff catch or actual provider-capacity event.
+Run fd90ea31-8520-4c7b-bb25-a2f740ff137e, PID 79181, unchanged 7eeb982. AC100%,
+about23GiB free, collector healthy, no other live experiment. Accounting remains
+through audit25, active teach excluded. No push, MR, merge, deletion or resume.

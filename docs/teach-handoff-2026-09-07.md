@@ -1,14 +1,17 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 13:35 PDT
+## Current continuation — September 11, 14:04 PDT
 
-At the 30-minute target, Flights 26 remains active with no published tools.
-Lookup/search research proven; grid partial after eight observations, with dates,
-fares and selections proven but route scope and row-status meaning unresolved.
-Booking obtained fresh producer output on retry and is still testing. Search's
-draft reads multiple frames and contains the metadata-before-records test; live
-verification/audit still due. Run fd90ea31-8520-4c7b-bb25-a2f740ff137e. Keep
-21:05:41 UTC assessment and 21:35:41 hard deadline. Read newest timeline entry.
+Near-hour assessment: continue Flights 26 under its existing **21:35:41 UTC
+hard deadline**, with about31minutes remaining. All four research handoffs are
+proven; master reviewing before planning, no tools published. Booking's retained
+follow-up selected F9 1184 instead of F9 3292 on the same LAX–LAS October20 route
+and returned matching offers. This proves that contrast, not every input or
+complete identity-boundary safety: transform still uses decoded-token substring
+matching. Compilation/live checks and independent audit remain due. Read newest
+timeline entry. No extension or parent change, no private diagnosis supplied.
+Search draft has the metadata-before-records test and reads multiple frames.
+Run fd90ea31-8520-4c7b-bb25-a2f740ff137e. AC100%, about23GiB free, collector healthy.
 
 **ACTIVE fresh Flights 26**, PID 79181, started 20:05:41 UTC in unused home-26,
 implementation **7eeb982**. Verify private flights-teach-26-manifest.json/log.
