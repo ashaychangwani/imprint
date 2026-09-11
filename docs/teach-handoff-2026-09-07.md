@@ -1,6 +1,13 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 15:05 PDT
+## Current continuation — September 11, 15:36 PDT
+
+At the 30-minute target no tools are published. Lookup/grid research are proven
+and the grid draft compiled; search and booking need fresh selection-contract
+proof. The master has retained both researchers, explicitly requiring matching
+values from one fresh search record before booking. First follow-up search
+capture failed after 76.353 seconds including setup. Read the latest timeline;
+keep the original assessment and hard deadline below.
 
 **ACTIVE fresh Flights 27**, PID 16039, implementation **0ce9fe9**, started
 22:04:44 UTC in unused home-27. Target **22:34:44**, assess **23:04:44**, hard

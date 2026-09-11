@@ -9018,3 +9018,25 @@ Lookup research is proven. Grid and booking research continue; no published tool
 No code/prompt changes or parent findings were supplied during the run. Collector
 healthy, 22.93 GiB free. Keep the original 22:34:44 target, 23:04:44 assessment
 and 23:34:44 UTC hard deadline. Accounting unchanged; active run excluded.
+
+
+## 2026-09-11 15:36 PDT — Thirty-minute target missed; master retains search/booking repair
+
+Flights 27 has no published tools at the 30-minute target. Lookup and grid
+research are proven; the grid draft has compiled. Search remains partial because
+rendered records lack proven flight numbers and stable booking-selection data.
+Booking's old recorded continuation pair returned no booking records. The master
+kept all four operations and returned both gaps for repair in retained research.
+
+The master's instructions explicitly require a fresh search result, coherent
+selection components from one itinerary, distinguishing comparisons across
+itineraries, and a booking call using that same fresh pair. It did not accept
+a page-local DOM ID or stale replay as proof. Search's first follow-up background
+capture failed after 76.353 seconds including browser setup; research continues.
+No parent code/prompt changes or private findings supplied. This is progress in
+factual repair, not generated success or a malformed-handoff recovery event.
+
+Run 15c60478-5824-49e7-bac3-1839cdef1007, PID 16039, unchanged 0ce9fe9.
+Keep the 23:04:44 UTC assessment and 23:34:44 hard deadline. Collector healthy,
+22.90 GiB free. Accounting remains through audit 26, active teach excluded.
+Independent audit and Hotels 7 remain due; no push, MR, merge or deletion.
