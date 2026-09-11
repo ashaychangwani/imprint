@@ -8066,3 +8066,31 @@ Check independent guest-count and date effects before claiming success. If pass,
 fresh unchanged-code repeats follow. Accounting:25teaches/17audits,1891.16minutes,
 $391.12,315203559input/cache260397184/output3386833. Seventeen semantic calls
 plus interrupted work lack usage; active audit excluded. No code change,push or MR.
+
+
+## 2026-09-11 03:44 PDT — Hotels audit inconclusive; redundant capture reproduced
+
+Audit5 ended in5.4865minutes with no successful baseline: three failures,
+zero graded units, all four parameters untestable. Seattle October15–17/two
+adults exceeded120seconds, then two paced retries timed out on M0CRd capture.
+No audit reroll or fresh repeat. Accounting now25teaches/18audits,1896.65minutes,
+$391.26,315363317input/cache260545664/output3388311;17missing semantic calls
+and other completeness caveats remain. Audit5 had no missing usage.
+
+Private sequential diagnostics reproduced the mandatory second-capture failure
+for Seattle95.027s and Portland93.711s, each in a separate browser session.
+The first AtySUc response arrived in2.992/3.459s after setup; the second identical
+navigation waited60s for M0CRd while completed accommodation results were visible.
+The unchanged parser applied offline to Seattle's first response alone already
+returned six properties, four offers and the requested dates. The extra capture
+was retained to corroborate occupancy in research; its runtime necessity was
+not established. Preserve both failure results and safe page snapshots.
+
+Offline inspection also found a concrete optional metadata error: a property
+without an established rating was assigned rating1/review_count2 because the
+parser accepted the array[1,2,3,4] as a numeric pair. Existing generic type-based
+search picked a candidate without establishing its meaning. No original artifact
+was edited. Diagnostic PID94346/session56210 ended; browser pools closed, noLLM
+calls. Next clarify general evidence-versus-execution dependencies and omission
+of unsupported optional metadata, then validate from a fresh teach. No runtime
+or site-specific patch, push, MR or deletion.

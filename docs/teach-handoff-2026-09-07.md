@@ -1,6 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 03:31 PDT
+## Current continuation — September 11, 03:44 PDT
+
+No teach/audit or diagnostic browser active. Hotels audit5 ended inconclusive:
+three baseline failures, zero graded, all four parameters untestable. Private
+Seattle/Portland exact-workflow diagnostics reproduced mandatory M0CRd capture
+timeouts after useful first AtySUc responses. First response alone parses six
+Seattle properties/four offers/requested dates. Second capture was added for
+research corroboration; execution necessity was not established. Diagnostic
+PID94346/session56210 ended, pools closed. All hotels-5-navigation-* files stay
+private. No audit reroll or original artifact edits.
+
+Also confirmed optional metadata bug: parser assigns rating1/review_count2 from
+[1,2,3,4] in a property with no established rating. Next make small general prompt
+clarifications on research-only corroboration versus required execution and
+unsupported optional metadata; validate with a fresh Flights teach after changes,
+then Hotels. Keep runtime simple and no site-specific fixes. Latest implementation
+still f7c21d7. Accounting through audit5:25teaches/18audits,43traces/4312spans/
+1519usage,1896.6453704778minutes,$391.2550976,input315363317/cache260545664/
+output3388311. Seventeen missing semantic calls and all other caveats remain.
+
+## Previous checkpoint — September 11, 03:31 PDT
 
 **ACTIVE Hotels audit 5**, PID **93141**, started **10:30:59 UTC** with a
 45-minute cap to 11:15:59 UTC. Verify hotels-audit-5-manifest.json/log in the
