@@ -1,6 +1,61 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-11 00:17 PDT
+## Current continuation — September 11, 00:36 PDT
+
+**ACTIVE fresh Flights 20**, PID **33609**, started **07:36:00 UTC September 11**
+in unused `/tmp/imprint-fresh-inputs-VYbJm1/home-20`. Verify
+flights-teach-20-manifest.json/log and actual process/clock. Implementation
+**f7c21d7** has general structured-identity and selected-record guidance, with
+no runtime changes or site-specific rules. Exact combined recording and
+four-operation guidance unchanged; no old artifacts/examples/diagnostics given
+to teacher. Target 08:06, assess 08:36, HARD 09:06 UTC. No other teach/audit or
+diagnostic browser active. Collector 54899/port 6438 healthy, disk 21.56 GiB.
+Host awake, battery 41%, estimated 3h55 remaining; check actual wake/power.
+
+Flights 19 taught four tools and fresh chain in 87.1902 minutes but full audit
+**FAILED 15/18**: ten correct calls, five working parameters, three broken
+booking calls. Four grid navigation failures excluded as infrastructure and
+five parameters untestable. Do not claim a full pass or ignore exclusions.
+Audit PID 30920 ended. No Hotels run followed.
+
+Exact offline audit-input reproduction found binary regex decoding reads
+field tag 0x32 as flight number 2, so Alaska 42 becomes AS2 and JetBlue also
+gets number 2. Earlier Frontier baseline also decoded 2; substring validation
+passed accidentally because F92 prefixes F92334. Connecting selection is
+flattened to its first segment. Published transform also clicks a fixed first
+row despite the chosen-flight contract. Private flights-19-validator-diagnostic*
+files preserve this; original tools were not edited.
+
+f7c21d7 tells researchers/compilers to ground structured field boundaries and
+complete identities, retain required repeated groups, and distinguish checking
+an input from using it to select a record. Master requires a distinguishing
+selection or explicit contract revision when fixed/default selection only
+happens to match baseline. README/architecture/web match. 198 tests/1,079
+assertions, lint/types, web build and desktop/mobile checks pass; preview stopped.
+Full-suite baseline remains c61dd1e, 1,940 tests/6,162 assertions.
+
+Unchanged-grid diagnostic repeated the failed SFO–JFK October 18/22 case: cold
+91.656-second failure waiting for GetCalendarGrid; same-tool/rung retry returned
+46 valid USD date cells in 3.302 seconds, including the selected pair at USD398.
+Page showed matching shopping results. Intermittent cold trigger/capture remains
+unresolved; this is one warm diagnostic response, not an audited fix. All
+flights-19-grid-diagnostic* evidence is private and pool closed. No LLM calls.
+
+Accounting through audit 19: **$356.44**, 1,762.69 elapsed minutes, 23 teaches/
+16 audits, 39 traces/3,873 spans/1,378 usage spans. Input 278,837,990 including
+228,054,656 cache reads; output 3,104,463. Sixteen semantic calls plus interrupted
+CLI/audit work lack usage. Zero emitted cache writes may mean missing reporting.
+Current teach excluded until complete. All earlier failed/sleeping attempts and
+base API pricing caveats remain in accounting.
+
+Next monitor fresh Flights, independently audit and investigate actual failures.
+If full pass, fresh Hotels 5 unchanged and audit; repeated fresh successes and
+successful cold/warm measurements remain due. Original malformed-handoff catch
+and actual capacity retry still lack live validation. Keep agents deciding
+strategy, runtime mechanics, two workers, sequential runs and 30/60/90 timing.
+Fresh teach after every code/prompt change. No vNext, deletion, push or MR.
+
+## Previous continuation — 2026-09-11 00:17 PDT
 
 **ACTIVE full independent Flights audit 19**, PID **30920**, started September
 11 **07:15:28 UTC**, 45-minute cap. Verify flights-audit-19-manifest.json/log,

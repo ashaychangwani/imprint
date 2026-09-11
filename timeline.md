@@ -7843,3 +7843,15 @@ seconds. Both snapshots/results and exact errors retained, pool closed. This
 is one warm response, not a fixed cold path or an audit pass. The intermittent
 trigger/capture problem remains unresolved. Fresh teach follows this prompt
 change; no failed run is resumed and no prior artifacts enter the teacher.
+
+
+## 2026-09-11 00:36 PDT — Fresh Flights 20 launched on f7c21d7
+
+Fresh Flights 20 started 07:36:00 UTC, PID 33609, unused home-20, with the exact
+combined recording and four-operation guidance. No old artifacts, examples or
+diagnostics supplied. No other teach/audit or diagnostic browser active.
+Collector 54899 healthy on port 6438; disk 21.56 GiB. Host awake on battery at
+41%, estimated 3h55 remaining. Target 08:06, assess 08:36, hard 09:06 UTC.
+Monitor coherent fresh identities and actual chosen-record behavior, plus
+retained master repair and grid execution. Full independent audit follows;
+Hotels 5 follows only a full Flights pass on unchanged code. No push or MR.
