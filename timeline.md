@@ -7797,7 +7797,7 @@ Sixteen semantic calls plus interrupted CLI/audit work lack usage. Active audit
 is excluded until complete. No code change, push or MR.
 
 
-## 2026-09-11 00:34 PDT — Flights audit 19 fails; binary identity bug reproduced
+## 2026-09-11 00:33 PDT — Flights audit 19 fails; binary identity bug reproduced
 
 Full audit failed 15/18 in 11.3879 minutes: ten correct calls, five working
 parameters, three broken booking calls. Four grid navigation failures were
@@ -7819,3 +7819,27 @@ and separate cold/warm transport; no LLM calls or other teach/audit. Next make
 a small general identity-parsing/selection-proof correction, then fresh teach.
 Cumulative 23 teaches/16 audits: $356.44 base estimate, 1,762.69 elapsed minutes.
 All usage/cache caveats remain. No push or MR.
+
+
+## 2026-09-11 00:35 PDT — Ground structured identities and actual selection
+
+General researcher/compiler guidance now requires grounded field boundaries
+and complete identities for decoded selections, including repeated groups.
+Readable framing and shared prefixes are insufficient; a synthetic contrast
+can expose the shortcut without another live call. The master now explicitly
+distinguishes checking an input from using it to select a result: a fixed
+default remains a core gap unless the contract is revised or a distinguishing
+selection is proven. No site-specific rule, decoder or runtime change.
+README, architecture and website match.
+
+198 tests/1,079 assertions passed in 1.357 seconds, lint and type checking
+passed, web build passed with the existing bundle warning. Desktop/mobile
+checks and visual inspection passed; preview stopped. No new prompt-mirroring
+tests. Full-suite baseline remains c61dd1e, 1,940 tests.
+
+Unchanged-grid diagnostic reproduced the cold failure in 91.656 seconds,
+then a same-tool/same-rung warm call returned 46 credible date cells in 3.302
+seconds. Both snapshots/results and exact errors retained, pool closed. This
+is one warm response, not a fixed cold path or an audit pass. The intermittent
+trigger/capture problem remains unresolved. Fresh teach follows this prompt
+change; no failed run is resumed and no prior artifacts enter the teacher.

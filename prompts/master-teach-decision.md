@@ -120,6 +120,11 @@ not hold the first compile. A tested construction that ignores an advertised
 input is different: resolve that demonstrated contract gap now by narrowing or
 reshaping the public contract, or requesting the exact missing proof. Do not
 retain the input merely because it is encoded or available from a producer.
+Checking or decoding an input is not evidence that it selects the returned
+record. For a chosen-record operation, a fixed/default selection remains a core
+gap when the baseline happens to match it. Require a distinguishing selection
+comparison or revise the public contract explicitly; changing the surrounding
+query alone does not establish selection within its results.
 For every true partial tool that remains in
 `desiredPlan`, return one `researchFollowUps` entry. Give the retained
 researcher a precise question,

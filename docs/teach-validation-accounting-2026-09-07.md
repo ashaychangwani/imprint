@@ -476,3 +476,17 @@ Audit usage is 779,362 input including 741,760 cache reads, 6,096 output, zero
 emitted cache writes and $0.569032 base estimate. No usage span is missing in
 this audit. PID 30920 ended. Grid transport diagnosis follows separately;
 no audit reroll or Hotels launch follows this failed full Flights audit.
+
+
+The unchanged-grid diagnostic repeated the failed SFO–JFK October 18/22 case.
+Cold execution failed after 91.656 seconds including setup: the selected
+GetCalendarGrid POST/XHR never completed within the 60-second navigation wait.
+The page showed the matching route's shopping results. An identical second
+call using that same tool/rung browser succeeded in 3.302 seconds with 46
+positive USD cells, departure October 15–21 and return October 19–25, omitting
+invalid return-before-departure combinations. This is a measured warm response
+with plausible current grid data, not a repaired cold path or an independent
+audit pass. The intermittent cold trigger/capture failure remains unresolved.
+No runtime change follows merely from the retry succeeding. Private diagnostic
+script, results, safe page snapshots and timings remain; browser pool closed.
+No LLM calls or additional estimated cost.

@@ -683,6 +683,12 @@ and check summaries against their underlying data. Requested context and derived
 values cannot replace observed attributes or prove an input was applied. Small
 synthetic missing-field and input-mismatch cases complement existing fixtures
 without another live call or runtime rules for domain-specific values.
+For encoded selections, agents ground field boundaries and complete identities;
+printable framing bytes and shared prefixes do not establish identity. Repeated
+records remain grouped when the public contract requires them. The master
+distinguishes checking an input from applying it: fixed/default selection needs
+a distinguishing comparison or an explicit contract revision. These are agent
+evidence and artifact-construction requirements, not runtime semantic rules.
 
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.

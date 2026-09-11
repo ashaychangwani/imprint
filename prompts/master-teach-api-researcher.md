@@ -340,6 +340,12 @@ name that mapping as unproven and return `partial`, preserving the working
 request for focused follow-up rather than declaring the whole contract proven.
 If rate limiting or bot protection makes a second live test unsafe, say
 which parameter mapping remains inferred instead of claiming it was proven.
+When decoding a structured or binary selection, establish field boundaries and
+complete identities. Printable runs can include framing bytes, and a substring
+or prefix match does not prove that two identifiers are equal. Preserve the
+producer representation where possible; when decoding is needed, use its
+grounded structure, including repeated records or groups, rather than flattening
+the first record. Name any unresolved identity mapping in the handoff.
 
 Start with the smallest directly recorded result request and the minimum wire
 shape that can plausibly return its core data. Reuse as little as possible from

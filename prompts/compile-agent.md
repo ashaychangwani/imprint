@@ -1134,6 +1134,14 @@ each constituent field. Keep machine identifiers distinct from display labels
 string type does not establish interchangeability. Pass the producer's returned
 selection unchanged into the consumer check, rather than rebuilding a more
 convenient test value by hand.
+Decode structured or binary selections at their actual field boundaries,
+including repeated records or groups. Printable framing bytes are not field
+values, and prefix/substring matches are not equality of complete identifiers.
+Use a small synthetic case where readable framing or shared identifier prefixes
+would fool that shortcut; preserve the full selected group when the contract
+requires it. Checking identity also does not apply a selection: the resulting
+request or interaction must choose the corresponding record, not a fixed
+default that happened to match the baseline.
 
 ## WorkflowSchema Reference
 
