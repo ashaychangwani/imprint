@@ -7964,3 +7964,20 @@ not a constant or echoed search context. Three earlier tools remain complete;
 booking was published before chain rejection but is under repair, so four
 artifact directories do not establish a teach pass. About20minutes remain
 before09:06UTC. No implementation change, independent audit or duplicate run.
+
+
+## 2026-09-11 01:53 PDT — Flights 20 completes; independent full audit active
+
+Flights20 completed all four tools and fresh generated booking chain in75.9318
+minutes on unchangedf7c21d7. Currency repair passed standalone36.584s with
+Southwest WN2847 and fresh chain35.490s with United UA6043/five offers. Teach
+PID33609 ended. Full audit20 PID66163 started08:52:59UTC,45-minute cap,home-20;
+no other teach/audit. No independent pass or repeatability claim yet.
+
+Teach20 recorded21,406,503input including18,306,048cache reads,203,967output,
+84usage spans and$23.80base equivalent; no missing semantic usage in this run.
+Cumulative24teaches/16audits:1838.62minutes,$380.25,300244493input,
+246360704cache reads,3308430output. Active audit excluded; prior16missing
+semantic spans and cache-write/pricing caveats remain. Disk19.03GiB,host awake,
+battery23% with2h07estimated. Hotels5 follows only full Flights pass unchanged.
+No malformed-handoff catch, actual capacity retry, push, MR or deletion.

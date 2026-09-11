@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 01:40 PDT
+## Current continuation — September 11, 01:53 PDT
+
+**ACTIVE full Flights audit 20**, PID **66163**, started **08:52:59 UTC**,
+45-minute cap to09:37:59UTC. Same unchanged f7c21d7 implementation and home-20.
+Verify flights-audit-20-manifest.json/log and actual process/clock. Teach20 PID33609
+ended successfully: all four tools and fresh generated second-record chain
+passed in **75.9318 minutes**. Final booking standalone36.584s and chain35.490s
+returned Southwest WN2847 and United UA6043 respectively; currency now comes
+from response data. Do not confuse teach completion with independent audit.
+
+Collector54899/port6438 healthy; disk19.03GiB. Host awake on battery23%,2h07
+estimated at08:52UTC. No other teach/audit. Audit actual parameter/call arrays,
+selection identity and flight variants, grid transport, exclusions and unproven
+scope. If full audit passes, fresh Hotels5 unchanged follows. Preserve failures;
+no reroll after a concrete defect. Read earlier sections for exact recordings.
+
+Accounting through teach20:24teaches/16audits,40traces/4206spans/1462usage,
+1838.6214513097minutes, input300244493/cache246360704/output3308430,
+**$380.2480376** base equivalent. Teach20 alone$23.8035792,84usage,no missing
+semantic span. Prior16missing spans and all pricing/cache caveats remain.
+Active audit excluded. Latest timeline/git checkpoint supersedes older status.
+No original malformed-handoff catch or actual capacity retry observed. No push/MR.
+
+## Previous checkpoint — September 11, 01:40 PDT
 
 Flights 20 is at minute 64, PID 33609 active on unchanged f7c21d7. Three tools
 are now published: location lookup, one-way search, and date grid. Search's
