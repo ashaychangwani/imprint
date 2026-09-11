@@ -8462,3 +8462,31 @@ Grid's narrowed candidate returned its API response in 33.394 seconds. Host
 awake on AC 80%, PID 64357, no other run/diagnostic. No implementation change,
 push, MR or deletion. Original malformed-handoff catch/capacity recovery still
 unexercised; ordinary partial/blocked facts did return to the master for repair.
+
+
+## 2026-09-11 08:10 PDT — Flights 23 compilation and research-chain caveat
+
+Master planned all four tools in two waves. Lookup is published; search and
+calendar compiled and completed their live transports in 32.642/32.865 seconds,
+with semantic reviews pending. Booking compilation and the fresh generated
+chain remain due. All four research handoffs were proven at the near-hour
+assessment; continue under the unchanged 15:34:44 UTC hard deadline.
+
+Offline inspection confirms search and grid parser tests now read the complete
+supplied api-research-response.txt and assert concrete current records. Search
+checks distinct Delta and JetBlue selection envelopes. Private comparison of
+booking research against its fresh producer response found a real caveat:
+Delta DL 934 LAX–JFK October 20 is record zero of 17, and selected_flight_record
+matches exactly, but selection_token differs from that producer's token. Both
+are 108 characters and removing trailing padding does not reconcile them. The
+consumed token instead matches the earlier retained search-research response.
+Booking refreshes selection state internally, so this does not alone establish
+a generated-tool failure; it does not prove exact fresh-producer consumption.
+Final generated chain and independent contrasting-selection audit remain due.
+
+Evidence: flights-23-chain-research-check.json and its detail JSON/TypeScript
+under the private evidence directory. Original research/compiled artifacts were
+not edited and no diagnosis was supplied to teaching agents. No extra browser
+run or LLM calls. First detail-script attempt used a nonexistent response path;
+corrected to revision-1/search_flights and completed offline. PID 64357 active,
+AC 80%, about 24 GiB free. No code change, push, MR, deletion or deadline extension.

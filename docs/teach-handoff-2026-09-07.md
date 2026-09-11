@@ -1,6 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 07:05 PDT
+## Current continuation — September 11, 08:10 PDT
+
+Flights 23 remains active (PID 64357, home-23, implementation 1152f6f). At the
+near-hour assessment all four research handoffs were proven, so continue under
+**15:34:44 UTC hard deadline**. Master planned four tools/two waves. Lookup is
+published; search/grid compiled and live transport completed, semantic reviews
+pending. Booking and final fresh generated chain remain due; then independent
+full audit, and fresh Hotels 7 on unchanged code if successful.
+
+Read the latest timeline entry and private flights-23-chain-research-check*.json:
+booking research selected Delta DL 934 LAX–JFK October 20, record zero of 17.
+The itinerary record matches its fresh producer exactly, but its 108-character
+token matches the earlier retained research response instead. This is not just
+padding. Internal booking selection refresh may still work; exact fresh
+producer consumption and contrasting generated selections remain unproven.
+Do not inject private diagnosis into the ongoing teacher or reroll audit failures.
+
+No implementation changes or extra live diagnostic. AC 80%, about 24 GiB free;
+verify current process/time. Accounting unchanged through Hotels audit 6; active
+Flights excluded. No push, MR, merge or deletion.
+
+## Previous checkpoint — September 11, 07:05 PDT
 
 **ACTIVE fresh Flights 23**, PID 64357, started 14:04:44 UTC, unused
 `/tmp/imprint-fresh-inputs-VYbJm1/home-23`, unchanged **1152f6f**. Verify
