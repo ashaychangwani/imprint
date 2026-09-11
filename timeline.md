@@ -7697,3 +7697,19 @@ Fifteen semantic calls plus interrupted CLI/audit work lack usage. After power
 restores, fresh Flights 19 on unchanged code can test without host suspension;
 use the exact recording/scope and a new home. Hotels 5 follows a full Flights
 pass. Repeatability and successful warm timing remain due. No push or MR.
+
+
+## 2026-09-10 22:46 PDT — Power restored; fresh Flights 19 launched
+
+The machine is awake on AC power, charging from 7%. Finished committing the
+September 8 sleep-interrupted failure and accounting as 078d4d2; no experiment
+continued during the suspension. Implementation remains 6d422b4 unchanged.
+
+Fresh Flights 19 started September 11 05:45:13 UTC (September 10 22:45 PDT),
+PID 97393, unused home-19. Exact combined recording and four-operation guidance
+unchanged, no old tools/examples/diagnostics supplied. Collector 54899 on port
+6438 verified healthy, no other teach/audit active, disk 20.05 GiB. Target
+06:15:13, assess 06:45:13, hard deadline 07:15:13 UTC. Monitor actual power and
+wake state along with fresh producer selections and retained repair history.
+Independent audit follows; Hotels 5 follows full Flights success on unchanged
+implementation. No push, MR or deletion.

@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-10 22:44 PDT
+## Current continuation — 2026-09-10 22:46 PDT
+
+**ACTIVE fresh Flights 19**, PID **97393**, started **September 11 05:45:13 UTC**
+(September 10 22:45 PDT), on unchanged implementation **6d422b4**. New home
+`/tmp/imprint-fresh-inputs-VYbJm1/home-19`; verify flights-teach-19-manifest.json
+and log, actual process and clock before acting. Exact combined recording and
+four-operation guidance unchanged, no old artifacts supplied. Target 06:15:13,
+assess 06:45:13, hard deadline 07:15:13 UTC. No duplicate or resumed run.
+
+Power restored: machine awake on AC, battery 7% and charging at launch.
+Collector 54899/port 6438 healthy, no other teach/audit runs, disk 20.05 GiB.
+The prior failure/accounting checkpoint is 078d4d2. Root branch/worktree remain
+codex/imprint-master-v066-validation, based only on remote 34a6235. No push/MR.
+
+Flights 18 failed with zero published tools while the host slept; its real
+pre-sleep booking failures and full evidence remain. It recorded $15.21,
+103.43 wall minutes versus 71.79 trace minutes, one missing semantic usage span.
+Cumulative through it is $332.88, 22 teaches/15 audits; current run excluded.
+See accounting for all usage/cache/incomplete-cost caveats. Previous sections
+retain the exact scope and diagnostics from earlier runs; do not give them to
+teaching agents.
+
+Next monitor fresh producer-to-booking behavior and repair history, then audit
+independently. If full Flights passes, fresh Hotels 5 on unchanged code and
+audit. Fresh repeated successes on unchanged implementation and successful
+cold/warm timings still remain due. Keep 30/60/90 timing, sequential runs and
+two workers. After any code/prompt change always start a new teach.
+
+## Previous continuation — 2026-09-10 22:44 PDT
 
 Latest implementation remains **6d422b4**, worktree and branch unchanged.
 **No teach or audit is active.** Flights 18 PID 74618 ended with zero ready/four
