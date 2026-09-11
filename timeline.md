@@ -8707,3 +8707,22 @@ live run. Accounting through audit24:30teaches/23audits,53traces/5357spans/
 $482.04286 base estimate. Audit adds$0.3526408, no missing usage; twenty earlier
 missing semantic calls and prior caveats remain. Active teach excluded. No
 implementation change,push,MR,merge,deletion or deadline extension.
+
+
+## 2026-09-11 11:48 PDT — Flights 25 near-target research gaps reach the master
+
+Near the 30-minute target no tools are published. Lookup and selected-date grid
+research are proven; search is partial and booking factually blocked. Search's
+retained result has 34 LAX–JFK flights for November 12 with prices, times,
+airlines, durations and stop information, but lacks proof for the promised
+flight numbers and booking-selection data. It returned this specific gap rather
+than claiming complete proof. Booking cannot yet obtain the required producer
+selection. Both handoffs reached the master, which is reviewing before planning;
+grid draft compilation continues. No malformed-handoff catch is demonstrated.
+
+Run c0b7a21b-628e-4700-b272-93fdc2db59b3, PID 37680, unchanged 54e9470. Earlier
+network/capture timeouts and all partial observations remain preserved. A pooled
+grid transport completed in 1.162 seconds, but that transport timing alone is
+not a measured warm usable-tool success. Host awake, AC 96%, about 24 GiB free,
+collector healthy. Keep 19:18:42 UTC assessment and 19:48:42 hard deadline.
+No parent code change, extra live diagnostic, push, MR, deletion or extension.
