@@ -1,6 +1,36 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 13:03 PDT
+## Current continuation — September 11, 13:06 PDT
+
+**ACTIVE fresh Flights 26**, PID 79181, started 20:05:41 UTC in unused home-26,
+implementation **7eeb982**. Verify private flights-teach-26-manifest.json/log.
+Target **20:35:41**, assess **21:05:41**, hard **21:35:41 UTC**. Exact combined
+recording and four-operation guidance; no previous generated tools, examples or
+private diagnosis supplied. Full independent audit follows, then fresh Hotels 7
+if Flights passes. Repeated fresh success and cold/warm reliability remain due.
+
+7eeb982 adds a concrete framing parser-test requirement to existing compiler
+guidance: prove later records are not discarded after an empty or metadata-only
+envelope. Agents derive valid framing and record-combination expectations from
+evidence. No runtime or site-specific rule. README, architecture and website
+match. 198 tests/1,079 assertions passed in 1.492s, lint 214 files, types, web
+build and desktop/mobile visuals passed. Existing bundle warning; framed-parser-*
+logs/screenshots retained. Preview 6610, visual 14133 and diagnostic 60495 ended.
+
+Flights audit 25 failed 21/23 graded, with two empty searches, two infrastructure
+exclusions and one bad input. Actual arrays: 17 calls, 12 correct, nine working
+parameters. Private cold diagnosis reproduced zero while later frames contained
+31 parseable flights; warm attempt aborted. Do not reroll that audit or resume
+25. Read newest timeline/accounting and private flights-25-parser-diagnostic.json.
+
+Accounting through audit25 unchanged: 31 teaches/24 audits, 55 traces/5,673 spans/
+1,934 usage, 2,349.7644433924 minutes, input 410,959,955/cache 339,292,416/output
+4,395,799, $510.3031024 base estimate. Active teach excluded; twenty earlier
+missing semantic calls and prior caveats remain. Collector healthy, AC 100%,
+23.79 GiB free, no other live experiment. No push, MR, merge or deletion.
+Original malformed-handoff recovery remains unexercised live.
+
+## Previous checkpoint — September 11, 13:03 PDT
 
 **No active teach or audit.** Flights audit 25 failed 21/23 graded in 8.2710
 minutes: 17 actual calls, 12 correct, two broken empty searches, two infrastructure

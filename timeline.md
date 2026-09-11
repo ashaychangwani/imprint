@@ -8848,3 +8848,18 @@ The existing large-bundle warning remains. Private framed-parser-* logs and
 screenshots are retained; preview session 6610 and visual session 14133 ended.
 No unnecessary new prompt-mirroring test or repeated full suite. Next start a
 fresh Flights 26 in an unused home, then independently audit; never resume 25.
+
+
+## 2026-09-11 13:06 PDT — Fresh Flights 26 starts on the framing correction
+
+Fresh home-26 launched 20:05:41 UTC, PID 79181, implementation 7eeb982, exact
+combined recording and four-operation guidance. Target 20:35:41, assess 21:05:41,
+hard deadline 21:35:41 UTC. No previous tools, examples or private diagnostics
+supplied. Independent audit follows, then Hotels 7 if Flights passes. Verify
+whether the compiler's framing test exercises later records and whether fresh
+booking selections preserve complete itineraries. No failed-run resume.
+
+Previous teach/audit and diagnostic ended. Collector healthy, 23.79 GiB free,
+AC 100%, no extra live browser. Accounting through failed audit 25 remains
+$510.3031024 base estimate; active teach excluded. All failures preserved.
+No push, MR, merge, deletion or deadline extension.
