@@ -8629,3 +8629,28 @@ not arbitrary inclusive windows. Run 8ac4a12d-e6bd-4ea2-9262-d156fea86b9e,
 PID 6015, unchanged 54e9470. Keep 16:39:51 UTC assessment and 17:09:51 hard
 limit. Host awake, AC 80%, about 24 GiB free, collector healthy. No parent code
 change, extra live diagnostic, push, MR, deletion or deadline extension.
+
+
+## 2026-09-11 09:23 PDT — Round-trip research chain preserves fresh selection values
+
+Flights 24 has four proven research handoffs back with the master, still before
+final planning/publication. Booking's retained follow-up returned GetBookingResults
+API data in 35.252 seconds for SFO–LAX Frontier F9 2858 October 20 and return
+LAX–SFO F9 4593 October 27. Research reports Frontier/Priceline, Basic Fare and
+Economy Bundle choices including 82/146 USD and seller click links. These still
+need compiled parsing, live review and independent audit.
+
+Private offline check of the actual three research observations confirms both
+links use exact tokens and selections from one coherent fresh producer record:
+initial 6bc918ab → staged 90588741, then staged 90588741 → booking b3f94d43.
+Smallest matching subtrees are 1,188 and 1,311 JSON characters respectively.
+No padding normalization was used; opaque blob strings match literally. The
+staged input retains a JSON scalar; booking packages the decoded selection
+array with the exact token in an envelope. That representation difference is
+explicit, with array structure preserved. Evidence is private
+flights-24-chain-research-check.py/json; original artifacts were not changed.
+This proves research-source coherence, not non-first generated selection or
+an independent audit pass. Earlier failed observations remain retained.
+
+PID 6015, unchanged 54e9470; assessment 16:39:51 and hard 17:09:51 UTC remain.
+No extra live call, parent code change, push, MR, deletion or deadline extension.
