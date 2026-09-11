@@ -1,6 +1,30 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 11:19 PDT
+## Current continuation — September 11, 12:17 PDT
+
+**ACTIVE Flights25**, PID37680, run c0b7a21b-628e-4700-b272-93fdc2db59b3,
+home-25, unchanged **54e9470**. Near-hour assessment: continue under existing
+**19:48:42 UTC hard deadline**, with about31minutes remaining. Four proven
+research handoffs, four-tool/two-wave plan, first three compiled and live-tested.
+All three core reviews requested repair: lookup missing SFO airport code, search
+UA2847 null departure time, grid missing observed effective-route evidence.
+Master recalled retained grid researcher; no tools published yet. Booking compile
+and generated-chain verification remain due, then independent audit. Hotels7
+waits for full Flights success. No parent code/prompt change or deadline extension.
+
+Private flights-25-chain-research-check-detail.py/json verifies exact108character
+token and segment-derived route from the same fresh producer record index2,
+JetBlueB6424 LAX–JFK November12, d6236601→1e11c54f, no padding normalization.
+Initial check matches=[] used the wrong page-init shape; actual source is decoded
+wire data. Both preserved; research coherence does not establish generated-tool
+success. No private diagnosis supplied to teachers. Original malformed-handoff
+catch remains unexercised. Read newest timeline entry for assessment and repairs.
+
+Collector54899 healthy, AC100%, about24GiB free. Accounting through audit24
+unchanged at$482.04286; active teach excluded, prior missing-usage/pricing caveats
+remain. No push, MR, merge, deletion, resume or extra live diagnostic.
+
+## Previous checkpoint — September 11, 11:19 PDT
 
 **ACTIVE fresh Flights 25**, PID 37680, started 18:18:42 UTC, unused home-25,
 unchanged **54e9470**. Verify private flights-teach-25-manifest.json/log. Exact

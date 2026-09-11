@@ -8726,3 +8726,37 @@ grid transport completed in 1.162 seconds, but that transport timing alone is
 not a measured warm usable-tool success. Host awake, AC 96%, about 24 GiB free,
 collector healthy. Keep 19:18:42 UTC assessment and 19:48:42 hard deadline.
 No parent code change, extra live diagnostic, push, MR, deletion or extension.
+
+
+## 2026-09-11 12:17 PDT — Near-hour assessment: fresh booking proof, three live repairs
+
+Flights 25 remains active near minute 59 on unchanged 54e9470. All four research
+handoffs are proven and the master planned four tools in two waves. The first
+three tools compiled and returned live data, but all three core reviews require
+revision: lookup omitted the SFO airport code on its matching record; search
+returned one UA2847 itinerary with a null departure time; grid returned the
+expected dates and fares but current evidence did not identify the effective
+SEA–MIA route. The master has recalled the retained grid researcher for the
+missing proof. No published tools yet; booking compilation and generated-chain
+verification remain due. These are ordinary factual review failures, not an
+exercise of the original malformed-handoff recovery catch.
+
+Continue to the existing 19:48:42 UTC hard deadline: compilation and live checks
+are progressing, concrete repair requests exist, and about 31 minutes remain.
+The 30-minute target was missed. No deadline extension, parent code change or
+private diagnosis supplied to the teacher. Audit all actual published tools
+after completion; Hotels 7 still waits for full Flights success.
+
+Private offline flights-25-chain-research-check-detail.py/json confirms booking
+research used the exact 108-character token and segment-derived route from the
+same fresh producer record at index two: JetBlue B6424 LAX–JFK November12.
+Producer d6236601 feeds consumer 1e11c54f. No padding normalization; the unchanged
+token and structured route array are packaged in the consumer JSON envelope.
+The earlier private check returned no matches because it assumed a page-init
+record shape; the actual source is a decoded wire response. Both diagnostics
+remain preserved, and the corrected result is source coherence only, not proof
+of generated-tool or independent-audit success. No extra live request was made.
+
+Teach PID37680, collector PID54899 healthy, AC100%, about24GiB free. Accounting
+through audit24 remains $482.04286 base estimate; active teach excluded. No push,
+MR, merge, deletion or failed-run resume.
