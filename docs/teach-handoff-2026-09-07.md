@@ -1,6 +1,24 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 02:08 PDT
+## Current continuation — September 11, 02:45 PDT
+
+**ACTIVE fresh Hotels5**, PID **71227**, started **09:44:51 UTC**, unchanged
+**f7c21d7** after Flights20 teach/audit pass with the limitations below. New
+`/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-5`; verify hotels-teach-5-manifest.json
+and log. Exact June4 recording verified13,570,216bytes; no extra guidance or
+prior tools/examples/diagnostics supplied. Target10:14:51,assess10:44:51,
+**hard11:14:51UTC**. Full independent Hotels audit follows on unchanged output.
+
+The user explicitly said “proceed” after the power hold. Launch continued on
+battery11%,59minutes estimated; do not reimpose that earlier hold or request
+permission again. Observe actual power/wake and preserve any interruption
+honestly; no deadline extension. Collector54899/6438 healthy,disk18.88GiB,
+no other teach/audit. Accounting excludes active Hotels5 until complete.
+Monitor completed destination/date collections and any advertised guest-count
+behavior; changing a widget alone is not completed-results proof. Keep narrow
+MVP scope chosen by agents, no site-specific runtime or prompt changes.
+
+## Previous checkpoint — September 11, 02:08 PDT
 
 **No teach/audit active. Flights audit20 passed23/23 graded units** in11.3659min:
 14correct calls,9working parameters;2calendar timeouts excluded and1bound
