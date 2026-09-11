@@ -8173,3 +8173,21 @@ uncertain within the remaining33minutes. Keep12:17:18UTC hard deadline. A provid
 process interruption retried once inside this run and research resumed; this
 is not an observed capacity error or malformed-handoff recovery. Preserve any
 unreported interrupted usage when accounting. No second run,code change,push or MR.
+
+
+## 2026-09-11 04:57 PDT — Flights21 proves non-first booking research
+
+Booking returned non-first Frontier F94144 SMF–LAS October22 14:25–15:56 with
+USD72/107 Frontier and USD63 eDreams offers in33.710s. The selected_itinerary
+wrapper drives nth-of-type(2), differing from the earlier first F94780 result.
+The latest producer retry failed, so retained research used its successful
+same-run producer5ab83133. Parent matched both opaque values, ignoring added
+base64 padding, inside one1061-byte second producer record with route/date/flight.
+Private flights-21-chain-research-check.json preserves the result; literal values
+differ in padding. Browser order stability and unused wrapper fields remain
+independent audit concerns, not proof of broader selection behavior.
+
+Grid's revised anchor-date receipt also passed in34.301s. All four research
+handoffs are now proven; master is reviewing before final planning. No published
+tools yet near minute70. Preserve12:17:18UTC hard deadline, unchanged4ea0a74,
+within-run conversations and failed producer attempts. No new run,push or MR.
