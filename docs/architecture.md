@@ -689,6 +689,12 @@ records remain grouped when the public contract requires them. The master
 distinguishes checking an input from applying it: fixed/default selection needs
 a distinguishing comparison or an explicit contract revision. These are agent
 evidence and artifact-construction requirements, not runtime semantic rules.
+Research-only corroboration is distinct from an execution dependency. Each
+additional request must contribute required output or necessary state; agents
+retain corroborating observations while testing a smaller workflow when the
+core response is sufficient. Optional parser metadata is omitted when its
+meaning is unsupported, rather than filled from an unrelated numeric pair or
+other matching shape. The runtime does not choose which requests or fields matter.
 
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.

@@ -144,7 +144,10 @@ expected answer is never substituted for the research baseline or a chain call.
 A successful chain result can be reviewed even if a standalone test failed;
 that failed test remains visible and still prevents completion until repaired.
 Compiler guidance separates a returned value's location from its meaning and
-defers uncertain optional output fields. Auditors receive exact report tool names.
+omits uncertain optional metadata instead of filling it from unrelated matching
+shapes. Extra responses used to corroborate research stay in the evidence;
+required execution requests must contribute necessary state or core output.
+Auditors receive exact report tool names.
 Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
 Research uses a small contrasting core-input check before claiming parameter

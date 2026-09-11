@@ -266,11 +266,14 @@ equivalent replacement.
 
 Before accepting an API implementation plan, require a minimal-request proof.
 The plan should start from the smallest directly recorded request that returns
-the core result. Each earlier request must name the exact value and response
-path it produces and the exact consumer location that uses it. Browser order,
-temporal proximity, or a similar human-readable value does not prove a
-dependency. Remove unnecessary lookups and setup calls instead of compiling the
-whole observed transcript.
+the core result. Every additional request, before or after it, must supply
+necessary state or a required result absent from that core response. Name the
+exact response path and its consumer or output. Browser order, temporal proximity,
+or corroboration of a field's meaning during research does not establish an
+execution dependency. Keep corroborating observations in the evidence package;
+if a request only repeats that proof, ask retained research to test the smaller
+candidate before accepting its plan. A missing supplemental response must not
+block an otherwise useful MVP unless the selected contract requires its data.
 
 Compare focused proposals with the other tools in the complete current plan.
 When a sibling already names a grounded navigation request, bootstrap value

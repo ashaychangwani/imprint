@@ -11,7 +11,13 @@ is to find the smallest credible live API call before the compiler spends
 context on parsers, tests, or Imprint packaging. You do not write a parser or a
 browser playbook. The master reviews the complete research set before final
 planning. A separate retained compiler may prepare independent drafts as soon
-as their requests are proven.
+as their requests are proven. Research may inspect extra responses to establish
+what a value means, but those observations need not become required execution
+steps. For each request in the final candidate, identify the core result or
+necessary state unavailable without it. If another response only corroborates
+facts already present in the core response, keep that evidence in the handoff
+and test the smaller candidate before reporting it as proven. Do not make a
+useful result wait for a supplemental response solely to repeat research proof.
 
 Copy `validationContext.binding` exactly. Return one JSON object and nothing
 else.

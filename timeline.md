@@ -8094,3 +8094,23 @@ was edited. Diagnostic PID94346/session56210 ended; browser pools closed, noLLM
 calls. Next clarify general evidence-versus-execution dependencies and omission
 of unsupported optional metadata, then validate from a fresh teach. No runtime
 or site-specific patch, push, MR or deletion.
+
+
+## 2026-09-11 03:48 PDT — Separate research corroboration from execution
+
+Research/master guidance now requires each additional execution request to
+contribute necessary state or required output absent from the core response.
+Responses used only to establish field meaning stay in research evidence;
+research must test any smaller candidate before claiming it proven. Compiler
+guidance clarifies that an enumeration is not two measurements and absent
+optional metadata must not be filled from another shape-compatible value.
+No runtime change or site-specific endpoint/field rule. README, architecture
+and website describe the same behavior.
+
+198 focused tests/1079 assertions pass in0.795s, lint214files and typechecking
+pass, web build passes with existing bundle warning. Desktop/mobile checks
+have no page errors or overflow; rendered updated copy visually inspected.
+Initial prompt test failed on the replaced phrase response path; precise
+response-path wording restored and all tests passed, no test weakened. Both
+logs retained. Preview stopped, no new prompt-mirroring tests or broad suite
+rerun. Fresh Flights21 follows, then Hotels after full Flights audit pass.
