@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 14:04 PDT
+## Current continuation — September 11, 14:38 PDT
+
+**ACTIVE partial Flights audit 26**, PID12303, started21:38:34UTC, cap
+**22:23:34UTC**, home-26, unchanged **7eeb982**. Verify private
+flights-audit-26-manifest.json/log. Teach79181ended at its deadline with three
+published tools: lookup,search,grid. Booking live/dependency captures timed out
+121.593/90.309seconds and no booking MVP published. Root90.2078minutes includes
+12.47seconds of deadline unwinding; terminal cites original21:35:41.713UTC limit.
+No extension. Partial audit cannot establish full Flights success. Hotels7 waits.
+
+Read newest timeline/accounting. Search handles multiple frames and has the new
+framing test; its eventual21itinerary baseline followed two capture timeouts.
+Lookup repaired location classifications and parent IDs mislabeled as airport IDs.
+Grid49entries passed. No parent code/prompt change. After audit inspect booking's
+actual capture failure, then choose a justified small general correction or fresh
+unchanged-code teach. Never resume26 or reroll audit to hide defects. Retain all
+failed evidence; original malformed-handoff/capacity recovery remain unexercised.
+
+Accounting through teach26:32teaches/24audits,56traces/5959spans/2013usage,
+2439.9722686452minutes,input431642223/cache356417280/output4612959,
+$535.725864base estimate. Teach adds$25.4227616,no missing semantic usage;
+20earlier missingcalls plus CLI/pricing caveats remain. Active audit excluded.
+Collector healthy,AC100%,23.22GiBfree,no other live experiment. No push,MR,
+merge,deletion or deadline extension. Repeated fresh success remains due.
+
+## Previous checkpoint — September 11, 14:04 PDT
 
 Near-hour assessment: continue Flights 26 under its existing **21:35:41 UTC
 hard deadline**, with about31minutes remaining. All four research handoffs are

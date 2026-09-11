@@ -8913,3 +8913,34 @@ to the teacher. No live malformed-handoff catch or actual provider-capacity even
 Run fd90ea31-8520-4c7b-bb25-a2f740ff137e, PID 79181, unchanged 7eeb982. AC100%,
 about23GiB free, collector healthy, no other live experiment. Accounting remains
 through audit25, active teach excluded. No push, MR, merge, deletion or resume.
+
+
+## 2026-09-11 14:38 PDT — Flights 26 hits deadline with three tools; partial audit starts
+
+Flights 26 ended with lookup, search and grid published, booking not ready.
+Root duration was 90.2078 minutes, including about12.47seconds of deadline
+unwinding after the original21:35:41.713UTC limit; no extension. Booking's live
+capture failed after121.593seconds and its grouped fresh dependency check after
+90.309seconds. The master was revising from those failures when the provider
+deadline ended the run. No live malformed-handoff catch or capacity error seen.
+
+Search eventually passed with21LAX–LASOctober20itineraries after two capture
+timeouts and retained compiler repairs. It parses multiple frames and has the
+metadata-before-records test. Lookup repaired wrong airport/station classifications
+and parent locality IDs mislabeled as nested airport IDs. Grid returned49priced
+entries aroundNovember12/20. These three baselines do not prove repeatability or
+the missing booking tool. No parent code/prompt change was made during the run.
+
+Partial audit26 launched21:38:34UTC, PID12303, home-26, unchanged7eeb982,
+cap22:23:34UTC. Verify flights-audit-26-manifest.json/log. Inspect actual search
+results on contrasting routes/dates, including framed output, and all advertised
+lookup/grid fields. No audit reroll. After audit, inspect booking's actual capture
+failure before deciding whether a general correction is justified or a fresh
+unchanged-code run is appropriate. Hotels7 still waits for full Flights success.
+
+Accounting through teach26:32teaches/24audits,56traces/5959spans/2013usage,
+2439.9722686452minutes,input431642223/cache356417280/output4612959,
+base estimate$535.725864. Teach adds$25.4227616,no missing semantic usage;
+prior20missing calls and CLI/pricing caveats remain. Active audit excluded.
+Teach79181ended, collector healthy, AC100%,23.22GiBfree,no other live experiment.
+No push,MR,merge,deletion or failed-run resume; all failed evidence preserved.
