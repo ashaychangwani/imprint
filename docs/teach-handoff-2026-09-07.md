@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 16:32 PDT
+## Current continuation — September 11, 16:43 PDT
+
+**ACTIVE fresh Hotels 7**, PID 53416, started **23:41:28 UTC September 11**,
+implementation **0ce9fe9**, unused **hotels-home-7** under the private evidence
+base. Verify hotels-teach-7-manifest.json/log. Target **00:11:28**, assess
+**00:41:28**, hard deadline **01:11:28 UTC September 12**. Exact June 4 recording,
+no guidance, previous tools or private diagnosis. Audit independently afterward.
+Then repeat fresh Flights/Hotels on unchanged code if results support it.
+
+Flights audit 27 passed 24/25 graded (96%):17 calls,15 correct, one broken grid call,
+one bad input, no infrastructure exclusions; all nine parameters worked. Grid's
+valid SFO–Seattle October 16/22 call returned BAD_RESPONSE; an identical paced
+retry passed. Underlying error body is not retained in saved report/transcript;
+do not invent its cause or reroll. Both booking checks used exact fresh producer
+selections (UA2744 and DL1412) and returned matching offers. Both are nonstop.
+Connecting booking remains unproven. This is a threshold pass with a real failure,
+not a clean pass or repeated fresh success. Read newest timeline/accounting.
+
+Teach 16039 and audit 51795 ended; no concurrent live diagnostic. Whole-second
+first/warm invocation times are in flights-audit-27-timing.json; setup is included
+in first calls rather than separately timed. Accounting through audit 27:
+33 teaches/26 audits,59 traces/6250 spans/2106 usage,2541.0649882001 minutes,
+input 453010903/read 374491136/output 4847324, base estimate $560.8220024.
+Twenty-two missing semantic calls and earlier pricing/CLI caveats remain; active
+Hotels excluded. Collector healthy,22.43 GiB free. No push, MR, merge, deletion, resume
+or deadline extension. Original malformed-handoff catch remains unexercised;
+new page diagnostics and provider-capacity retry both worked during teach 27.
+
+## Previous checkpoint — September 11, 16:32 PDT
 
 **ACTIVE full Flights audit 27**, PID 51795, started 23:30:23UTC, cap
 **00:15:23 UTC September 12**, home-27, unchanged **0ce9fe9**. Verify private

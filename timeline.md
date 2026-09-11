@@ -9109,3 +9109,32 @@ Accounting now33 teaches/25 audits,58 traces/6,247 spans/2,105 usage:2,532.6243m
 estimate $559.9197808. Teach adds $23.5723952. Twenty-two semantic calls have missing
 usage; prior CLI/pricing caveats remain. Active audit excluded. Collector healthy,
 AC 100%,22.59 GiB free. No push, MR, merge, deletion, resume or deadline extension.
+
+
+## 2026-09-11 16:43 PDT — Flights audit passes with one failure; fresh Hotels 7 starts
+
+Full Flights audit 27 passed 24/25 graded (96%) in 8.4407 minutes. Actual 17 calls:
+15 correct, one broken grid call, one bad input, no infrastructure exclusions. All
+nine parameters worked. Grid's valid October 16/22 SFO–Seattle call returned
+BAD_RESPONSE, then the paced identical retry passed. The underlying error body
+is not in the saved report/transcript; no root cause or code fix is inferred.
+Preserve that failure. Fresh UA2744 and DL1412 selections produced matching
+United/Delta booking offers. Both are nonstop; connecting booking remains unproven.
+
+First grid/search/booking invocations took 70/67/67 seconds including setup; later
+successful calls 7–10/7–8/7 seconds, failed grid 66 seconds, lookup 5–6 seconds. These
+whole-second log timings are full invocations, with no separate setup-only timer.
+See private flights-audit-27-timing.json. No audit reroll or clean-pass claim.
+
+Fresh Hotels 7 launched 23:41:28UTC, PID 53416, unused hotels-home-7, unchanged
+0ce9fe9. Exact June 4 recording, no guidance or previous tools/private diagnosis.
+Target 00:11:28, assessment 00:41:28, hard deadline 01:11:28UTC September 12. Teach 27
+and audit 27 ended. Independent Hotels audit follows; then repeat fresh Flights
+and Hotels on unchanged code if outcomes support it. One passing teach per site
+does not establish repeatability. No concurrent live diagnostic.
+
+Accounting now 33 teaches/26 audits,59 traces/6,250 spans/2,106 usage carriers,
+2,541.0649882001 minutes, input 453,010,903/cache 374,491,136/output 4,847,324,
+base estimate $560.8220024. Audit adds $0.9022216 with no missing usage.22 prior
+missing semantic calls and CLI/pricing caveats remain; active Hotels excluded.
+Collector healthy,22.43 GiB free. No push, MR, merge, deletion or deadline extension.
