@@ -8149,3 +8149,27 @@ This was ordinary factual blocking, not malformed-output recovery. No actual
 capacity retry observed. Run2ac715cf-1619-4ac8-b5db-0c5d2a9ed45f,PID95561,
 unchanged4ea0a74. Host awake on AC80%. Assess11:47:18,hard12:17:18UTC.
 No other run,code change,push,MR or deletion.
+
+
+## 2026-09-11 04:44 PDT — Flights21 near-one-hour assessment
+
+At minute57, the master has resolved the date-grid scope decision: the page
+returns fixed seven-day axes around independently supplied departure/return
+anchors. Five-day bounds still returned seven-day axes; shifting only departure
+moved only that axis. The master replaced four unsupported bounds with two
+anchor dates and requested an exact revised-contract research receipt.
+
+Booking obtained fresh SMF–LAS F94780 search values, but direct and same-session
+request variants still returned error13. Page-owned request capture then returned
+Frontier USD72/107 and eDreams USD63 offers in32.824s. Research correctly kept it
+partial because a fixed first-result click did not select by input. Master
+requested a fresh non-first producer record, coherent scalar and dynamic selector,
+with exact carrier/flight/route/date verification. Prior successes remain in history.
+
+Continue unchanged4ea0a74: location/search are proven with drafts, grid needs
+only its narrower-contract receipt, and booking now has a positive request
+candidate plus a concrete selection gap. No tools published yet; completion is
+uncertain within the remaining33minutes. Keep12:17:18UTC hard deadline. A provider
+process interruption retried once inside this run and research resumed; this
+is not an observed capacity error or malformed-handoff recovery. Preserve any
+unreported interrupted usage when accounting. No second run,code change,push or MR.
