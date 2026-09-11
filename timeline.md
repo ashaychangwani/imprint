@@ -7948,3 +7948,19 @@ consistent with response records. Three tools are published; booking compiler
 Standalone booking, fresh generated second-record chain and independent audit
 remain due. At minute64, continue unchanged within the 09:06UTC hard deadline.
 Host awake, battery25% with2h10 estimated. No other teach/audit, push or MR.
+
+
+## 2026-09-11 01:46 PDT — Flights 20 booking chain reaches offers; currency repair
+
+Booking standalone passed in 35.905 seconds with Southwest WN 2847 and three
+concrete offers. Its fresh generated producer-consumer chain selected United
+UA 6043 and returned five offers in 34.419 seconds. The master rejected the
+chain's semantic result because the parser hard-coded USD rather than reading
+currency from current offer data; transport and selected-record execution
+succeeded. Only booking was recalled in compiler conversation01a08f9d.
+
+The retained repair must ground each offer's currency in its current response,
+not a constant or echoed search context. Three earlier tools remain complete;
+booking was published before chain rejection but is under repair, so four
+artifact directories do not establish a teach pass. About20minutes remain
+before09:06UTC. No implementation change, independent audit or duplicate run.
