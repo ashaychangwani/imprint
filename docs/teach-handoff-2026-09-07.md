@@ -1,6 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 03:44 PDT
+## Current continuation — September 11, 03:47 PDT
+
+**ACTIVE fresh Flights21**, PID **95561**, started **10:47:18 UTC** in unused
+`/tmp/imprint-fresh-inputs-VYbJm1/home-21`. Verify flights-teach-21-manifest.json
+and log. New implementation **4ea0a74**: general guidance distinguishes research
+corroboration from required execution, and rejects shape-based substitutions
+for missing optional metadata. No runtime/site-specific change. README/docs/web
+match; 198 focused tests/1,079 assertions, lint, types, build and desktop/mobile
+checks pass. Initial wording-test failure fixed without weakening tests; logs
+preserved. Preview stopped. No old examples/tools/diagnostics supplied to teacher.
+
+Exact combined Flights recording and four-operation guidance unchanged. Target
+11:17:18, assess11:47:18, **hard12:17:18UTC**. Collector54899/6438 healthy,
+host awake on AC charging63%, disk26.20GiB. No other teach/audit/diagnostic.
+Full independent audit follows; if pass, fresh Hotels6 on unchanged code then
+audit. Further repeated fresh successes and cold/warm measurements remain due.
+Accounting through Hotels audit5 below; active Flights21 excluded until complete.
+Original malformed-handoff recovery and real capacity retry still unexercised.
+No push, MR, merge or deletion.
+
+## Previous checkpoint — September 11, 03:44 PDT
 
 No teach/audit or diagnostic browser active. Hotels audit5 ended inconclusive:
 three baseline failures, zero graded, all four parameters untestable. Private

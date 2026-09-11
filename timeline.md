@@ -8096,7 +8096,7 @@ of unsupported optional metadata, then validate from a fresh teach. No runtime
 or site-specific patch, push, MR or deletion.
 
 
-## 2026-09-11 03:48 PDT — Separate research corroboration from execution
+## 2026-09-11 03:46 PDT — Separate research corroboration from execution
 
 Research/master guidance now requires each additional execution request to
 contribute necessary state or required output absent from the core response.
@@ -8114,3 +8114,18 @@ Initial prompt test failed on the replaced phrase response path; precise
 response-path wording restored and all tests passed, no test weakened. Both
 logs retained. Preview stopped, no new prompt-mirroring tests or broad suite
 rerun. Fresh Flights21 follows, then Hotels after full Flights audit pass.
+
+
+## 2026-09-11 03:47 PDT — Fresh Flights21 launched on4ea0a74
+
+Fresh Flights21 started10:47:18UTC,PID95561,unusedhome-21,exact combined
+recording and original four-operation guidance. Implementation4ea0a74 separates
+research-only corroboration from required execution and omits unsupported
+optional metadata. No previous tools/examples/diagnostics supplied. Independent
+full audit follows; Hotels6 follows only a full Flights pass on unchanged code.
+
+Target11:17:18,assess11:47:18,hard12:17:18UTC. Collector54899/6438 healthy,
+host awake on AC charging63%,available disk26.20GiB; no data deleted by this task.
+Previous teach/audit/diagnostic processes ended, preview stopped, no other run.
+Accounting remains through Hotels audit5; active Flights21 excluded until complete.
+No original malformed-handoff recovery or actual capacity retry yet. No push/MR.
