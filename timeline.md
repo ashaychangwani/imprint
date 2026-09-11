@@ -8191,3 +8191,28 @@ Grid's revised anchor-date receipt also passed in34.301s. All four research
 handoffs are now proven; master is reviewing before final planning. No published
 tools yet near minute70. Preserve12:17:18UTC hard deadline, unchanged4ea0a74,
 within-run conversations and failed producer attempts. No new run,push or MR.
+
+
+## 2026-09-11 05:18 PDT — Flights 21 deadline; partial independent audit started
+
+Fresh Flights 21 on 4ea0a74 ended at 90 minutes with two of four tools published:
+location lookup and the narrowed anchor-date grid. Search failed compiled
+checks waiting 60/90 seconds for its API response. Master recalled the same
+researcher for exact matcher/page evidence, preserving prior history. A further
+151.482-second probe timed out; a final 31.915-second request completed, but
+research review hit the 12:17:18 UTC deadline. Search and booking are unpublished;
+no generated booking chain or full repeatability claim. No deadline extension.
+
+Independent partial audit 21 started 12:17:56 UTC, PID 27076, home-21,45-minute cap
+to 13:02:56 UTC. It covers only lookup/grid. TeachPID 95561 ended, collector healthy,
+disk 25.70 GiB, host awake on AC 80%. No other run or browser diagnostic. After audit,
+inspect final search traffic and exact artifact failures before any correction.
+Hotels 6 remains gated on full Flights success; no audit reroll hides this failure.
+
+Accounting now 26 teaches/18 audits,44 traces/4539 spans/1591 usage;
+1986.6446442327 minutes, input 330928229/cache 272411776/output 3570835,
+$414.4472224 base API equivalent. This teach$23.1921248, with two missing semantic
+calls (300-second watchdog and final deadline); total 19 missing plus prior CLI
+interruptions. Cache-write/tier/long-context caveats remain. Active audit excluded.
+Original malformed-handoff recovery and actual capacity retry remain unexercised.
+No implementation change, push, MR, merge or deletion.

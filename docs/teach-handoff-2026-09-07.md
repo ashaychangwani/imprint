@@ -1,6 +1,25 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 03:47 PDT
+## Current continuation — September 11, 05:18 PDT
+
+**ACTIVE partial Flights audit 21**, PID 27076, started 12:17:56 UTC, cap 13:02:56 UTC.
+Same home-21 and unchanged 4ea0a74. Check flights-audit-21-manifest.json/log.
+TeachPID 95561 ended at 90 minutes with only lookup and anchor-date grid published.
+Search failed two compiled captures and a retained research probe; final request
+completed 31.915 s but the semantic handoff hit the deadline. Search and booking
+are unpublished. Audit covers only the two tools; this cannot prove full scope.
+After audit inspect exact final search traffic/failed artifacts before deciding
+a small general correction. Hotels 6 remains gated on full Flights pass.
+
+Collector 54899/6438 healthy, disk 25.70 GiB, AC 80%, no other run/diagnostic.
+Accounting 26 teaches/18 audits,44 traces/4539 spans/1591 usage,1986.6446442327 min,
+input 330928229/cache 272411776/output 3570835, $414.4472224 base API equivalent.
+This teach$23.1921248, two missing semantic usage spans; total 19 missing plus
+prior interrupted CLI work. Cache/tier/long-context caveats remain. Active audit
+excluded. Original malformed-handoff catch/real capacity retry still unexercised.
+No code change, deadline extension, push, MR, merge or deletion.
+
+## Previous checkpoint — September 11, 03:47 PDT
 
 **ACTIVE fresh Flights21**, PID **95561**, started **10:47:18 UTC** in unused
 `/tmp/imprint-fresh-inputs-VYbJm1/home-21`. Verify flights-teach-21-manifest.json
