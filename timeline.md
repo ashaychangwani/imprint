@@ -8760,3 +8760,35 @@ of generated-tool or independent-audit success. No extra live request was made.
 Teach PID37680, collector PID54899 healthy, AC100%, about24GiB free. Accounting
 through audit24 remains $482.04286 base estimate; active teach excluded. No push,
 MR, merge, deletion or failed-run resume.
+
+
+## 2026-09-11 12:46 PDT — Flights 25 completes; full independent audit starts
+
+Fresh Flights 25 on unchanged 54e9470 completed in 86.3610 minutes with all
+four tools published and the generated booking chain passing. Teach PID 37680
+ended before the 19:48:42 UTC hard deadline. The 30-minute target was missed.
+Retained agents repaired lookup's airport code, search's null zero-hour handling,
+and grid's observed-route proof. The grid now requires a rendered selected-airport
+check before its API capture; its two-request execution must still survive audit.
+
+Booking first passed adjacent nonstop B6 324, but the fresh F9 4310/F9 3174
+SFO–DEN–ORD chain exposed first-segment-only parsing. The master recalled the
+same compiler. Its repair preserved complete ordered segments and each option's
+flight identities. A distinct B6 188/B6 917 LAX–BOS–JFK baseline and the complete
+fresh generated Frontier chain then passed; final chain transport was 31.457s.
+Earlier failures are preserved. Neither malformed-handoff recovery nor actual
+provider capacity recovery was exercised. No parent code/prompt change.
+
+Full independent audit 25 launched 19:46:08 UTC, PID 76404, home-25, cap
+20:31:08 UTC. Verify flights-audit-25-manifest.json/log. Inspect actual graded
+calls, all parameter contrasts, coherent non-first and connecting selections,
+metadata, exclusions and cold/warm behavior. Do not reroll failed audits. Fresh
+Hotels 7 follows only if Flights passes, using unchanged code; repeatability
+still needs repeated independent successes.
+
+Accounting through teach 25: 31 teaches/23 audits, 54 traces/5,670 spans/1,933
+usage carriers, 2,341.4934324160 minutes, input 409,377,208, cache reads
+337,850,368, output 4,390,813, base estimate $509.0637672. This run adds
+$27.0209072, with no missing semantic usage; prior twenty missing calls and
+CLI/pricing caveats remain. Active audit excluded. Collector healthy, AC 100%,
+24.04 GiB free, no other teach/diagnostic. No push, MR, merge, deletion or resume.

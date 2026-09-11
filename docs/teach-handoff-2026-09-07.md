@@ -1,6 +1,33 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 12:17 PDT
+## Current continuation — September 11, 12:46 PDT
+
+**ACTIVE full Flights audit 25**, PID 76404, started 19:46:08 UTC, cap
+**20:31:08 UTC**, home-25, unchanged **54e9470**. Verify private
+flights-audit-25-manifest.json/log. Teach PID 37680 ended after 86.3610 minutes
+with all four tools and a passing fresh generated booking chain. Inspect actual
+audit arrays, failures, exclusions, parameter contrasts and complete connecting
+selections. No reroll to hide defects. Fresh Hotels 7 follows if Flights passes,
+then audit on unchanged code; repeated fresh success remains due.
+
+Read newest timeline/accounting entries. Booking's first chain review caught
+first-segment-only parsing for F9 4310/F9 3174 SFO–DEN–ORD. Its retained compiler
+repaired complete ordered itinerary and option identities; a distinct connecting
+JetBlue baseline and fresh generated Frontier chain then passed. Lookup code,
+search midnight time and observed grid-route proof were also repaired. Grid now
+uses a required rendered selected-airport check before API capture; independent
+cold/warm reliability remains unproven. All failed evidence preserved, no private
+parent diagnosis supplied to teachers, no parent code/prompt change. Original
+malformed-handoff catch and actual capacity recovery remain unexercised.
+
+Accounting through teach 25: 31 teaches/23 audits, 54 traces/5,670 spans/1,933
+usage, 2,341.4934324160 minutes, input 409,377,208/cache 337,850,368/output
+4,390,813, $509.0637672 base estimate. Teach adds $27.0209072; no missing usage
+in this run. Twenty earlier missing semantic calls and CLI/pricing caveats remain.
+Active audit excluded. Collector healthy, AC 100%, 24.04 GiB free, no other run.
+No push, MR, merge, deletion or failed-run resume.
+
+## Previous checkpoint — September 11, 12:17 PDT
 
 **ACTIVE Flights25**, PID37680, run c0b7a21b-628e-4700-b272-93fdc2db59b3,
 home-25, unchanged **54e9470**. Near-hour assessment: continue under existing
