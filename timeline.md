@@ -9079,3 +9079,33 @@ Run 15c60478-5824-49e7-bac3-1839cdef1007, PID 16039. Collector healthy, AC 100%,
 estimate; active teach excluded. No private parent diagnosis or implementation
 change during this run. Independent audit and Hotels 7 remain due. No push, MR,
 merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-11 16:32 PDT — Flights 27 completes all four tools; full audit starts
+
+Teach 27 completed in 84.9151 minutes on unchanged 0ce9fe9, inside the original
+deadline. Four tools published. Repaired search returned 24 SFO–SEA results with
+complete connecting segments. Grid's 49 pairs passed after route controls showed
+278 USD SFO–New York versus 310 USD LAX–New York and 931 USD LAX–Tokyo for the
+same October 20/27 pair. Booking's F9 3292 baseline and fresh AS 620 SFO–SEA
+November 12 chain both returned matching offers. The chain was nonstop; broader
+connecting booking is not established by that pass. Lookup passed its baseline.
+
+Failure-page feedback was exercised twice. Stale replay and capture failures
+remain in history. Booking selection_token was removed after demonstrated lack
+of effect, not repaired. One actual model-capacity failure recovered after the
+runtime's one-second retry without model switching. The failed provider attempt
+and deferred optional booking finesse have missing usage; original malformed
+handoff recovery remains unexercised live. Three optional suggestions saved.
+
+Independent full audit 27 launched 23:30:23UTC, PID 51795, home-27, cap 00:15:23UTC
+September 12. Teach 16039 ended. No concurrent live diagnostic. Audit all four tools
+and inspect actual calls, parameter results, exclusions, complete segments and
+fresh booking values. Hotels 7 follows only a full Flights pass on unchanged code.
+A successful teach is not an independent audit pass or repeated fresh success.
+
+Accounting now33 teaches/25 audits,58 traces/6,247 spans/2,105 usage:2,532.6243minutes,
+451,656,846 input/373,203,712 cache reads/4,841,288 output, emitted writes 0, base
+estimate $559.9197808. Teach adds $23.5723952. Twenty-two semantic calls have missing
+usage; prior CLI/pricing caveats remain. Active audit excluded. Collector healthy,
+AC 100%,22.59 GiB free. No push, MR, merge, deletion, resume or deadline extension.

@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 16:06 PDT
+## Current continuation — September 11, 16:32 PDT
+
+**ACTIVE full Flights audit 27**, PID 51795, started 23:30:23UTC, cap
+**00:15:23 UTC September 12**, home-27, unchanged **0ce9fe9**. Verify private
+flights-audit-27-manifest.json/log. Teach 16039 ended successfully in 84.9151 minutes
+with all four tools and its fresh nonstop search-to-booking chain accepted.
+No audit pass yet. Hotels 7 waits for full Flights audit success; repeated fresh
+successful teaches remain due. Do not run a live diagnostic concurrently.
+
+Search's connecting-segment truncation was repaired; its final 24 SFO–SEA results
+contain full ordered segments. Grid 49 pairs passed after controlled origin and
+destination comparisons. Booking baseline F9 3292 LAX–LAS October 22 and fresh
+AS 620 SFO–SEA November 12 chain returned matching offers. The chain is nonstop;
+inspect connecting booking independently. Booking now accepts selected_flights
+only after proving selection_token ignored; narrowing is not token repair.
+Failure-page feedback was exercised twice; one genuine provider-capacity failure
+recovered after 1 second retry. Original malformed-handoff catch remains unexercised.
+No parent code/prompt change or private diagnosis supplied during teach.
+
+Accounting through teach 27:33 teaches/25 audits,58 traces/6,247 spans/2,105 usage,
+2,532.6243128570minutes,input 451656846/cache 373203712/output 4841288,
+$559.9197808 base estimate. Teach adds $23.5723952; its capacity-failed master call
+and deferred optional booking finesse have missing usage, bringing total missing
+semantic calls to 22. Prior CLI/pricing caveats remain; active audit excluded.
+Collector healthy, AC 100%,22.59 GiB free. No push, MR, merge, deletion, resume or extension.
+Read newest timeline/accounting, preserve every failure, and make any justified
+general correction only after audit evidence; validate changes with a fresh run.
+
+## Previous checkpoint — September 11, 16:06 PDT
 
 One-hour assessment: **continue Flights 27 to the original 23:34:44 UTC hard
 deadline**, with about 29 minutes remaining. PID 16039, run
