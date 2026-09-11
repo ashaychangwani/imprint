@@ -8392,3 +8392,26 @@ Accounting through Hotels teach 6: 28 teaches/20 audits, 48 traces/4,832 spans/
 output 3,760,472, $437.7516848 base API equivalent. This teach $5.67406 with
 one missing optional finesse span, total 20 missing semantic calls plus prior
 CLI interruptions/caveats. Active audit excluded. No push, MR or deletion.
+
+
+## 2026-09-11 07:05 PDT — Hotels audit passes; fresh Flights 23 starts
+
+Hotels audit 6 passed all nine graded checks: five correct calls and four
+working inputs, with no exclusions or untestable parameters. Seattle and Paris
+changed destination; independent check-in/checkout changes affected prices and
+composition; two→four adults changed effective count and larger-property mix.
+Default two-adult baseline completed too. This is one fresh teach/audit success
+on 1152f6f, not yet a successful fresh repeat.
+
+Flights 23 launched 14:04:44 UTC, PID 64357, unused home-23, unchanged 1152f6f,
+exact combined recording and four-operation guidance. No prior tools, examples
+or private diagnostics supplied. Target 14:34:44, assess 15:04:44, hard 15:34:44
+UTC. Independent audit follows; then fresh Hotels repeat on unchanged code.
+Flights 22's seven audit timeouts remain visible and reliability remains open.
+
+Prior Hotels teach/audit processes ended, collector healthy, disk 24.98 GiB,
+AC 80%, no other run or diagnostic. Accounting through Hotels audit 6:
+28 teaches/21 audits, 49 traces/4,835 spans/1,673 usage, 2,071.8188354216 minutes,
+input 351,438,449/cache 289,704,704/output 3,763,425, $438.0853616 base estimate.
+Audit alone $0.3336768, no missing usage; prior caveats remain. Active Flights
+excluded. No push, MR, merge, deletion or deadline extension.

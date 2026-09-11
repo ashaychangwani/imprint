@@ -1,6 +1,30 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 06:57 PDT
+## Current continuation — September 11, 07:05 PDT
+
+**ACTIVE fresh Flights 23**, PID 64357, started 14:04:44 UTC, unused
+`/tmp/imprint-fresh-inputs-VYbJm1/home-23`, unchanged **1152f6f**. Verify
+flights-teach-23-manifest.json/log. Exact combined recording/four-operation
+guidance; no prior tools, examples or diagnostics supplied. Target 14:34:44,
+assess 15:04:44, **hard 15:34:44 UTC**. Independent audit follows, then fresh
+Hotels repeat on unchanged code. Reliability/repeatability remain open.
+
+Hotels audit 6 passed 9/9 graded: five correct calls and four working parameters,
+no exclusions/untestable. Seattle→Paris, independent dates, adults 2→4 all
+changed meaningful returned state/results. Default two-adult baseline worked.
+This is one fresh Hotels teach/audit success on 1152f6f; another is needed.
+Flights 22's earlier threshold PASS excluded seven timeouts/four untestable
+parameters; preserve those limitations. No audit reroll.
+
+Collector healthy, disk 24.98 GiB, AC 80%, no other run/diagnostic. Hotels teach
+52737/audit 63361 ended. Accounting through Hotels audit 6: 28 teaches/21 audits,
+49 traces/4,835 spans/1,673 usage, 2,071.8188354216 minutes, input 351,438,449/
+cache 289,704,704/output 3,763,425, $438.0853616 base estimate. Twenty missing
+semantic calls and prior pricing/completeness caveats remain; active Flights
+excluded. Original malformed-handoff catch and actual capacity recovery remain
+unexercised. No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 06:57 PDT
 
 **ACTIVE Hotels audit 6**, PID 63361, started 13:57:01 UTC, cap 14:42:01 UTC.
 Verify hotels-audit-6-manifest.json/log, same hotels-home-6, unchanged **1152f6f**.
