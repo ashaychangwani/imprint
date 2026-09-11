@@ -7855,3 +7855,24 @@ Collector 54899 healthy on port 6438; disk 21.56 GiB. Host awake on battery at
 Monitor coherent fresh identities and actual chosen-record behavior, plus
 retained master repair and grid execution. Full independent audit follows;
 Hotels 5 follows only a full Flights pass on unchanged code. No push or MR.
+
+
+## 2026-09-11 01:05 PDT — Flights 20 near-target research checkpoint
+
+At minute 29, location, search and date-grid research are marked proven, with
+drafts but no published tools. Location tested London by direct fetch. Search
+returned SFO–LAX October 20/27 round-trip context and concrete outbound records.
+Nonempty optional continuation inputs are still unproven; do not infer complete
+staged-search support from the baseline research label.
+
+Grid has twelve observations and a 7-by-7 API collection for October 17–23
+departures and October 24–30 returns. Separate route comparisons held the date
+window fixed: SFO–LAX to SFO–SEA changed the October 20/27 cell from USD82 to
+151; LAX–SEA changed it to79. Date pairs are response records. A pooled research
+call took2.859seconds, not an independent warm audit. Earlier failures remain.
+Booking is still testing; no proven consumer result or chosen-record behavior.
+
+Run 440d994b-d97a-4d0b-b4eb-afbb2e193548, PID33609 continues unchanged onf7c21d7.
+Host awake, battery34% with2h32 estimated. Keep08:36UTCassessment and09:06hard
+deadline. No malformed-handoff catch or capacity retry observed. No code
+change, duplicate teach/audit, push or MR.
