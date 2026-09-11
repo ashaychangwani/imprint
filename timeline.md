@@ -8013,3 +8013,23 @@ the previous launch hold. Record any sleep/power interruption without extension.
 Target10:14:51,assess10:44:51,hard11:14:51UTC. Independent Hotels audit follows;
 completed collection and any advertised guest-count effects remain obligations.
 Active run excluded from accounting. No code change,push,MR or deletion.
+
+
+## 2026-09-11 03:13 PDT — Hotels5 near-target research checkpoint
+
+At minute28, Hotels5 remains in retained research with no published tool.
+Initial API capture returned Seattle but September20–21/one adult instead of
+requested October12–14/two adults. Research reported partial and the master
+requested repair; this is a valid advisory handoff, not the malformed-output catch.
+
+After browser-control experiments, a page-generated structured ts value grounded
+parameterized date/traveler construction. Page-owned AtySUc capture now returns
+credible Portland offers for October20–23. Research correctly distinguished a
+scalar3 from adult count: changing adults3to2 while holding the three-night stay
+fixed left that scalar unchanged, proving it was nights. Separate traveler-count
+proof remains under inspection; do not advertise guest support from coincidence.
+Earlier selector/network failures remain preserved; no generated tool or audit.
+
+Host is awake on AC,charging23%; AC was observed at10:01UTC during the run.
+Continue unchangedf7c21d7,assess10:44:51UTC,hard11:14:51. No second run,code
+change,push,MR or deletion. Active run remains excluded from accounting.
