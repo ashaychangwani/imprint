@@ -136,7 +136,11 @@ Follow these steps to compile the session:
    response framing: an initial decodable envelope may contain only metadata,
    while later envelopes carry results or updates. Decide how those records
    combine from the evidence; neither the first frame nor concatenating every
-   frame is a universal rule. Preserve that request construction
+   frame is a universal rule. For a framed protocol, include a small parser test
+   that would fail if records following an empty or metadata-only envelope were
+   silently discarded. Ground its framing and expected record combination in
+   the protocol evidence; repeating one populated payload does not exercise
+   this boundary. Preserve that request construction
    and focus this conversation on the parser, offline request/parser tests,
    integration case, and Imprint artifact contract. Do not restart broad API
    hypothesis search here. If the seeded request cannot satisfy the accepted

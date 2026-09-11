@@ -8794,7 +8794,7 @@ CLI/pricing caveats remain. Active audit excluded. Collector healthy, AC 100%,
 24.04 GiB free, no other teach/diagnostic. No push, MR, merge, deletion or resume.
 
 
-## 2026-09-11 13:05 PDT — Audit 25 fails; complete response exposes parser truncation
+## 2026-09-11 13:03 PDT — Audit 25 fails; complete response exposes parser truncation
 
 Audit 25 ended in 8.2710 minutes at 21/23 graded (91.30%). Actual 17 calls:
 12 correct, two broken, two infrastructure exclusions and one invalid-input
@@ -8829,3 +8829,22 @@ Accounting: 31 teaches/24 audits, 55 traces/5,673 spans/1,934 usage carriers,
 4,395,799, base estimate $510.3031024. Audit adds $1.2393352, no missing usage.
 Twenty earlier missing semantic calls and CLI/pricing caveats remain. No parent
 implementation change yet, no live experiment left, no push/MR/merge/deletion.
+
+
+## 2026-09-11 13:05 PDT — Compiler framing check is made explicit
+
+Added a concrete parser-test requirement to the existing general framing
+paragraph: for framed protocols, test that records after an empty or metadata-only
+envelope are not silently discarded. The agent derives valid framing and how
+records combine from protocol evidence. This changes compiler guidance only;
+there is no site-specific example, runtime parser rule, new evidence injection,
+or requirement to concatenate frames. The prior complete-response test alone
+passed because its selected sample happened to contain one data-bearing frame.
+
+README, architecture and website match. Existing 198 focused tests and 1,079
+assertions passed in 1.492 seconds; lint checked 214 files, type checking and web
+build passed. Desktop/mobile visual checks show no page errors or overflow.
+The existing large-bundle warning remains. Private framed-parser-* logs and
+screenshots are retained; preview session 6610 and visual session 14133 ended.
+No unnecessary new prompt-mirroring test or repeated full suite. Next start a
+fresh Flights 26 in an unused home, then independently audit; never resume 25.

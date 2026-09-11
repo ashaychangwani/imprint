@@ -699,6 +699,10 @@ Before live validation, compilers test the complete supplied research response
 as well as relevant recording examples. They preserve response framing and
 determine which envelopes contain metadata, records, or updates; a successful
 parse of the older recording does not establish the current response shape.
+A small framed-protocol parser test must expose discarding records after an empty
+or metadata-only envelope. The agent derives valid framing and record-combination
+expectations from evidence; the runtime does not prescribe a first/last-frame or
+concatenation rule.
 Research and the first planned live case distinguish parameter influence from
 the advertised meaning. For a range, changing its width can reveal whether
 returned records honor the bounds or only move a fixed result region. Agents
