@@ -7981,3 +7981,22 @@ Cumulative24teaches/16audits:1838.62minutes,$380.25,300244493input,
 semantic spans and cache-write/pricing caveats remain. Disk19.03GiB,host awake,
 battery23% with2h07estimated. Hotels5 follows only full Flights pass unchanged.
 No malformed-handoff catch, actual capacity retry, push, MR or deletion.
+
+
+## 2026-09-11 02:08 PDT — Flights audit20 passes with calendar exclusions
+
+Full audit20 completed in11.3659minutes:23/23graded units,14correct calls and
+9working parameters. Two calendar failures were excluded:120-second cold
+baseline deadline and a changed return-window capture timeout. Paced retries
+returned49cells; retain these as unresolved cold reliability failures.
+search_context remains individually untestable because valid variation changed
+its paired selection. Booking distinguished firstF92858 from non-firstWN2847
+under identical context and returned coherent OAK–LAX WN2345 offers.
+
+No audit reroll. PID66163 ended. Hotels5 is next on unchangedf7c21d7, but hold
+launch for stable power: battery19%,78minutes estimated at09:06UTC, below the
+90-minute cap. Recording verified13,570,216bytes. No teach/audit active.
+Cumulative24teaches/17audits:$381.40,1849.99minutes,input301922759 including
+247939072cache reads,output3314286. Audit20$1.15,no missing usage; prior16missing
+semantic calls and cache-write/pricing caveats remain. No repeatability claim,
+implementation change, push, MR or deletion. Monitor may resume after power restores.

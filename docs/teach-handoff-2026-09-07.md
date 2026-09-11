@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 01:53 PDT
+## Current continuation — September 11, 02:08 PDT
+
+**No teach/audit active. Flights audit20 passed23/23 graded units** in11.3659min:
+14correct calls,9working parameters;2calendar timeouts excluded and1bound
+search_context parameter individually untestable. PID66163 ended. First and
+non-first SFO–LAX booking choices plus a coherent OAK–LAX pair returned matching
+offers. Calendar needed paced retries after a120-second baseline deadline and
+changed-return-window capture timeout. Preserve these reliability limitations;
+this is not repeatability or proof of a reliable cold calendar path.
+
+**Next: fresh Hotels5 on unchanged f7c21d7, then audit. Hold launch until stable
+power.** At09:06UTC battery19%,78minutes estimated, below the90-minute teach cap.
+Check actual power/wake; resume autonomously once AC or sufficient stable power
+is available. No changes to implementation, generated tools or audit rerolls.
+Verified Hotels recording13,570,216bytes; use unused hotels-home-5, original
+June4 recording below, no oldtools/examples/diagnostics. Two workers,sequential.
+
+Accounting through audit20:24teaches/17audits,41traces/4209spans/1463usage,
+1849.9873355063minutes,input301922759/cache247939072/output3314286,
+$381.3960968 base equivalent. Audit20 alone$1.1480592; no missing usage.
+Prior16missing semantic calls and pricing/cache-write caveats remain. Source
+flights-audit-20-accounting.json; audit trace9/aa9dBNuVNh7+5Gp8mCnQ==.
+Original malformed-handoff recovery and actual capacity retry still unexercised.
+Keep quiet while waiting for power; no repeated unchanged notifications.
+
+## Previous checkpoint — September 11, 01:53 PDT
 
 **ACTIVE full Flights audit 20**, PID **66163**, started **08:52:59 UTC**,
 45-minute cap to09:37:59UTC. Same unchanged f7c21d7 implementation and home-20.
