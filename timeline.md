@@ -8415,3 +8415,26 @@ AC 80%, no other run or diagnostic. Accounting through Hotels audit 6:
 input 351,438,449/cache 289,704,704/output 3,763,425, $438.0853616 base estimate.
 Audit alone $0.3336768, no missing usage; prior caveats remain. Active Flights
 excluded. No push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 07:35 PDT — Flights 23 target checkpoint and honest scope gaps
+
+Near 30 minutes, lookup and search research are proven, with no published tools.
+Search returned a populated LAX–JFK October 20 one-way page and embedded
+initialization records with Delta DL 934, JetBlue and per-record selection data.
+Its candidate returns rendered document HTML after navigation, not a captured
+API response; record this browser-based fallback distinctly. Optional trip-type
+and filter breadth stays deferred. It is not a fresh-tool audit pass.
+
+Grid research used 12 observations to establish a populated airport-code MVP
+and distinguish routes: SFO–JFK→LAX–JFK→LAX–MIA changed the same date-pair
+fare 347→387→268. It returned partial because the advertised canonical city
+identifier /m/04jpl did not reach the grid control. The master must narrow that
+claim or obtain actual mapping proof; successful airport behavior remains kept.
+This is ordinary factual partial reporting, not malformed-handoff recovery.
+
+Booking obtained fresh search output and is testing request variants; direct
+transport completions do not establish semantic success. Run
+7ff18bf9-40cc-4c52-b146-b82b97967995, PID 64357, unchanged 1152f6f.
+Host awake on AC 80%, no other run/diagnostic. Keep 15:04:44 UTC assessment
+and 15:34:44 UTC hard deadline. No code change, push, MR or deletion.
