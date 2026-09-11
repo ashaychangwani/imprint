@@ -7894,3 +7894,24 @@ the default result. This is the intended strategic repair by the master, not a
 runtime rule or completed proof. Location/grid research remain intact, no tools
 published yet. No implementation change or malformed-report catch. Keep the
 09:06 UTC deadline and independently verify the resulting generated chain.
+
+
+## 2026-09-11 01:22 PDT — Flights 20 proves a fresh non-first research selection
+
+Retained booking research now returned Southwest WN 2847 SFO–LAX October 20,
+12:15–13:40, with Southwest fare offers, distinct from default Frontier F9 2858.
+The fresh producer took 40.779 seconds; the successful consumer took 34.317.
+Parent inspection found the exact selected value in the producer's second
+record (1,124 bytes), co-located with WN 2847, route and date. Private
+flights-20-chain-research-check.json preserves the check without exposing values.
+The earlier 34.545-second failure was a missing visible click target; retained
+research changed the action and succeeded. Preserve that failure.
+
+The two-input candidate consumes selected_flights and search_context; it no
+longer declares selection_token. Selection now uses decoded departure time
+and airport name rather than a fixed first result. Its 12-hour time prefix
+still leaves collisions and connecting itineraries unproven; a single positive
+research result is not independent validation. Master is reviewing before
+planning, no published tools yet. Continue unchanged on f7c21d7, assess at
+08:36 UTC and keep 09:06 hard deadline. No malformed-handoff recovery or actual
+capacity retry observed. No parallel run, push or MR.
