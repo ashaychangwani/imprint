@@ -1,6 +1,24 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 05:33 PDT
+## Current continuation — September 11, 05:36 PDT
+
+**ACTIVE fresh Flights 22**, PID 29915, started 12:35:56 UTC in unused
+`/tmp/imprint-fresh-inputs-VYbJm1/home-22`. Verify flights-teach-22-manifest.json
+and log. Implementation **1152f6f**: compiler tests complete supplied research
+responses offline before live checks, preserving framing and interpreting
+metadata/results/updates from evidence. No runtime or site-specific rule.
+README/docs/web match; website compile description shortened for readability.
+198 focused tests/1,079 assertions, lint, types, web build and desktop/mobile
+visual checks pass. Preview stopped. No prior tools or diagnostic files supplied.
+
+Exact combined recording and four-operation guidance unchanged. Target 13:05:56,
+assess 13:35:56, **hard 14:05:56 UTC**. Collector 54899/6438 healthy, host awake
+on AC 80%, available disk 25.57 GiB. No other teach/audit/diagnostic. Independent
+full audit follows; Hotels 6 follows only a full Flights pass on unchanged code.
+Further fresh repeated successes remain due. Accounting through audit 21 below;
+active Flights 22 excluded. No push, MR, merge or deletion.
+
+## Previous checkpoint — September 11, 05:33 PDT
 
 No teach, audit, or diagnostic active. Flights audit 21 passed 12/12 graded:
 seven calls and five parameters across published lookup/grid only, no exclusions.

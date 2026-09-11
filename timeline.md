@@ -8268,3 +8268,18 @@ visual checks passed without errors or horizontal overflow; existing large-bundl
 warning remains. Final visual/build logs are research-parser-*-3.log. Preview
 session 57241 stopped and visual sessions ended. No new prompt-mirroring tests
 or unnecessary full-suite rerun. Fresh Flights 22 follows, never a resumed run.
+
+
+## 2026-09-11 05:36 PDT — Fresh Flights 22 started
+
+Flights 22 started 12:35:56 UTC, PID 29915, unused home-22, implementation
+1152f6f. Exact combined recording and four-operation guidance unchanged. No
+prior tools, shipped examples or private diagnostics supplied. Target 13:05:56,
+assessment 13:35:56, hard 14:05:56 UTC. Independent full audit follows; then
+Hotels 6 on unchanged code if Flights passes. Current malformed-handoff repair
+and actual provider-capacity recovery still lack live evidence.
+
+Collector healthy, disk 25.57 GiB, host awake on AC 80%, no other teach/audit/
+diagnostic; preview stopped. Accounting through audit 21: 26 teaches/19 audits,
+45 traces, $414.8080088 base API equivalent with earlier completeness caveats.
+Active Flights 22 excluded. No push, MR, merge or deletion.
