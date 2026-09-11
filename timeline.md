@@ -8304,3 +8304,23 @@ completion is not yet a proven booking result. Failed attempts stay in history.
 Run e5a5dd08-538d-4fb4-9645-58430a192974, PID 29915, unchanged 1152f6f.
 Host awake on AC 80%. Keep assessment 13:35:56 and hard 14:05:56 UTC.
 No other run, code change, push, MR or deletion. Accounting excludes active run.
+
+
+## 2026-09-11 06:12 PDT — Flights 22 booking research uses a fresh coherent record
+
+Booking research returned a page-generated GetBookingResults response in
+31.567 seconds for Frontier F9 2858, SFO–LAX October 20, 19:25–21:01. It
+contains Frontier Basic USD 41, Economy USD 73 and Priceline USD 41 with
+provider links and restrictions. Parent independently matched selection_token
+and the decoded selected_flights scalar literally within one 1,189-byte first
+record of same-run search producer 25f7e5b3; consumer observation 1a3c2d45.
+Private flights-22-chain-research-check.json records exact paths and equality.
+The first naive serialized-subtree comparison missed the JSON-encoded inner
+array; decoding that representation established both literal matches without
+changing values or normalizing padding.
+
+All four research handoffs are proven; master is reviewing before planning.
+Booking's transform builds a selection URL from supplied values, with no fixed
+first-result click. Distinguishing non-first behavior and generated tool/chain
+validation remain due. No published tools yet around minute 36. Unchanged
+1152f6f, hard 14:05:56 UTC, no new run or implementation change.
