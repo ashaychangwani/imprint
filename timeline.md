@@ -8438,3 +8438,27 @@ transport completions do not establish semantic success. Run
 7ff18bf9-40cc-4c52-b146-b82b97967995, PID 64357, unchanged 1152f6f.
 Host awake on AC 80%, no other run/diagnostic. Keep 15:04:44 UTC assessment
 and 15:34:44 UTC hard deadline. No code change, push, MR or deletion.
+
+
+## 2026-09-11 08:03 PDT — Flights 23 near-one-hour assessment
+
+At minute 58.5 all four research handoffs are proven; master is reviewing
+before final planning, with no published tools yet. Continue unchanged 1152f6f
+because booking now has a concrete successful result and grid's city-ID scope
+gap has been resolved by narrowing to airport codes and testing that candidate.
+Completion within the remaining 31 minutes is uncertain; keep 15:34:44 UTC
+hard deadline, with no extension.
+
+Booking returned Delta DL 934 LAX–JFK October 20, 06:00–14:20, with five Delta
+fare choices: 194/249/389/314/369 USD. The browser fallback first refreshes
+selection state from search using the selected record's page identifier, then
+navigates to booking and waits for the provider-results container to contain
+content. These are rendered documents, not API captures. API failures and
+timeouts remain in the run evidence. Different-from-recorded itinerary success
+does not yet establish non-first selection from fresh generated search output;
+final chain and independent audit remain due.
+
+Grid's narrowed candidate returned its API response in 33.394 seconds. Host
+awake on AC 80%, PID 64357, no other run/diagnostic. No implementation change,
+push, MR or deletion. Original malformed-handoff catch/capacity recovery still
+unexercised; ordinary partial/blocked facts did return to the master for repair.
