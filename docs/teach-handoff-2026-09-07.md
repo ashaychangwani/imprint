@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 06:24 PDT
+## Current continuation — September 11, 06:38 PDT
+
+**ACTIVE fresh Hotels 6**, PID 52737, started 13:37:52 UTC, unused
+`/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-6`, unchanged **1152f6f**.
+Verify hotels-teach-6-manifest.json/log. Exact June 4 recording; no extra guidance
+or prior tools/diagnostics supplied. Target 14:07:52, assess 14:37:52,
+**hard 15:07:52 UTC**. Independent audit follows; inspect destination/date
+results, any advertised guest count, and necessary execution requests.
+
+Flights audit 22 ended with 17/17 graded, but seven timeouts and four untestable
+parameters: actual 18 calls, 11 correct; six parameters working. Auditor prose
+miscounts are superseded by arrays. Search origin/destination comparisons failed;
+calendar inputs ultimately worked despite three timeouts. Two coherent booking
+selections returned Frontier F9 1178/19 offers and American AA 4988/five offers.
+Bound booking inputs individually untestable. No audit reroll; reliability and
+repeatability remain unresolved. All four tools had successful calls somewhere
+in the audit; this is a threshold PASS with substantial limitations.
+
+Collector healthy, disk 26.12 GiB, AC 80%, no other run/diagnostic. Flights teach
+29915/audit 51002 ended. Accounting through audit 22: 27 teaches/20 audits,
+47 traces/4,769 spans/1,646 usage, 2,049.6375385660 minutes, input 344,676,223/
+cache 283,642,752/output 3,724,332, $432.0776248 base estimate. Nineteen earlier
+missing semantic calls and prior caveats remain; active Hotels excluded.
+No malformed-handoff catch or capacity recovery observed. No push/MR/deletion.
+
+## Previous checkpoint — September 11, 06:24 PDT
 
 **ACTIVE full Flights audit 22**, PID 51002, started 13:23:55 UTC with a
 45-minute cap to 14:08:55 UTC. Verify flights-audit-22-manifest.json/log in

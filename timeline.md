@@ -8345,3 +8345,28 @@ Accounting now 27 teaches/19 audits, 46 traces/4,766 spans/1,645 usage,
 $430.5710344 base API equivalent. This teach $15.7630256 with no missing usage;
 19 prior missing semantic calls and other caveats remain. Active audit excluded.
 No observed malformed-handoff recovery or real capacity retry. No push/MR/deletion.
+
+
+## 2026-09-11 06:38 PDT — Flights audit passes with exclusions; fresh Hotels 6
+
+Audit 22 ended: 17/17 graded checks passed, but actual arrays show 18 calls,
+11 correct and seven timeouts, with six working/four untestable parameters.
+The auditor's prose miscounted calls and parameters; deterministic totals are
+recorded. Four search timeouts prevented origin/destination comparisons; three
+calendar timeouts remained even though all calendar inputs eventually worked.
+Two coherent booking pairs selected Frontier F9 1178 (19 offers) and American
+AA 4988 (five offers); their individual bound inputs cannot be isolated.
+Reliability and unchanged-code repeatability remain unproven. No audit reroll.
+
+Fresh Hotels 6 launched 13:37:52 UTC, PID 52737, unused hotels-home-6, unchanged
+1152f6f. Exact June 4 recording verified, no extra guidance or prior tools or
+diagnostics supplied. Target 14:07:52, assess 14:37:52, hard 15:07:52 UTC.
+Independent Hotels audit follows. Watch completed destination/date results,
+any advertised guests, and whether each execution request is actually needed.
+
+Collector healthy, disk 26.12 GiB, AC 80%; Flights teach/audit processes ended,
+no other run or diagnostic. Accounting through audit 22: 27 teaches/20 audits,
+47 traces/4,769 spans/1,646 usage, 2,049.6375385660 minutes, input 344,676,223/
+cache 283,642,752/output 3,724,332, $432.0776248 base API equivalent.
+Audit alone $1.5065904, no missing usage; earlier 19 missing calls/caveats remain.
+Active Hotels excluded. No push, MR, merge, deletion or deadline extension.
