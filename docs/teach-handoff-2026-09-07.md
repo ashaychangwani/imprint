@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 15:36 PDT
+## Current continuation — September 11, 16:06 PDT
+
+One-hour assessment: **continue Flights 27 to the original 23:34:44 UTC hard
+deadline**, with about 29 minutes remaining. PID 16039, run
+15c60478-5824-49e7-bac3-1839cdef1007, unchanged implementation 0ce9fe9, home-27.
+Only search_locations is published. All four requests had proven research;
+focused live review found search truncates connecting segments and grid lacks
+controlled route proof. Master recalled the retained search compiler and grid
+researcher. Booking waits on repaired producer output. Read newest timeline.
+
+Booking research used fresh producer 00c2b699 and contrasted F9 2334/F9 3292.
+It showed selection_token was ignored, so the master narrowed the contract to
+selected_flights only; subsequent b3609791/bff7bc62 tests omitted tfu and worked.
+This is narrowing, not repair of token support. The planned chain passes one
+producer record's complete selection unchanged. Independently verify full
+segments/groups in generated tools and fresh dependency checks.
+
+A master call logged capacity_or_overload, retried after one second, then returned
+the revised decision. Retry/recovery is now observed; original malformed-handoff
+recovery remains unexercised live. New page diagnostics were already exercised
+on failed search captures. No parent code/prompt changes or private diagnosis
+supplied during this run. No audit yet. Hotels 7 waits for a full Flights pass.
+
+Collector healthy, AC 100%, 22.76 GiB free. Accounting through audit 26 remains
+$536.3473856 base estimate; active teach excluded. Preserve all failures, update
+accounting after completion, audit independently, and only then decide the next
+fresh experiment. No push, MR, merge, deletion, resume or deadline extension.
+
+## Previous checkpoint — September 11, 15:36 PDT
 
 At the 30-minute target no tools are published. Lookup/grid research are proven
 and the grid draft compiled; search and booking need fresh selection-contract

@@ -9040,3 +9040,42 @@ Run 15c60478-5824-49e7-bac3-1839cdef1007, PID 16039, unchanged 0ce9fe9.
 Keep the 23:04:44 UTC assessment and 23:34:44 hard deadline. Collector healthy,
 22.90 GiB free. Accounting remains through audit 26, active teach excluded.
 Independent audit and Hotels 7 remain due; no push, MR, merge or deletion.
+
+
+## 2026-09-11 16:06 PDT — One-hour assessment: continue focused repairs to original deadline
+
+Flights 27 is active at the one-hour assessment on unchanged 0ce9fe9. Only
+search_locations is published. Continue to the existing 23:34:44 UTC hard
+deadline: all four operations have researched working requests, lookup is usable,
+and about 29 minutes remain for specific parser and route-proof repairs, booking
+compilation, and live validation. The 30-minute target was missed; no extension.
+
+Search research recovered complete server data embedded in the returned document,
+including flight numbers and selection components from coherent records. Its
+generated live result then exposed a real parser defect: only the first flight
+of a connecting itinerary was retained. The master recalled the retained compiler
+to emit all segments, derive stops from them, and preserve the complete selection
+for booking. It did not waive the defect after transport success.
+
+Booking research used a fresh search call (00c2b699), then proved the selected
+F9 2334 versus F9 3292 itinerary changed the offers. Controlled tests also showed
+selection_token had no effect, even when replaced with an invalid scalar. The
+master removed that unsupported input; subsequent tests b3609791 and bff7bc62
+proved the one-parameter selected_flights construction without tfu. This is a
+contract narrowing, not proof that the old token input was repaired. The chosen
+plan passes one producer record's complete scalar selection unchanged to booking.
+Generated booking and the repaired connecting chain remain unvalidated.
+
+Grid returned 49 date pairs and fares but no route attributes. The master returned
+it to the retained researcher for a controlled destination comparison using valid
+location identifiers, with origin/dates held fixed and visible route corroboration.
+One master call logged capacity_or_overload and a one-second retry; the subsequent
+revised master decision arrived and grid research continued within the deadline.
+This is an observed provider retry/recovery, not a capture-timeout classification.
+The original malformed-handoff catch remains unexercised live.
+
+Run 15c60478-5824-49e7-bac3-1839cdef1007, PID 16039. Collector healthy, AC 100%,
+22.76 GiB free. Accounting remains through failed audit 26 at $536.3473856 base
+estimate; active teach excluded. No private parent diagnosis or implementation
+change during this run. Independent audit and Hotels 7 remain due. No push, MR,
+merge, deletion, failed-run resume or deadline extension.
