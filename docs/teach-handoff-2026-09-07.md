@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 00:36 PDT
+## Current continuation — September 11, 01:40 PDT
+
+Flights 20 is at minute 64, PID 33609 active on unchanged f7c21d7. Three tools
+are now published: location lookup, one-way search, and date grid. Search's
+retained compiler repaired final-destination metadata for connecting itineraries
+and emissions amount parsing. Its final 33.336-second check returned 24 credible
+LAX–SEA October 21 options with co-located booking inputs. Booking is compiling
+in conversation 01a08f9d-8b41-72a0-8e70-173213eb5189; generated standalone and
+fresh second-record chain checks remain due, followed by independent audit.
+
+The master earlier corrected incompatible search/booking modes, removed unused
+selection_token, and requested retained fresh non-first research. That research
+returned WN 2847 SFO–LAX October 20 after a fresh producer; parent confirmed the
+exact selected value inside its second record. Private flights-20-chain-research-check.json
+preserves the check. Candidate selection uses airport name and a 12-hour time
+prefix: collisions and connecting itinerary behavior remain audit concerns.
+No malformed-handoff recovery or actual provider capacity retry was exercised.
+
+The near-one-hour assessment authorized continued progress within the original
+09:06 UTC hard deadline; there is no extension. Host awake, battery25% with
+2h10 estimated at08:40UTC. No other teach/audit active. Accounting still excludes
+active teach20. All launches/evidence and prior failure details follow below.
+
+### Launch context — September 11, 00:36 PDT
 
 **ACTIVE fresh Flights 20**, PID **33609**, started **07:36:00 UTC September 11**
 in unused `/tmp/imprint-fresh-inputs-VYbJm1/home-20`. Verify
