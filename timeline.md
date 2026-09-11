@@ -7775,3 +7775,23 @@ rejection; these are artifact failures, not a transport waiver. Only booking
 was recalled in its same compiler conversation. No booking publication or
 complete teach pass yet. Keep the 07:15:13 UTC hard deadline, about six minutes
 remaining; no implementation change, duplicate run, push or MR.
+
+
+## 2026-09-11 00:17 PDT — Flights 19 completes; full independent audit started
+
+Flights 19 completed all four tools and the fresh generated booking chain in
+87.1902 minutes on unchanged 6d422b4. Booking parser repair passed standalone
+and chain checks in 33.856 and 33.158 seconds. Fixed-first-result selection
+remains in the published transform and must be tested independently; this
+teach pass alone does not prove chosen-flight breadth or repeatability.
+
+Teach PID 97393 ended. Full audit 19 started September 11 07:15:28 UTC, PID
+30920, unchanged home-19, 45-minute cap. No parallel teach/audit. Collector
+54899 healthy, disk 21.74 GiB. If the full audit passes, fresh Hotels 5 follows
+on unchanged implementation. Retain every prior failure and scope limitation.
+
+Teach usage is $23.00 base equivalent and one unreported retained research
+watchdog call. Cumulative 23 teaches/15 audits: 1,751.30 elapsed minutes,
+278,058,628 input including 227,312,896 cache reads, 3,098,367 output, $355.88.
+Sixteen semantic calls plus interrupted CLI/audit work lack usage. Active audit
+is excluded until complete. No code change, push or MR.

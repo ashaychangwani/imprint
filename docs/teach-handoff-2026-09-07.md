@@ -1,6 +1,37 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-10 22:46 PDT
+## Current continuation — 2026-09-11 00:17 PDT
+
+**ACTIVE full independent Flights audit 19**, PID **30920**, started September
+11 **07:15:28 UTC**, 45-minute cap. Verify flights-audit-19-manifest.json/log,
+actual process and clock. Home `/tmp/imprint-fresh-inputs-VYbJm1/home-19`,
+implementation **6d422b4**, unchanged. Teach PID 97393 ended successfully.
+Collector 54899/port 6438 healthy; disk 21.74 GiB. No other teach/audit active.
+
+Flights 19 completed all four tools and fresh generated booking chain in
+87.1902 minutes. Research used fresh F9 2334 LAX–LAS October 22 inputs; parent
+matched unpadded values in one 1,062-byte producer record. Literal padding
+differs. Published booking still checks input identity but clicks fixed first
+result; the audit must establish chosen-flight behavior, not just first-result
+success. Initial search currency error and booking parser comparison failures
+were repaired in retained compiler conversations. Standalone/chain booking
+finally passed in 33.856/33.158 seconds. Four optional suggestions saved.
+No actual capacity retry or original malformed-handoff catch observed.
+
+Accounting through this teach: **$355.88**, 1,751.30 elapsed minutes, 23 teaches/
+15 audits, 38 traces/3,870 spans/1,377 usage spans. Sixteen semantic calls plus
+interrupted CLI/audit work lack usage. Audit 19 excluded until complete.
+Teach 19 alone is $23.00; one retained research call hit a 300-second provider
+watchdog without usage. All failed evidence and sleep exceptions remain.
+
+Next inspect the actual full audit arrays and failures, preserving scope and
+first/other-flight identity. If full Flights passes, fresh Hotels 5 on unchanged
+code with the exact June 4 recording and independent audit. Fresh repeated
+successes and successful cold/warm timing remain due. Any code/prompt change
+requires fresh teaches. No old examples/tools/diagnostics into teachers, no
+vNext, deletion, push or MR. Verify power/wake before new long runs.
+
+## Previous continuation — 2026-09-10 22:46 PDT
 
 **ACTIVE fresh Flights 19**, PID **97393**, started **September 11 05:45:13 UTC**
 (September 10 22:45 PDT), on unchanged implementation **6d422b4**. New home
