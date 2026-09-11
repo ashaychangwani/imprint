@@ -8587,3 +8587,22 @@ producer selections, and repair real failures. Do not resume the failed run.
 Prior teach/audit ended, no extra live diagnostic/preview, collector healthy,
 disk 24.21 GiB, AC 80%. Accounting through failed audit 23 unchanged; active
 teach excluded. No push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 08:58 PDT — Flights 24 research chooses a narrower grid contract
+
+At about 18 minutes, lookup, search and grid research are proven; booking is
+calling the same-run search for fresh upstream values. Run
+8ac4a12d-e6bd-4ea2-9262-d156fea86b9e, PID 6015, unchanged 54e9470. The selected
+grid contract exposes origin, destination, selected departure_date and
+return_date; its expected output covers the returned grid, without advertised
+arbitrary inclusive bounds. That is narrower scope, not a repaired range feature.
+Research's final candidate returned page-generated GetCalendarGrid API data in
+35.797 seconds, including SFO–LAX October 19/26 fare 65 and neighboring cells.
+Earlier direct-request failures remain preserved. Compiler, live review and
+independent audit must still verify the emitted meaning and supported inputs.
+
+No published tools yet. Booking fresh producer consumption and non-first
+selection remain due for this run. Host awake, AC 80%, about 24 GiB free,
+collector healthy. Target 16:09:51, assess 16:39:51, hard 17:09:51 UTC unchanged.
+No implementation change, extra live diagnostic, push, MR or deletion.
