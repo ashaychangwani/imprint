@@ -8283,3 +8283,24 @@ Collector healthy, disk 25.57 GiB, host awake on AC 80%, no other teach/audit/
 diagnostic; preview stopped. Accounting through audit 21: 26 teaches/19 audits,
 45 traces, $414.8080088 base API equivalent with earlier completeness caveats.
 Active Flights 22 excluded. No push, MR, merge or deletion.
+
+
+## 2026-09-11 06:05 PDT — Flights 22 reaches the target with three research proofs
+
+At minute 29–30, location lookup, flight search, and date grid have proven
+research handoffs and drafts; no published tools yet. Search obtained the
+151 KB SFO–LAX October 20 response with concrete itineraries and co-located
+selection fields. Its compiler now includes a test against the full supplied
+research response, checking Frontier F9 2858, route/date/times, price, currency
+and emissions rather than only the old recording. Publication/audit remain due.
+
+Grid compared SFO–LAX, SFO–JFK and SEA–JFK with fixed dates; requested-pair
+fares changed 78→337→377. It uses a page-owned API capture and seven-day
+axes around date inputs. Booking called a fresh search producer in 33.763 seconds.
+Its initial request construction and execution attempts failed across transports;
+retained research is still investigating. A later 31.567-second transport
+completion is not yet a proven booking result. Failed attempts stay in history.
+
+Run e5a5dd08-538d-4fb4-9645-58430a192974, PID 29915, unchanged 1152f6f.
+Host awake on AC 80%. Keep assessment 13:35:56 and hard 14:05:56 UTC.
+No other run, code change, push, MR or deletion. Accounting excludes active run.
