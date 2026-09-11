@@ -8033,3 +8033,20 @@ Earlier selector/network failures remain preserved; no generated tool or audit.
 Host is awake on AC,charging23%; AC was observed at10:01UTC during the run.
 Continue unchangedf7c21d7,assess10:44:51UTC,hard11:14:51. No second run,code
 change,push,MR or deletion. Active run remains excluded from accounting.
+
+
+## 2026-09-11 03:19 PDT — Hotels5 research proves dates and adult occupancy
+
+Retained research marked its exact two-response candidate proven at minute34.
+The page-owned AtySUc response identifies Portland,October20/23 date arrays,
+a concrete property and three repeated traveler entries. M0CRd independently
+repeats destination/dates; returned provider-offer URLs carry noa=3,
+adultsCount=3 or group_adults=3 with those dates. This grounds adult meaning
+separately from the three-night duration, after the two-adult contrast exposed
+the ambiguous nights scalar. Last candidate took37.198seconds;16 observations
+preserve prior failures. Master is reviewing before planning; no publication.
+
+The candidate uses two page navigations capturing API responses, not a DOM
+collection or playbook. Consolidating navigation is optional; independent
+parameter effects and reliable generated execution remain due. No code change,
+malformed-handoff catch or actual capacity retry observed. Same11:14:51UTC cap.
