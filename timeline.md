@@ -8129,3 +8129,23 @@ host awake on AC charging63%,available disk26.20GiB; no data deleted by this tas
 Previous teach/audit/diagnostic processes ended, preview stopped, no other run.
 Accounting remains through Hotels audit5; active Flights21 excluded until complete.
 No original malformed-handoff recovery or actual capacity retry yet. No push/MR.
+
+
+## 2026-09-11 04:16 PDT — Flights21 near-target research checkpoint
+
+At minute29, location lookup and one-way search research are proven, with drafts
+but no published tools. Search returned concrete SMF–LAS October22 itineraries
+and per-record selection material through CDP in34.679s. Grid returned a full
+seven-day departure/return collection for SFO–JFK, with rendered route evidence,
+but correctly reported partial because its advertised arbitrary-window input
+exceeded the demonstrated seven-day behavior. A pooled research call took1.884s;
+this is not an independent warm benchmark. Earlier capture failures remain.
+
+Booking's two fresh search producer invocations timed out before exposing any
+current selection. Recorded coherent booking requests returned protocol error13
+through direct and CDP transports. Research reported blocked rather than calling
+that valid booking proof; the master is reviewing both gaps for retained repair.
+This was ordinary factual blocking, not malformed-output recovery. No actual
+capacity retry observed. Run2ac715cf-1619-4ac8-b5db-0c5d2a9ed45f,PID95561,
+unchanged4ea0a74. Host awake on AC80%. Assess11:47:18,hard12:17:18UTC.
+No other run,code change,push,MR or deletion.
