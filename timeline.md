@@ -8490,3 +8490,25 @@ not edited and no diagnosis was supplied to teaching agents. No extra browser
 run or LLM calls. First detail-script attempt used a nonexistent response path;
 corrected to revision-1/search_flights and completed offline. PID 64357 active,
 AC 80%, about 24 GiB free. No code change, push, MR, deletion or deadline extension.
+
+
+## 2026-09-11 08:18 PDT — Three Flights MVPs published after agent repairs
+
+Flights 23 has published lookup, search and grid; booking is compiling in wave
+two, with about 16 minutes until the unchanged 15:34:44 UTC hard deadline.
+Search's first semantic review caught a cross-record join: a result claimed
+American AA1476 at 15:14 while its opaque selection identified United UA1265
+at 17:07. It also caught seat pitch mislabeled as aircraft. The same-run agent
+removed the aircraft claim and filtered mismatched selected records. The next
+live review accepted 11 SEA–ORD October 22 itineraries and their envelopes.
+This is successful agent-directed repair of a real generated-output defect;
+substring checks in the repair do not themselves prove general record integrity.
+The independent audit remains necessary.
+
+Grid's first review rejected missing currency. Its agent added currency, and
+the next review accepted 49 LAX–MIA cells with USD fares and same-cell tokens.
+Repeat live transports were 32.768 seconds for search and 32.370 for grid.
+Booking's fresh generated chain is still pending. Original malformed-handoff
+recovery remains unexercised; these were ordinary semantic revision requests.
+PID 64357 active, collector healthy, AC 80%, about 24 GiB free. No parent code
+change, additional live experiment, push, MR, deletion or deadline extension.
