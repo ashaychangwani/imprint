@@ -1,6 +1,41 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 8, 15:07 PDT
+## Current continuation — 2026-09-10 22:44 PDT
+
+Latest implementation remains **6d422b4**, worktree and branch unchanged.
+**No teach or audit is active.** Flights 18 PID 74618 ended with zero ready/four
+not ready before planning. Three research drafts exist but booking stayed
+unresolved. No published output exists to audit. Its ordinary blocked handoff
+reached the master for contract repair; no malformed-handoff catch or actual
+capacity retry was exercised.
+
+macOS entered clamshell sleep September 8 23:18:21 UTC. The original deadline
+23:36:44 UTC was handled during a later wake, terminal written 23:50:10 UTC.
+Account 103.4300 wall minutes separately from 71.7875 monotonic trace minutes.
+The deadline overrun was host suspension, not an authorized extension; earlier
+booking failures remain real evidence. Local home-18, log, manifest, terminal,
+trace, drafts and flights-18-power-events.txt are preserved.
+
+**Power condition:** September 9 01:20 UTC, battery 1% and discharging. Do not
+start another long teach until the laptop has stable power and is awake. The
+existing heartbeat may check for restoration quietly; do not launch a duplicate
+or resume failed work. Collector 54899 on port 6438 remains, disk about 22 GiB.
+
+Accounting through Flights teach 18 is **$332.88**, 1,664.11 elapsed minutes,
+22 teaches/15 audits, 37 traces/3,586 spans/1,294 usage spans. Fifteen failed
+semantic calls plus interrupted CLI/audit sessions lack usage. See accounting
+for cache and pricing caveats. Teach 18 alone recorded $15.21.
+
+Next after power restoration: verify ended processes and collector, then fresh
+Flights 19 in unused home-19 on unchanged 6d422b4, exact combined recording and
+four-operation guidance. The sleeping attempt cannot establish repeatability;
+no new code/prompt correction is justified merely by suspension. Inspect any
+concrete remaining contract failure before changing implementation. After full
+Flights teach/audit pass, fresh Hotels 5 on unchanged code and audit. Keep
+30/60/90 timing, two workers, sequential runs and fresh upstream values. Never
+feed old tools/examples/diagnostics to teachers. No deletion, vNext, push or MR.
+
+## Previous continuation — September 8, 15:07 PDT
 
 Worktree `/Users/ashaychangwani/.codex/worktrees/imprint-master-v066-validation`,
 branch `codex/imprint-master-v066-validation`, based only on remote `34a6235`.

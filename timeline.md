@@ -7646,7 +7646,7 @@ assessment and 23:36:44 hard deadline. No malformed-handoff catch or actual
 capacity retry observed. No second teach/audit, push or MR.
 
 
-## 2026-09-08 16:11 PDT — Flights 18 one-hour assessment
+## 2026-09-08 16:10 PDT — Flights 18 one-hour assessment
 
 At minute 63, location, round-trip search and date-grid research are proven;
 three drafts exist but no tool is published. Grid returned 49 API cells for
@@ -7668,3 +7668,32 @@ Continue unchanged on 6d422b4: the three drafts and explicit remaining contract
 test justify the remaining 26 minutes, but full success is at risk. Hard
 deadline stays 23:36:44 UTC; no extension, model switch or parallel teach/audit.
 PID 74618 active, disk about 21 GiB. No actual capacity retry observed.
+
+
+## 2026-09-10 22:44 PDT — Flights 18 fails after host sleep; launch waits for power
+
+Flights 18 ended before planning with zero ready/four not ready. Booking stayed
+unresolved despite the retained researcher follow-up; three proven independent
+drafts never reached publication. No output exists for an independent audit.
+This was an ordinary blocked contract handoff, not malformed-output recovery.
+No actual capacity retry was observed. Implementation remains 6d422b4.
+
+The laptop entered clamshell sleep at 16:18:21 PDT and returned to sleep after
+brief wake windows. Terminal failure was written at 16:50:10 PDT for the original
+16:36:44 deadline. Root trace duration is 71.7875 minutes; launch-to-terminal
+wall duration is 103.4300 minutes. Preserve both, without calling this a clean
+90-minute experiment or excusing the earlier booking failures. No deadline
+extension was authorized. PID 74618 ended; no teach/audit is active.
+
+At the current check the host is at 1% battery and discharging. Do not launch
+a fresh long run until power and wake state are stable. The monitor may check
+for that condition; no recordings, artifacts, traces or logs are removed.
+Collector 54899 remains available, disk about 22 GiB.
+
+Teach 18 recorded $15.21 and one missing semantic usage span. Cumulative
+22 teaches/15 audits: 1,664.11 wall/trace-accounted minutes, $332.88 base API
+equivalent, 260,210,893 input including 212,751,232 cache reads, 2,896,857 output.
+Fifteen semantic calls plus interrupted CLI/audit work lack usage. After power
+restores, fresh Flights 19 on unchanged code can test without host suspension;
+use the exact recording/scope and a new home. Hotels 5 follows a full Flights
+pass. Repeatability and successful warm timing remain due. No push or MR.
