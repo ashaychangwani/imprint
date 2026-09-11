@@ -8370,3 +8370,25 @@ no other run or diagnostic. Accounting through audit 22: 27 teaches/20 audits,
 cache 283,642,752/output 3,724,332, $432.0776248 base API equivalent.
 Audit alone $1.5065904, no missing usage; earlier 19 missing calls/caveats remain.
 Active Hotels excluded. No push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 06:57 PDT — Hotels 6 completes in 18.61 minutes; audit starts
+
+Hotels 6 on unchanged 1152f6f completed one four-input search tool within the
+30-minute target. It exposes destination, check-in, checkout and adults 1–6.
+One navigation request changes the adult control and captures the second
+AtySUc API response, avoiding a separate corroboration-only request. The live
+MVP took 38.266 seconds and returned 20 San Francisco properties, October 21–23,
+with three adults independently reported in effective search state. Guest-count
+variations and other input effects still require the independent audit.
+
+Audit 6 started 13:57:01 UTC, PID 63361, same hotels-home-6, 45-minute cap to
+14:42:01 UTC. Teach PID 52737 ended; collector healthy, disk 25.06 GiB, no other
+run/diagnostic. If audit passes, fresh Flights 23 on unchanged code, then audit
+and another Hotels repeat. Reliability is still not proven.
+
+Accounting through Hotels teach 6: 28 teaches/20 audits, 48 traces/4,832 spans/
+1,672 usage, 2,068.2470671646 minutes, input 351,048,502/cache 289,347,712/
+output 3,760,472, $437.7516848 base API equivalent. This teach $5.67406 with
+one missing optional finesse span, total 20 missing semantic calls plus prior
+CLI interruptions/caveats. Active audit excluded. No push, MR or deletion.

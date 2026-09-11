@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 06:38 PDT
+## Current continuation — September 11, 06:57 PDT
+
+**ACTIVE Hotels audit 6**, PID 63361, started 13:57:01 UTC, cap 14:42:01 UTC.
+Verify hotels-audit-6-manifest.json/log, same hotels-home-6, unchanged **1152f6f**.
+Teach PID 52737 ended in 18.6095 minutes with one four-input tool: destination,
+check-in, checkout, adults 1–6. One navigation captures the second AtySUc API
+response after traveler controls/confirmation. Live MVP 38.266 seconds returned
+20 San Francisco properties, October 21–23, three adults in effective search
+state. Independent guest and date/destination variations remain due.
+
+Collector healthy, disk 25.06 GiB, no other run/diagnostic. Inspect actual audit
+arrays, failures, exclusions and untestable parameters; no reroll hides defects.
+If pass, fresh Flights 23 on unchanged code then audit and another Hotels repeat.
+Flights 22's earlier threshold PASS excluded seven timeouts and four untestable
+parameters; reliability and unchanged-code repeatability remain unresolved.
+
+Accounting through Hotels teach 6: 28 teaches/20 audits, 48 traces/4,832 spans/
+1,672 usage, 2,068.2470671646 minutes, input 351,048,502/cache 289,347,712/
+output 3,760,472, $437.7516848 base estimate. This teach $5.67406; one deferred
+finesse span lacks usage, total 20 missing semantic calls plus earlier caveats.
+Active audit excluded. Original malformed-handoff catch and actual capacity
+recovery remain unexercised. No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 06:38 PDT
 
 **ACTIVE fresh Hotels 6**, PID 52737, started 13:37:52 UTC, unused
 `/tmp/imprint-fresh-inputs-VYbJm1/hotels-home-6`, unchanged **1152f6f**.
