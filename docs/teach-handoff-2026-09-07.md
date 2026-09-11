@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 02:45 PDT
+## Current continuation — September 11, 03:31 PDT
+
+**ACTIVE Hotels audit 5**, PID **93141**, started **10:30:59 UTC** with a
+45-minute cap to 11:15:59 UTC. Verify hotels-audit-5-manifest.json/log in the
+private evidence directory. Same hotels-home-5 and unchanged **f7c21d7**.
+Teach PID 71227 ended successfully in **41.1716 minutes**: one search_hotels
+MVP with destination, check-in, checkout and adults. The 37.373-second live check
+returned six Portland-area properties with October 20–23 dates and three adults
+corroborated by current provider URLs. Two page navigations capture AtySUc and
+M0CRd API responses; this is not a rendered DOM collection.
+
+Audit destination/date/guest effects and actual records, including exclusions
+and untestable parameters. Do not infer repeatability from this teach. If Hotels
+passes, run another fresh Flights teach on unchanged code, then Hotels, with
+independent audits; never feed prior artifacts to teachers. Keep 30/60/90 timing.
+Host awake on AC, charging 47%; collector healthy, disk 17.59 GiB. No other run.
+
+Accounting through Hotels teach 5: 25 teaches/17 audits, 42 traces/4,309 spans/
+1,518 usage, 1,891.1588998639 minutes, input 315,203,559 including cache reads
+260,397,184; output 3,386,833; $391.1210336 base API equivalent. This teach alone
+$9.7249368, 55 usage spans, one deferred optional finesse span missing usage.
+Seventeen semantic calls plus interrupted CLI/audit work now lack usage.
+Active audit excluded. Pricing/cache-write caveats and prior failures remain.
+No original malformed-handoff recovery or real capacity retry observed. No push/MR.
+
+## Previous checkpoint — September 11, 02:45 PDT
 
 **ACTIVE fresh Hotels5**, PID **71227**, started **09:44:51 UTC**, unchanged
 **f7c21d7** after Flights20 teach/audit pass with the limitations below. New
