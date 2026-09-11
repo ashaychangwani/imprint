@@ -8792,3 +8792,40 @@ usage carriers, 2,341.4934324160 minutes, input 409,377,208, cache reads
 $27.0209072, with no missing semantic usage; prior twenty missing calls and
 CLI/pricing caveats remain. Active audit excluded. Collector healthy, AC 100%,
 24.04 GiB free, no other teach/diagnostic. No push, MR, merge, deletion or resume.
+
+
+## 2026-09-11 13:05 PDT — Audit 25 fails; complete response exposes parser truncation
+
+Audit 25 ended in 8.2710 minutes at 21/23 graded (91.30%). Actual 17 calls:
+12 correct, two broken, two infrastructure exclusions and one invalid-input
+exclusion, plus nine working parameters. Auditor prose says 26 graded units,
+but three excluded calls do not belong in the score. Search returned empty
+SFO–LAX results on October 14 and 21. Alternate routes and September 20 worked.
+Lookup, grid input contrasts and two distinct fresh nonstop booking selections
+worked; independent connecting selection was not exercised. Full Flights fails,
+and Hotels 7 still waits. No audit reroll.
+
+With teach/audit stopped, a private unchanged-workflow diagnostic reproduced the
+empty October 14 result in 35.095 seconds. Its complete 122,318-character captured
+shopping response has an initial metadata-only frame, then two frames containing
+31 parseable itineraries each. The unchanged parser returns zero for the raw
+body and 31 when either later decoded payload is supplied separately. Its
+firstJsonArray helper discards later frames. A warm call failed in 2.728 seconds
+with net::ERR_ABORTED; this is preserved, not a successful warm measurement.
+All browser pools closed, diagnostic session 60495 ended. Files are private
+flights-25-network-diagnostic.ts/log, flights-25-network-cold.json,
+flights-25-network-warm.json and flights-25-parser-diagnostic.ts/json.
+
+The compiler did test the selected full research response and recording, but
+both passed its first-frame shortcut; selected research had one data-bearing
+frame. Supplying more prior research responses alone would not fix this gap.
+Existing general framing guidance was not exercised by a contrasting parser
+test. Next correction should make that check concrete while leaving parsing
+strategy with the agent and the runtime unchanged. Do not inject the private
+site example into another teach or resume this failed run.
+
+Accounting: 31 teaches/24 audits, 55 traces/5,673 spans/1,934 usage carriers,
+2,349.7644433924 minutes, input 410,959,955, cache reads 339,292,416, output
+4,395,799, base estimate $510.3031024. Audit adds $1.2393352, no missing usage.
+Twenty earlier missing semantic calls and CLI/pricing caveats remain. No parent
+implementation change yet, no live experiment left, no push/MR/merge/deletion.

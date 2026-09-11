@@ -1,6 +1,32 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 12:46 PDT
+## Current continuation — September 11, 13:05 PDT
+
+**No active teach or audit.** Flights audit 25 failed 21/23 graded in 8.2710
+minutes: 17 actual calls, 12 correct, two broken empty searches, two infrastructure
+exclusions, one bad input, nine working parameters. Search SFO–LAX October 14
+and 21 returned zero. Lookup, grid and distinct fresh nonstop booking selections
+worked. Hotels 7 waits for full Flights success; do not reroll this audit.
+
+Private unchanged-workflow cold diagnostic reproduced zero in 35.095 seconds.
+The complete response starts with metadata, then has two later frames containing
+31 parseable records. Unchanged parser firstJsonArray stops at the initial frame.
+The selected research response had one populated frame, so its existing tests
+passed despite the shortcut. Warm diagnostic failed net::ERR_ABORTED in 2.728s.
+Preserve flights-25-network-* and flights-25-parser-diagnostic.ts/json. Pools
+closed, session 60495 ended, audit PID76404 ended. No private diagnosis supplied
+to teachers. Next: make existing generic compiler framing-test guidance concrete,
+validate, then a fresh Flights teach on changed code. Runtime strategy stays with
+agents; no site-specific prompt or runtime rule. Read newest timeline entry.
+
+Implementation remains 54e9470 until correction. Accounting through audit25:
+31 teaches/24 audits, 55 traces/5,673 spans/1,934 usage, 2,349.7644433924 minutes,
+input 410,959,955/cache 339,292,416/output 4,395,799, base estimate $510.3031024.
+Twenty earlier missing calls and pricing/CLI caveats remain. No push, MR, merge,
+deletion or failed-run resume. Repeatability and original malformed-handoff live
+recovery remain unproven.
+
+## Previous checkpoint — September 11, 12:46 PDT
 
 **ACTIVE full Flights audit 25**, PID 76404, started 19:46:08 UTC, cap
 **20:31:08 UTC**, home-25, unchanged **54e9470**. Verify private
