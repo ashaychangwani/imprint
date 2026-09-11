@@ -1,6 +1,33 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 08:40 PDT
+## Current continuation — September 11, 11:11 PDT
+
+**ACTIVE partial Flights audit 24**, PID36523, started18:10:14UTC, cap18:55:14UTC,
+home-24, unchanged **54e9470**. Verify private flights-audit-24-manifest.json/log.
+TeachPID6015 ended at90.0026minutes with only lookup and selected-date grid
+published. Search live review caught QLS currency where offer tokens encode USD;
+master recalled its retained compiler, but repeated provider connection/request
+timeouts lasted through the17:09:51deadline. Booking never published. Four proven
+research handoffs and exact fresh staged token sources do not replace the failed
+generated-tool checks. No malformed-handoff catch or actual capacity event seen.
+
+The16:34scheduled monitor only executed18:09UTC, so the60-minute assessment was
+missed. Run watchdog enforced its own deadline. No September11sleep/wake entries
+found by current power-log filtering; delay cause unknown. Host now AC80%, public
+provider host responds403 quickly (reachability only). Audit tests actual health.
+If partial audit finds no further defect, fresh Flights25 on unchanged54e9470,
+then full independent audit; do not resume24 or add a prompt rule merely because
+its already-requested repair was interrupted. Hotels7 still waits for Flights.
+
+Read recent timeline/accounting for preserved errors and research-chain facts.
+Collector healthy,disk24.75GiB,no other teach/live diagnostic. Accounting through
+teach24:30teaches/22audits,52traces/5354spans/1833usage,2250.7324391646minutes,
+input386969377/cache319207808/output4148041,$481.6902192 base estimate.
+This teach adds$20.63884, no missing semantic usage detected, but killed compiler
+CLI usage may be incomplete.20earlier missing semantic calls and prior caveats
+remain. Active audit excluded. No push,MR,merge,deletion or deadline extension.
+
+## Previous checkpoint — September 11, 08:40 PDT
 
 **ACTIVE fresh Flights 24**, PID 6015, started 15:39:51 UTC in unused home-24,
 implementation **54e9470**. Verify private flights-teach-24-manifest.json/log.

@@ -8654,3 +8654,32 @@ an independent audit pass. Earlier failed observations remain retained.
 
 PID 6015, unchanged 54e9470; assessment 16:39:51 and hard 17:09:51 UTC remain.
 No extra live call, parent code change, push, MR, deletion or deadline extension.
+
+
+## 2026-09-11 11:11 PDT — Flights 24 hits deadline; partial audit starts
+
+Actual check time was 18:09 UTC despite a 16:34 scheduled heartbeat. The planned
+one-hour assessment could not be made. Flights 24 had already ended at its
+17:09:51 hard deadline (90.0026 trace minutes), with lookup/grid published and
+search/booking not ready. The run's watchdog stopped its compiler; no extension.
+Available power-log filtering showed no September 11 sleep/wake entries, so the
+monitor delay's cause is unproven. Host now awake on AC 80%.
+
+Search's semantic review found currency QLS where offer tokens encode USD.
+The master recalled its existing compiler to repair that real output error,
+but provider model-list, request and stream connection timeouts repeated through
+the deadline. The original staged research chain remains proven, not a generated
+tool success. No original malformed-handoff catch or actual capacity event was
+observed. A current public provider-host request returned403 in0.047s, proving
+reachability only. Partial audit 24 started18:10:14UTC, PID36523, home-24, cap
+18:55:14UTC. It covers only lookup and grid; even a pass cannot complete Flights.
+If no further defect, fresh Flights25 on unchanged54e9470 after this audit.
+No parent prompt correction is justified merely by the interrupted repair.
+
+Accounting through teach24:30teaches/22audits,52traces/5354spans/1833usage,
+2250.7324391646minutes,input386969377/cache319207808/output4148041,
+$481.6902192 base estimate. This teach adds$20.63884; helper finds no missing
+semantic usage, but its killed compiler may have incomplete CLI accounting.
+Twenty earlier missing semantic calls and prior caveats remain. Active audit
+excluded. TeachPID6015 ended; collector healthy,disk24.75GiB,no other live run.
+No parent code change,push,MR,merge,deletion or failed-run resume.
