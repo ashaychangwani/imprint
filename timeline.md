@@ -8606,3 +8606,26 @@ No published tools yet. Booking fresh producer consumption and non-first
 selection remain due for this run. Host awake, AC 80%, about 24 GiB free,
 collector healthy. Target 16:09:51, assess 16:39:51, hard 17:09:51 UTC unchanged.
 No implementation change, extra live diagnostic, push, MR or deletion.
+
+
+## 2026-09-11 09:10 PDT — Flights 24 target missed; master repairs staged selection
+
+At the 30-minute target no tools are published. Initial research proved lookup,
+a representative round-trip search and selected-date grid. Booking's live
+captures timed out at 95.598/90.664 seconds; later transport completions did
+not provide positive booking options. Its factual blocked handoff reached the
+master. The master identified a missing completed round-trip selection and
+asked the retained search researcher to prove the selected-outbound continuation
+with exact fresh producer values, then expose a selected return result containing
+the completed itinerary for booking. Booking gets a corresponding follow-up
+with that completed fresh producer output. It preserves the working initial
+search and defers optional filters/other trip types; API remains the strategy.
+
+This is ordinary factual failure recovery and agent-directed dependency repair,
+not a live exercise of the malformed-handoff catch. Current search contract is
+being extended and must be re-proven; earlier standalone success is not proof
+of continuation or booking. The narrower grid contract remains selected dates,
+not arbitrary inclusive windows. Run 8ac4a12d-e6bd-4ea2-9262-d156fea86b9e,
+PID 6015, unchanged 54e9470. Keep 16:39:51 UTC assessment and 17:09:51 hard
+limit. Host awake, AC 80%, about 24 GiB free, collector healthy. No parent code
+change, extra live diagnostic, push, MR, deletion or deadline extension.
