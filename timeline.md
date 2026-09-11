@@ -8324,3 +8324,24 @@ Booking's transform builds a selection URL from supplied values, with no fixed
 first-result click. Distinguishing non-first behavior and generated tool/chain
 validation remain due. No published tools yet around minute 36. Unchanged
 1152f6f, hard 14:05:56 UTC, no new run or implementation change.
+
+
+## 2026-09-11 06:24 PDT — Flights 22 completes; independent full audit starts
+
+Flights 22 completed all four tools and fresh first-result search-to-booking
+chain in 46.9366 minutes on 1152f6f. Search returned 34 SFO–LAX October 20
+records; grid returned 49 SEA–JFK cells; lookup returned Heathrow. Booking
+returned 20 options for Frontier F9 2858 in both standalone and chained checks,
+32.832/31.502 seconds. The full supplied research-response parser test is present
+and concrete. This is teach success; non-first behavior and independent audit
+remain due. No unchanged-code repeatability claim.
+
+Audit 22 started 13:23:55 UTC, PID 51002, home-22, 45-minute cap 14:08:55 UTC.
+Teach PID 29915 ended; collector healthy, disk 26.33 GiB, no other run or
+diagnostic. If full audit passes, launch fresh Hotels 6 on unchanged code.
+
+Accounting now 27 teaches/19 audits, 46 traces/4,766 spans/1,645 usage,
+2,036.5711245410 minutes, input 342,389,281/cache 281,479,936/output 3,717,084,
+$430.5710344 base API equivalent. This teach $15.7630256 with no missing usage;
+19 prior missing semantic calls and other caveats remain. Active audit excluded.
+No observed malformed-handoff recovery or real capacity retry. No push/MR/deletion.

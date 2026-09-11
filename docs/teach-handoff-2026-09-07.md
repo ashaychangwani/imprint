@@ -1,6 +1,28 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 05:36 PDT
+## Current continuation — September 11, 06:24 PDT
+
+**ACTIVE full Flights audit 22**, PID 51002, started 13:23:55 UTC with a
+45-minute cap to 14:08:55 UTC. Verify flights-audit-22-manifest.json/log in
+private evidence directory; same home-22, unchanged implementation **1152f6f**.
+Teach PID 29915 ended successfully in 46.9366 minutes: all four tools and a
+fresh first-result search-to-booking chain. Search returned 34 flights; grid
+49 cells; booking 20 options for Frontier F9 2858. Full supplied research
+response is now covered by concrete parser tests. This is not repeatability.
+
+Inspect exact audit arrays, non-first/coherent selection behavior and exclusions.
+If full pass, start fresh Hotels 6 on unchanged code in unused hotels-home-6;
+then audit. Further fresh repeats and separate cold/warm evidence remain due.
+Collector healthy, disk 26.33 GiB, no other run or diagnostic.
+
+Accounting through teach 22: 27 teaches/19 audits, 46 traces/4,766 spans/1,645
+usage, 2,036.5711245410 minutes, input 342,389,281/cache 281,479,936/output
+3,717,084, $430.5710344 base estimate. This teach $15.7630256 with no missing
+usage; 19 earlier missing semantic calls plus previous caveats remain. Active
+audit excluded. Original malformed-handoff catch and actual capacity recovery
+still unexercised. No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 05:36 PDT
 
 **ACTIVE fresh Flights 22**, PID 29915, started 12:35:56 UTC in unused
 `/tmp/imprint-fresh-inputs-VYbJm1/home-22`. Verify flights-teach-22-manifest.json
