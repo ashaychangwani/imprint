@@ -8683,3 +8683,27 @@ semantic usage, but its killed compiler may have incomplete CLI accounting.
 Twenty earlier missing semantic calls and prior caveats remain. Active audit
 excluded. TeachPID6015 ended; collector healthy,disk24.75GiB,no other live run.
 No parent code change,push,MR,merge,deletion or failed-run resume.
+
+
+## 2026-09-11 11:19 PDT — Partial audit passes; fresh Flights 25 starts unchanged
+
+Audit24 passed12/12graded across lookup/grid only in4.4000minutes: eight calls,
+seven correct, one calendar timeout excluded, five working parameters, none
+untestable. Grid's selected-date contract returned neighboring fares as promised;
+all four input contrasts worked, with the destination comparison succeeding on
+a paced retry after its first timeout. Search/booking remained unpublished.
+This is not full Flights success, and the excluded timeout remains visible.
+
+Fresh Flights25 launched18:18:42UTC, PID37680, unused home-25, unchanged54e9470.
+Exact combined recording and four-operation scope; no previous tools/examples
+or diagnostics supplied. Target18:48:42, assess19:18:42, hard19:48:42UTC. Full
+independent audit follows; Hotels7 waits for Flights success. The preceding
+search repair was interrupted by connectivity, so no speculative parent change
+was made. Neither failed teach24 nor its audit is resumed or rerolled.
+
+Teach6015/audit36523 ended, collector healthy, AC83%, disk24.63GiB, no other
+live run. Accounting through audit24:30teaches/23audits,53traces/5357spans/
+1834usage,2255.1324704931minutes,input387413508/cache319621120/output4151243,
+$482.04286 base estimate. Audit adds$0.3526408, no missing usage; twenty earlier
+missing semantic calls and prior caveats remain. Active teach excluded. No
+implementation change,push,MR,merge,deletion or deadline extension.

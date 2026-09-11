@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 11:11 PDT
+## Current continuation — September 11, 11:19 PDT
+
+**ACTIVE fresh Flights 25**, PID 37680, started 18:18:42 UTC, unused home-25,
+unchanged **54e9470**. Verify private flights-teach-25-manifest.json/log. Exact
+combined recording/four-operation guidance, no previous artifacts or diagnostics
+supplied. Target **18:48:42**, assess **19:18:42**, hard **19:48:42 UTC**.
+Full independent audit follows; Hotels 7 waits for Flights success. Repeated
+fresh successes and reliable cold/warm behavior remain due.
+
+Partial audit 24 passed 12/12 graded in 4.4000 minutes: seven correct calls,
+one calendar timeout excluded, five working parameters, none untestable. It
+covers lookup and grid only; search/booking were unpublished. Grid's selected
+dates correctly move neighboring fare axes; arbitrary inclusive bounds remain
+unsupported. The destination comparison passed on a paced retry. Preserve that
+timeout and the preceding deadline failure; do not call this full Flights success.
+
+No new parent change: teach 24's search currency repair was already requested
+when provider connections failed through the deadline. The new run starts fresh
+on the same implementation. Original malformed-handoff/capacity recovery remain
+unexercised. Read earlier entries for the exact staged research source proof.
+
+Teach 6015/audit 36523 ended, collector healthy, AC 83%, disk 24.63 GiB, no other
+live run. Accounting through audit 24: 30 teaches/23 audits, 53 traces/5,357 spans/
+1,834 usage, 2,255.1324704931 minutes, input 387,413,508/cache 319,621,120/output
+4,151,243, $482.04286 base estimate. Audit adds $0.3526408, no missing usage;
+20 earlier missing semantic calls and prior caveats remain. Active teach excluded.
+No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 11:11 PDT
 
 **ACTIVE partial Flights audit 24**, PID36523, started18:10:14UTC, cap18:55:14UTC,
 home-24, unchanged **54e9470**. Verify private flights-audit-24-manifest.json/log.
