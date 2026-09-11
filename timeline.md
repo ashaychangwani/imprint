@@ -7713,3 +7713,23 @@ unchanged, no old tools/examples/diagnostics supplied. Collector 54899 on port
 wake state along with fresh producer selections and retained repair history.
 Independent audit follows; Hotels 5 follows full Flights success on unchanged
 implementation. No push, MR or deletion.
+
+
+## 2026-09-10 23:22 PDT — Flights 19 target checkpoint
+
+At minute 36, location, search and date-grid research are marked proven, with
+drafts compiling but no published tools. Location uses direct fetch. Search
+returned one-way LAX–LAS October 22 API records with observed route/date,
+prices and per-option selection material. Grid captured GetCalendarGrid cells
+for November 7–13 departures and November 15–21 returns; claimed route scope
+uses a separate rendered observation. Independent audit must still judge the
+actual generated contract and parameter effects.
+
+Booking called fresh search in 46.911 seconds. Consumer transport failures of
+90.379 and 89.885 seconds remain; a 31.041-second response alone is not semantic
+proof. No booking handoff or completed generated chain yet.
+
+Run 6e730a5b-4105-4f07-b998-8e23f7f3c00b, PID 97393 continues unchanged on
+6d422b4. Machine is now on battery, 54%, awake; disk about 21 GiB. Keep the
+06:45:13 UTC assessment and 07:15:13 hard deadline. No malformed handoff or
+actual capacity retry observed. No second teach/audit, push or MR.
