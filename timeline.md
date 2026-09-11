@@ -7795,3 +7795,27 @@ watchdog call. Cumulative 23 teaches/15 audits: 1,751.30 elapsed minutes,
 278,058,628 input including 227,312,896 cache reads, 3,098,367 output, $355.88.
 Sixteen semantic calls plus interrupted CLI/audit work lack usage. Active audit
 is excluded until complete. No code change, push or MR.
+
+
+## 2026-09-11 00:34 PDT — Flights audit 19 fails; binary identity bug reproduced
+
+Full audit failed 15/18 in 11.3879 minutes: ten correct calls, five working
+parameters, three broken booking calls. Four grid navigation failures were
+excluded as infrastructure; five parameters remain untestable. Keep all those
+limitations. Location/search worked; booking rejected three coherent fresh
+producer pairs before network execution. No Hotels launch or audit reroll.
+
+Offline exact-input diagnosis reproduces every booking rejection: regex over
+binary selected_flights reads field tag 0x32 as flight number 2. Alaska 42
+becomes AS2; the prior Frontier success also decoded 2 and passed accidentally
+because F92 is a prefix of F92334. Connecting itineraries are flattened to
+the first segment. The fixed-first DOM selector is also still present.
+These are concrete generated-contract defects, not provider or transport errors.
+No original generated artifact was edited. Private diagnosis files preserved.
+
+Audit PID 30920 ended. A separate unchanged-grid diagnostic is running two
+SFO–JFK October 18/22 calls on one tool/rung pool to inspect the failed case
+and separate cold/warm transport; no LLM calls or other teach/audit. Next make
+a small general identity-parsing/selection-proof correction, then fresh teach.
+Cumulative 23 teaches/16 audits: $356.44 base estimate, 1,762.69 elapsed minutes.
+All usage/cache caveats remain. No push or MR.
