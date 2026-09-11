@@ -1,6 +1,36 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 08:10 PDT
+## Current continuation — September 11, 08:28 PDT
+
+**ACTIVE full Flights audit 23**, PID 4044, started 15:27:29 UTC, cap
+**16:12:29 UTC**, same home-23 and implementation **1152f6f**. Verify private
+flights-audit-23-manifest.json/log. Teach PID 64357 ended with four ready tools
+and a generated search-to-booking chain in **81.3585 minutes**. Chain selected
+American AA3234 SEA–ORD October 22 and returned five American fare choices;
+receipt binds the current generated producer build/result. This is a second
+fresh four-tool teach completion on unchanged code; independent repeat success
+and reliable cold/warm behavior remain unproven.
+
+Inspect actual audit arrays, failures/exclusions, parameter contrasts, non-first
+coherent booking selections, and metadata. Do not reroll failures to conceal
+defects. If successful, fresh Hotels 7 on unchanged code, then audit. Hotels 6
+passed all nine graded checks with no exclusions. Flights audit 22's seven
+timeouts and four untestable inputs remain limitations.
+
+All failed research/semantic reviews remain preserved. Booking agents repaired
+baggage-policy URLs mislabeled as booking links before promotion. Earlier
+research token mismatch remains recorded in flights-23-chain-research-check*.json;
+final generated-chain success does not erase it. No malformed-handoff catch or
+actual capacity recovery observed. Read recent timeline for details.
+
+Collector healthy, AC 80%, disk 24.40 GiB, no other teach/diagnostic. Accounting
+through teach 23: 29 teaches/21 audits, 50 traces/5,132 spans/1,775 usage,
+2,153.1773625827 minutes, input 371,511,624/cache 307,006,336/output 3,979,147,
+$460.4066264 base estimate. This teach adds $22.3212648 with no missing usage;
+20 earlier missing semantic calls and prior caveats remain. Active audit excluded.
+No implementation change, push, MR, merge or deletion.
+
+## Previous checkpoint — September 11, 08:10 PDT
 
 Flights 23 remains active (PID 64357, home-23, implementation 1152f6f). At the
 near-hour assessment all four research handoffs were proven, so continue under

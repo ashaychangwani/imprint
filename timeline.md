@@ -8512,3 +8512,30 @@ Booking's fresh generated chain is still pending. Original malformed-handoff
 recovery remains unexercised; these were ordinary semantic revision requests.
 PID 64357 active, collector healthy, AC 80%, about 24 GiB free. No parent code
 change, additional live experiment, push, MR, deletion or deadline extension.
+
+
+## 2026-09-11 08:28 PDT — Flights repeat completes; independent audit starts
+
+Flights 23 on unchanged 1152f6f completed all four tools and a generated booking
+chain in 81.3585 minutes, within the 90-minute cap but over the 30-minute target.
+Booking's first two semantic reviews rejected baggage-policy links labeled as
+booking links; the same-run agent repaired them. Standalone booking returned
+five JetBlue B6 124 LAX–JFK choices. The final chain used the current generated
+search result for American AA3234 SEA–ORD October 22 and returned five coherent
+American fares in 35.010 seconds. Its receipt binds that producer build/result.
+Earlier research-token mismatch and all failed reviews remain preserved.
+
+Independent audit 23 started 15:27:29 UTC, PID 4044, home-23, 45-minute cap to
+16:12:29 UTC. Inspect actual arrays and failures, meaningful parameter contrasts,
+non-first/coherent booking selections, and metadata. This is a second fresh
+four-tool teach completion on 1152f6f, not an independent repeat audit success
+yet; Flights audit 22's seven timeouts/four untestable inputs remain limitations.
+If successful, fresh Hotels 7 on unchanged code, then audit.
+
+Teach PID 64357 ended, collector healthy, AC 80%, disk 24.40 GiB; no concurrent
+teach or diagnostic. Accounting through this teach: 29 teaches/21 audits,
+50 traces/5,132 spans/1,775 usage, 2,153.1773625827 minutes, input 371,511,624/
+cache 307,006,336/output 3,979,147, $460.4066264 base API estimate. This teach
+$22.3212648 with no missing usage; twenty earlier missing semantic calls and
+prior caveats remain. Active audit excluded. No parent implementation change,
+push, MR, merge, deletion or deadline extension.
