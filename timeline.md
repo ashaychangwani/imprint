@@ -7915,3 +7915,25 @@ research result is not independent validation. Master is reviewing before
 planning, no published tools yet. Continue unchanged on f7c21d7, assess at
 08:36 UTC and keep 09:06 hard deadline. No malformed-handoff recovery or actual
 capacity retry observed. No parallel run, push or MR.
+
+
+## 2026-09-11 01:34 PDT — Flights 20 near-one-hour assessment
+
+Location lookup and date grid have passed MVP checks and are published.
+Location Heathrow lookup took 269ms; grid returned all 49 combinations with
+positive structured cells in 33.864 seconds. Search first returned 24 options
+but connecting itinerary destination names and booking contexts used the first
+segment's destination. Master recalled only that compiler, preserving its
+conversation and all segments while correcting final-destination metadata.
+
+The next 33.760-second search check fixed destination metadata but exposed
+emissions_grams reading a small categorical field (1/2/3) instead of the adjacent
+five-digit amount. Reviewer correctly requested revision. Booking awaits a
+usable producer; its earlier fresh non-first research proof is preserved.
+These are generated parser defects, not transport failures or a full teach pass.
+
+Continue unchanged on f7c21d7 for the remaining roughly half-hour: two tools
+are published, the retained search repair has concrete evidence, and booking
+has a proven research candidate ready for compilation. Keep the original
+09:06 UTC hard deadline. No extra run, prior-artifact teaching input, runtime
+change, push or MR. Host remained awake at the latest power check, battery28%.
