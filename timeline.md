@@ -7757,3 +7757,21 @@ Continue unchanged on 6d422b4 within the remaining half-hour: all four have
 positive core research evidence, with an explicit booking selection gap still
 to resolve. Keep 07:15:13 UTC hard deadline. Host is awake on battery at 51%,
 PID 97393 active. No duplicate run, code change, push or MR.
+
+
+## 2026-09-11 00:09 PDT — Flights 19 publishes three; booking parser repair
+
+At minute 84, location, search and date grid are published. Search first failed
+review for UJA currency despite USD evidence; retained compiler repaired it.
+Its accepted result has three LAX–LAS October 22 options. Grid returned 49
+nearby pairs including October 22–29 at USD76.
+
+The master accepted booking research without returning its fixed-first-result
+limitation for repair, so non-first selection remains an audit obligation.
+Initial generated booking and fresh chain checks failed as BAD_RESPONSE after
+34.088 and 2.870 seconds. Master inspection identifies positive matching F9 2334
+GetBookingResults data in both responses and a parser itinerary-comparison
+rejection; these are artifact failures, not a transport waiver. Only booking
+was recalled in its same compiler conversation. No booking publication or
+complete teach pass yet. Keep the 07:15:13 UTC hard deadline, about six minutes
+remaining; no implementation change, duplicate run, push or MR.
