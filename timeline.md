@@ -7876,3 +7876,21 @@ Run 440d994b-d97a-4d0b-b4eb-afbb2e193548, PID33609 continues unchanged onf7c21d7
 Host awake, battery34% with2h32 estimated. Keep08:36UTCassessment and09:06hard
 deadline. No malformed-handoff catch or capacity retry observed. No code
 change, duplicate teach/audit, push or MR.
+
+
+## 2026-09-11 01:11 PDT — Flights 20 master catches mode and selection gaps
+
+Booking research returned a positive F9 2858 SFO–LAX October 20 API result
+after 34.895 seconds, but the master did not accept the connected contract.
+It identified round-trip producer versus one-way consumer mode mismatch,
+hand-supplied booking inputs, and selection_token used only as a consistency
+check. It narrowed the connected MVP to one-way search, removed the redundant
+consumer token, and requested ordered retained research follow-ups.
+
+Search must produce at least two credible options with co-located selected_flights
+and grounded search_context fields. Booking must then use a non-first record's
+fresh values and return that exact flight with offers, distinguishing it from
+the default result. This is the intended strategic repair by the master, not a
+runtime rule or completed proof. Location/grid research remain intact, no tools
+published yet. No implementation change or malformed-report catch. Keep the
+09:06 UTC deadline and independently verify the resulting generated chain.
