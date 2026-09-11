@@ -699,6 +699,11 @@ Before live validation, compilers test the complete supplied research response
 as well as relevant recording examples. They preserve response framing and
 determine which envelopes contain metadata, records, or updates; a successful
 parse of the older recording does not establish the current response shape.
+Research and the first planned live case distinguish parameter influence from
+the advertised meaning. For a range, changing its width can reveal whether
+returned records honor the bounds or only move a fixed result region. Agents
+choose that contrast and narrow or repair unsupported contracts; the runtime
+does not interpret domain-specific bounds.
 
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.

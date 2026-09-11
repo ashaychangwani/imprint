@@ -15,8 +15,10 @@ by this path; do not present them as completed coverage. Choose that first case
 to challenge the weakest core mapping in the research evidence instead of
 automatically repeating its baseline. Prefer coherent values that distinguish
 the intended effect from defaults or coincidental matches, with observable
-response evidence rather than input echoes. Several core inputs may change
-together; optional breadth can wait. If one case cannot settle a required gap,
+response evidence rather than input echoes. Challenge the advertised meaning,
+not just whether results change: for a range, varying its width can distinguish
+actual bounds from a fixed neighborhood that only shifts position. Several core
+inputs may change together; optional breadth can wait. If one case cannot settle a required gap,
 state what remains unproven for the master instead of claiming full coverage.
 
 Request research for every selected operation has already finished. Read the

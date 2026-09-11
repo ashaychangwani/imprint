@@ -154,6 +154,8 @@ Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
 Research uses a small contrasting core-input check before claiming parameter
 mappings are proven; optional parameter breadth remains deferred.
+Agents check the advertised meaning, not just whether results change; a range
+contrast distinguishes its bounds from a fixed result region that merely moves.
 Handoffs identify the response evidence that establishes the core records' scope
 for the compiler to preserve. Demonstrated ignored inputs return for contract
 revision; they are not deferred as optional minimization. Audits distinguish a

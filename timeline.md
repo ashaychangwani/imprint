@@ -8539,3 +8539,37 @@ cache 307,006,336/output 3,979,147, $460.4066264 base API estimate. This teach
 $22.3212648 with no missing usage; twenty earlier missing semantic calls and
 prior caveats remain. Active audit excluded. No parent implementation change,
 push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 08:39 PDT — Repeat audit fails date bounds; general contrast correction
+
+Flights audit 23 ended after 7.5524 minutes at 17/22 graded (77.27%). Fourteen
+calls: eight correct, five broken grid calls, one invalid-date input excluded,
+zero infrastructure exclusions. All nine parameters influenced output, but the
+four-input grid violated its advertised inclusive windows on five valid calls.
+Lookup, search origin/destination/date contrasts, and distinct fresh Southwest
+WN2847/United UA1506 booking selections passed. The latter returned three versus
+five provider fares, establishing a meaningful non-first selection contrast.
+This is not a successful four-tool repeat. Hotels repeat remains queued.
+
+Offline unchanged-artifact diagnosis confirmed that a three-day and seven-day
+window sharing a midpoint create the same request and the same 49 cells; forty
+cells lie outside the narrower bounds. Prior research/planned checks all used
+seven-day windows. Original artifacts remain untouched; no reroll or extra live
+call. Private flights-23-window-diagnostic.ts/json preserves the comparison.
+
+Tightened existing researcher and focused-planner contrast guidance: observed
+influence does not prove advertised meaning; vary a range's extent to distinguish
+bounds from a fixed neighborhood that merely moves. Agents still choose tests,
+parameters and repairs; no runtime or site-specific rule. README/architecture
+and website match. Existing 198 focused tests/1,079 assertions passed in 1.452s,
+lint 214 files, type checking, web build, and desktop/mobile visual checks pass;
+no page errors/overflow. Existing bundle warning remains. Preview session 68529
+stopped, visual session 80725 ended. Logs/screenshots parameter-meaning-* retained.
+
+Accounting through audit 23: 29 teaches/22 audits, 51 traces/5,135 spans/1,776
+usage, 2,160.7297898410 minutes, input 372,267,938/cache 307,698,048/output
+3,984,630, $461.0513792 base API estimate. Audit adds $0.6447528 with no missing
+usage; twenty earlier missing semantic calls and prior caveats remain. Audit
+PID 4044 ended. Next fresh Flights 24 in unused home-24 after this checkpoint,
+then independent audit. No push, MR, merge, deletion or previous-run resume.

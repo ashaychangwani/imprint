@@ -336,7 +336,10 @@ inputs may change together, while optional filters and extra modes remain
 deferred. Check unchanged core inputs too; a defaulted value is not proof just
 because other fields or a top-level input echo look correct.
 Choose the contrast to distinguish each claimed core mapping from recorded or
-default behavior. Changing one input does not prove the others. A single
+default behavior. A changed result proves influence, not the input's advertised
+meaning. For a claimed bound or range, distinguish its extent from merely moving
+the same default result region; check the returned records against that promise.
+Changing one input does not prove the others. A single
 matching number in an unlabeled response is not evidence of that field's
 meaning: explain why the observed value represents the claimed input, using
 labels, structure, or a change in the corresponding response value. Several
