@@ -8995,3 +8995,26 @@ success. Repeated success remains due. Collector healthy, AC 100%, 23.05 GiB
 free, prior teach/audit/diagnostic/preview stopped. Accounting remains through
 failed audit 26 at $536.3473856 base estimate; active run excluded. No push, MR,
 merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-11 15:24 PDT — Failure-page feedback is exercised in fresh research
+
+Flights 27 remains active on 0ce9fe9, run 15c60478-5824-49e7-bac3-1839cdef1007,
+PID 16039. Search research observation 166b175f failed its 45-second background
+API capture, and result.pageDiagnostic reached the retained research history:
+Los Angeles–Las Vegas page, 29 visible results, bounded to 3,000 text characters.
+The failure remains NETWORK; page text was not accepted as a successful API call.
+
+The next tested candidate deliberately navigated for rendered HTML and returned
+3,332,336 characters (observation 318196dc). Research returned partial after five
+observations: October 22 LAX–LAS records and prices were supported, but labeled
+flight numbers and stable booking-selection data were not. The candidate has
+three inputs and a rendered-document selector; it is not background API capture
+or a playbook. Master repair/acceptance and generated-tool validation remain due.
+This exercises the new diagnostic handoff; it does not prove reliable tools,
+original malformed-handoff recovery, or the missing booking contract.
+
+Lookup research is proven. Grid and booking research continue; no published tools.
+No code/prompt changes or parent findings were supplied during the run. Collector
+healthy, 22.93 GiB free. Keep the original 22:34:44 target, 23:04:44 assessment
+and 23:34:44 UTC hard deadline. Accounting unchanged; active run excluded.

@@ -8,9 +8,13 @@ deadline **23:34:44 UTC**. Verify private flights-teach-27-manifest.json/log.
 Exact combined recording and four-operation guidance; no previous generated
 tools, shipped examples or private diagnostic findings supplied to the teacher.
 
-Monitor whether failed captures now return pageDiagnostic to the retained
-researcher/master, and whether agents repair the request strategy from that
-factual evidence. It must remain separate from API proof. Check sparse/default
+At minute 19, search observation 166b175f delivered pageDiagnostic after a
+45-second API capture timeout: 29 results were visible. The next candidate
+returned rendered HTML (318196dc), and research handed back partial because
+flight numbers and stable booking-selection data remain unproven. This exercises
+the new researcher feedback path; master repair and generated validation remain
+due. See the 15:24 timeline entry. Monitor the resulting strategy and booking
+contract. It must remain separate from API proof. Check sparse/default
 field parsing, complete framed responses, and fresh coherent booking selections.
 Independently audit generated tools after completion, preserving every failure.
 Then Hotels 7 on unchanged code after a full Flights pass. Repeated fresh success
