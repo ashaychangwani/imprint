@@ -8216,3 +8216,36 @@ calls (300-second watchdog and final deadline); total 19 missing plus prior CLI
 interruptions. Cache-write/tier/long-context caveats remain. Active audit excluded.
 Original malformed-handoff recovery and actual capacity retry remain unexercised.
 No implementation change, push, MR, merge or deletion.
+
+
+## 2026-09-11 05:33 PDT — Partial audit passes; exact parser defect found
+
+Flights audit 21 ended in 2.9899 minutes: seven correct calls and five working
+parameters (12/12 graded), no exclusions or untestable parameters. Only lookup
+and grid were published, so this does not validate search, booking, or full scope.
+Accounting now 26 teaches/19 audits, 45 traces/4,542 spans/1,592 usage,
+1,989.6345278500 minutes, input 331,271,334/cache 272,705,152/output 3,573,061,
+$414.8080088 base API estimate. Nineteen missing semantic calls remain.
+
+Final search research completion was a rendered-document diagnostic, not an API
+capture. It showed positive SMF–LAS results after a broad API matcher timeout.
+Private unchanged-workflow diagnostics then captured the exact POST/XHR API
+on both a cold 34.763-second call and a warm same-tool/rung 5.721-second call.
+Both returned zero parsed itineraries. These are transport timings, not useful
+tool successes. Pools closed; diagnostic session 47306 and audit PID 27076 ended.
+
+Offline reproduction against the original supplied research response returns
+zero records because decodePayload stops at the first decoded envelope. That
+frame has zero itineraries; the next three frames each produce 16 through the
+unchanged extractor. Authored tests used only the old recording, even though
+api-research-response.txt was supplied. Private flights-21-parser-diagnostic.*
+and flights-21-network-* preserve details; original artifacts remain unchanged.
+No LLM calls or audit rerolls in these diagnostics. Network evidence captured
+document bodies and response metadata, not raw RPC bodies; parser reproduction
+uses the saved original research response.
+
+Next clarify the general compiler handoff: test its complete supplied research
+response offline, preserving envelopes and distinguishing metadata from result
+records, before another live call. Update matching docs/web and validate, then
+start fresh Flights 22. No site-specific runtime fix or resumed failed teach.
+Hotels 6 remains gated on full Flights success. No push, MR, merge or deletion.

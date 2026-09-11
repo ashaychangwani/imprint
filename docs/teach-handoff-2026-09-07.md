@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 05:18 PDT
+## Current continuation — September 11, 05:33 PDT
+
+No teach, audit, or diagnostic active. Flights audit 21 passed 12/12 graded:
+seven calls and five parameters across published lookup/grid only, no exclusions.
+Full Flights scope still failed at the deadline. Accounting through audit 21:
+26 teaches/19 audits, 45 traces/4,542 spans/1,592 usage, 1,989.6345278500 minutes,
+input 331,271,334/cache 272,705,152/output 3,573,061, $414.8080088 base estimate.
+Nineteen missing semantic calls plus prior CLI work remain incomplete.
+
+Concrete search parser defect: unchanged workflow captures the exact API in
+34.763 seconds cold and 5.721 seconds warm, but returns zero items. Original
+supplied research response also parses to zero: decodePayload stops at the first
+metadata frame; three later frames each yield 16 records when passed to the
+unchanged extractor. Tests covered only the older recording. Original artifacts
+unchanged; private flights-21-parser-diagnostic.* and flights-21-network-* saved.
+Final teach probe was rendered HTML, not API success. No runtime capture defect
+proven. Diagnostic session 47306 ended and pools closed; no LLM calls.
+
+Next make a small general compiler instruction correction: parse and test the
+complete supplied research response before live checks, preserving framing and
+distinguishing metadata from results. Update docs/web and validate, then launch
+fresh Flights 22. No prior artifacts or private diagnostics go to teaching agents.
+Hotels 6 follows a full Flights pass. Keep 30/60/90 timing and original recordings.
+No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 05:18 PDT
 
 **ACTIVE partial Flights audit 21**, PID 27076, started 12:17:56 UTC, cap 13:02:56 UTC.
 Same home-21 and unchanged 4ea0a74. Check flights-audit-21-manifest.json/log.
