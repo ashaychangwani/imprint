@@ -1,6 +1,42 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 08:28 PDT
+## Current continuation — September 11, 08:40 PDT
+
+**ACTIVE fresh Flights 24**, PID 6015, started 15:39:51 UTC in unused home-24,
+implementation **54e9470**. Verify private flights-teach-24-manifest.json/log.
+Exact combined recording and four-operation guidance; no prior tools/examples
+or private diagnostics supplied. Target **16:09:51**, assess **16:39:51**, hard
+**17:09:51 UTC**. Independent audit follows; Hotels 7 waits for Flights success.
+Repeated fresh successes on unchanged code and cold/warm reliability remain due.
+
+Flights audit 23 failed at 17/22 graded (77.27%): actual fourteen calls, eight
+correct, five broken grid-bound calls, one invalid-date input excluded, no
+infrastructure exclusions. Nine parameters influenced output, but grid windows
+violated their advertised inclusive bounds. Lookup, all three search contrasts,
+and two fresh Southwest WN2847/United UA1506 selections passed (three versus
+five fares). Do not reroll this audit or hide its failure.
+
+Offline unchanged-artifact diagnosis: three- and seven-day windows sharing a
+midpoint produce the same request and 49 cells, forty outside the narrow bounds.
+Research/planned tests only used seven-day windows. Evidence is private
+flights-23-window-diagnostic.ts/json; original tools unchanged and no extra live
+call. 54e9470 tightens existing researcher/planner contrast guidance to establish
+advertised meaning, including extent, instead of any result change. Agents
+choose tests, scope and repairs; no runtime or site-specific rule. README,
+architecture and website match. 198 focused tests/1,079 assertions, lint, types,
+web build and desktop/mobile visual checks passed; existing bundle warning.
+Logs/screenshots parameter-meaning-* retained; preview 68529 stopped, visual
+80725 ended. No extra test mirroring or unnecessary full-suite repetition.
+
+Prior teach 64357/audit 4044 ended; collector healthy, disk 24.21 GiB, AC 80%.
+Accounting through audit 23: 29 teaches/22 audits, 51 traces/5,135 spans/1,776
+usage, 2,160.7297898410 minutes, input 372,267,938/cache 307,698,048/output
+3,984,630, $461.0513792 base estimate. Audit adds $0.6447528, no missing usage;
+twenty earlier missing semantic calls and pricing/completeness caveats remain.
+Active Flights 24 excluded. Original malformed-handoff catch and actual capacity
+recovery unexercised. No push, MR, merge, deletion or failed-run resume.
+
+## Previous checkpoint — September 11, 08:28 PDT
 
 **ACTIVE full Flights audit 23**, PID 4044, started 15:27:29 UTC, cap
 **16:12:29 UTC**, same home-23 and implementation **1152f6f**. Verify private
