@@ -129,7 +129,14 @@ Follow these steps to compile the session:
    is present, a separate retained request specialist has already produced the
    seeded parser-free `workflow.json` and optional `request-transform.ts`, run
    that exact candidate through the normal API ladder, and judged its raw
-   response credible for the MVP operation. Preserve that request construction
+   response credible for the MVP operation. Read the supplied observation and
+   `api-research-response.txt`. Before live validation, test the parser against
+   that complete response as well as relevant recording examples, with expected
+   records and fields grounded in the current observation. Preserve the original
+   response framing: an initial decodable envelope may contain only metadata,
+   while later envelopes carry results or updates. Decide how those records
+   combine from the evidence; neither the first frame nor concatenating every
+   frame is a universal rule. Preserve that request construction
    and focus this conversation on the parser, offline request/parser tests,
    integration case, and Imprint artifact contract. Do not restart broad API
    hypothesis search here. If the seeded request cannot satisfy the accepted

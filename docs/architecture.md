@@ -695,6 +695,10 @@ retain corroborating observations while testing a smaller workflow when the
 core response is sufficient. Optional parser metadata is omitted when its
 meaning is unsupported, rather than filled from an unrelated numeric pair or
 other matching shape. The runtime does not choose which requests or fields matter.
+Before live validation, compilers test the complete supplied research response
+as well as relevant recording examples. They preserve response framing and
+determine which envelopes contain metadata, records, or updates; a successful
+parse of the older recording does not establish the current response shape.
 
 
 The compile/test CDP pool counts active calls before arming its idle cleanup.

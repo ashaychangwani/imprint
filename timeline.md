@@ -8249,3 +8249,22 @@ response offline, preserving envelopes and distinguishing metadata from result
 records, before another live call. Update matching docs/web and validate, then
 start fresh Flights 22. No site-specific runtime fix or resumed failed teach.
 Hotels 6 remains gated on full Flights success. No push, MR, merge or deletion.
+
+
+## 2026-09-11 05:36 PDT — Compiler checks complete research responses
+
+The general compiler handoff now directs the agent to test the complete supplied
+api-research-response.txt before live validation, alongside recording examples.
+It preserves framing and leaves the agent to determine whether envelopes contain
+metadata, results, or updates and how records combine. No first-frame or
+concatenate-all runtime rule. The concrete motivation is Flights 21's zero-item
+parser despite 16 itineraries in each later frame of its supplied response.
+
+README and architecture docs match. Website compile copy is shortened to a
+readable description of fresh-response checks, dependent results, repair and
+core tools first. All 198 focused tests/1,079 assertions passed in 1.374 seconds;
+lint checked 214 files, type checking passed. Website build and desktop/mobile
+visual checks passed without errors or horizontal overflow; existing large-bundle
+warning remains. Final visual/build logs are research-parser-*-3.log. Preview
+session 57241 stopped and visual sessions ended. No new prompt-mirroring tests
+or unnecessary full-suite rerun. Fresh Flights 22 follows, never a resumed run.

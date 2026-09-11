@@ -147,6 +147,8 @@ Compiler guidance separates a returned value's location from its meaning and
 omits uncertain optional metadata instead of filling it from unrelated matching
 shapes. Extra responses used to corroborate research stay in the evidence;
 required execution requests must contribute necessary state or core output.
+Compilers test the complete current research response before live validation,
+including result frames beyond initial metadata, alongside recording examples.
 Auditors receive exact report tool names.
 Planning and final review also check how callers obtain required inputs,
 without relying on identifiers hidden in the recording.
