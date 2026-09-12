@@ -9138,3 +9138,30 @@ Accounting now 33 teaches/26 audits,59 traces/6,250 spans/2,106 usage carriers,
 base estimate $560.8220024. Audit adds $0.9022216 with no missing usage.22 prior
 missing semantic calls and CLI/pricing caveats remain; active Hotels excluded.
 Collector healthy,22.43 GiB free. No push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 17:10 PDT — Hotels 7 finishes within target; independent audit starts
+
+Hotels 7 completed in 26.2577 minutes on unchanged 0ce9fe9 with one five-input search
+tool: destination, check-in, check-out, adults, currency. The initial research result
+contradicted four requested inputs; retained research repaired the construction
+and proved Seattle, October 12–14, three adults, EUR in the captured response. It
+compared two versus three travelers independently from the two-night stay.
+
+The first generated London result had correct dates, occupancy and GBP prices but
+mislabeled JPG images as booking URLs. The master recalled the compiler; the
+repaired 20-property result passed with four adults, three nights and GBP and no
+image URLs advertised as booking links. This is a teach baseline, not an audit
+or repeatability claim. One navigation captures page-generated AtySUc API output.
+No previous tools/private diagnosis or parent implementation change supplied.
+
+Independent audit 7 launched 00:08:49UTC September 12, PID 64859, hotels-home-7,
+cap 00:53:49UTC. Teach 53416 ended. Audit all five advertised inputs and actual
+property/link/price fields, preserve failures, then repeat fresh Flights 28 on
+unchanged code if the audit supports it. No concurrent live diagnostic.
+
+Accounting 34 teaches/26 audits,60 traces/6,345 spans/2,133 usage,2,567.3227 minutes,
+input 459,871,983/cache 380,580,480/output 4,900,298, base estimate $567.404164.
+Teach adds $6.5821616; one deferred finesse call brings missing semantic calls
+to 23. Prior CLI/pricing caveats remain; active audit excluded. Collector healthy,
+22.27 GiB free. No push, MR, merge, deletion, resume or deadline extension.

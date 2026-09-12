@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 16:43 PDT
+## Current continuation — September 11, 17:10 PDT
+
+**ACTIVE independent Hotels audit 7**, PID 64859, started **00:08:49 UTC
+September 12**, cap **00:53:49 UTC**, hotels-home-7, unchanged **0ce9fe9**.
+Verify hotels-audit-7-manifest.json/log. Teach 53416 ended successfully in 26.2577
+minutes, within target. One tool advertises destination, check-in, check-out,
+adults, currency. Audit all five and actual records/prices/links. No live diagnostic
+concurrent with audit. If it passes, repeat fresh Flights 28 on unchanged code,
+then Hotels 8; one successful teach per site is not repeatability.
+
+Research repaired requested date/occupancy/currency mismatches, distinguishing
+three traveler entries from a two-night stay. First compiled live result mislabeled
+image URLs as booking links; retained compiler repaired it. Final 20London
+properties correctly reflected dates, three nights, four adults and GBP. Workflow
+uses one navigation with captured page-generated AtySUc response. No parent code
+or prompt change, previous tools or private diagnosis supplied. See newest timeline.
+
+Accounting through Hotels teach 7:34 teaches/26 audits,60 traces/6345 spans/2133 usage,
+2567.3226665959 minutes, input 459871983/cache 380580480/output 4900298,
+$567.404164 base estimate. Teach adds $6.5821616; deferred optional finesse brings
+missing semantic calls to 23. Prior CLI/pricing caveats remain; active audit excluded.
+Collector healthy,22.27 GiB free. Flights 27 audit was 96% with one retained grid
+failure; both booking checks were nonstop, so connecting booking remains unproven.
+No push, MR, merge, deletion, resume or deadline extension.
+
+## Previous checkpoint — September 11, 16:43 PDT
 
 **ACTIVE fresh Hotels 7**, PID 53416, started **23:41:28 UTC September 11**,
 implementation **0ce9fe9**, unused **hotels-home-7** under the private evidence
