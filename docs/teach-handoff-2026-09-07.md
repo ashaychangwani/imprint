@@ -1,6 +1,22 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 19:03 PDT
+## Current continuation — September 11, 19:32 PDT
+
+Flights 29 active at 30 minutes, PID 1904, home-29, unchanged 0ce9fe9. No published
+tools; target missed. Lookup/grid research report proven; search/booking partial.
+Master first-pass review is underway. Search has 33 credible rendered LAX–JFK
+results but lacks proven booking selection. Booking API capture works for the
+recorded WN 367 example but retains hardcoded route context; fresh search-derived
+selection and contrasting route are still missing. Grid route diagnostics showed
+the changed route on-page but timed out capturing its grid; preserve failures.
+
+Run abef4f0c-fc65-4374-9063-3f9f96f86510. Original assessment 03:01:49 UTC and hard
+deadline 03:31:49 UTC September 12 remain. Collector healthy, 21.31 GiB free. No
+parent implementation/private findings supplied. Accounting unchanged through
+audit 28. Read newest timeline, audit afterward, and keep Hotels 8 waiting for full
+Flights success. No push, MR, merge, deletion, failed-run resume or extension.
+
+## Previous checkpoint — September 11, 19:03 PDT
 
 ACTIVE fresh Flights 29, PID 1904, home-29, unchanged 0ce9fe9. Started 02:01:49 UTC
 September 12; target 02:31:49, assess 03:01:49, hard deadline 03:31:49 UTC. Verify

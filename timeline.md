@@ -9361,3 +9361,29 @@ output 5,147,318, emitted writes 0, base estimate $600.2207048.
 Audit adds $0.6899280, no new missing usage. Twenty-four
 prior missing semantic calls and pricing/CLI caveats remain; active teach excluded.
 Collector healthy, 21.57 GiB free. No push, MR, merge, deletion, resume or extension.
+
+
+## 2026-09-11 19:32 PDT — Flights 29 misses target with selection and route-context gaps
+
+Flights 29 reached 30 minutes on unchanged 0ce9fe9 with no published tools.
+Lookup and grid research report proven; search and booking remain partial, and
+the master is reviewing these first-pass handoffs. Search returned a rendered
+LAX–JFK document with 33 credible results, but no proven booking-compatible
+selection. Rendered document extraction is not background API capture.
+
+Booking captured a useful page-generated API response for the recorded WN 367
+SJC–SAN example, including provider, positive fare and handoff URL. Its own
+researcher preserved partial status because the navigation route remains hardcoded
+to that example and no fresh coherent search selection/route contrast exists.
+This is not fresh dependent-tool proof. Grid returned 49 nearby-date pairs;
+route-change diagnostics showed SFO–SEA on the page but their grid capture timed
+out. Keep those failures distinct from the successful grid observation and let
+the master assess whether the selected boundary has sufficient proof.
+
+PID 1904, run abef4f0c-fc65-4374-9063-3f9f96f86510, home-29. Keep original
+03:01:49 UTC assessment and 03:31:49 hard deadline September 12. Collector healthy,
+21.31 GiB free. No parent code/prompt changes, previous tools or private diagnosis
+supplied. No concurrent live diagnostic. Original malformed-handoff catch remains
+unexercised. Accounting unchanged through audit 28; active teach excluded. Audit
+independently after completion; Hotels 8 waits for full Flights success. No push,
+MR, merge, deletion, failed-run resume or deadline extension.
