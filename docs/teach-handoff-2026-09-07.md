@@ -1,6 +1,23 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 17:52 PDT
+## Current continuation — September 11, 18:00 PDT
+
+Flights 28 active around 43 minutes, PID 65930, unchanged 0ce9fe9, no published
+tools. All four research handoffs are proven; master review/compilation pending.
+Booking research now returned positive round-trip offers via direct fetch in
+263 ms transport time, after preserving stale/null and four-rung HTTP 400 failures.
+Read-only inspection confirmed its exact token equals the decoded fresh search
+producer field; ordered F9 3308 outbound/F9 4593 return tuples and both flight
+numbers appear in the corresponding evidence. See newest timeline. This does not
+prove generated tools, independent audit, warm latency or connecting-flight booking.
+
+Original malformed-handoff catch remains unexercised. No parent code/private
+findings supplied. Keep 01:17:16 UTC assessment and 01:47:16 hard deadline September
+12. Collector healthy, 21.91 GiB free; accounting unchanged through Hotels audit 7.
+Independent audit follows completion, then Hotels 8 if supported. No push, MR,
+merge, deletion, failed-run resume or deadline extension.
+
+## Previous checkpoint — September 11, 17:52 PDT
 
 Flights 28 is active around 35 minutes, unchanged 0ce9fe9, PID 65930, home-28.
 The 30-minute target was missed; no published tools. Lookup, repaired round-trip

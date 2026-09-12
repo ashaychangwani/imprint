@@ -9221,3 +9221,29 @@ Keep the original 01:17:16 UTC assessment and 01:47:16 hard deadline September 1
 Collector healthy, 21.92 GiB free. Accounting unchanged through Hotels audit 7;
 active teach excluded. Independent audit and unchanged-code Hotels repeat remain
 due. No push, MR, merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-11 18:00 PDT — Fresh round-trip booking research succeeds through direct fetch
+
+Flights 28 is active around 43 minutes on unchanged 0ce9fe9, no tools published.
+All four research handoffs are now proven and await master review/compilation.
+Booking retained the stale-selection null response and a four-rung HTTP 400
+failure, then returned 21,261 characters of positive booking data through direct
+fetch in 263 ms transport time. This is not generated-tool or warm-call timing.
+
+Fresh search producer f5cdf7c7 returned the continued round trip. The successful
+booking observation 319879b8 used its completed itinerary: F9 3308 SFO–LAX on
+October 19 and F9 4593 LAX–SFO on October 23. Read-only inspection confirmed the
+consumer's exact token equals the decoded producer field [3][0][0][1][1] in both
+relevant response frames. Raw string search alone missed JSON escaping; decoded
+equality succeeded. The consumer's ordered segment tuples match those flights.
+Booking raw output includes both flight numbers, Frontier and FlightHub; research
+reports Basic Fare 73 and Economy Bundle 137. USD comes from effective request
+configuration, not a literal currency label in the response. This is a two-leg
+round trip with nonstop individual legs, not independent connecting-flight proof.
+
+No previous artifacts or private findings supplied to the agents, no parent code
+change, and no concurrent live diagnostic. Original malformed-handoff catch remains
+unexercised. PID 65930, collector healthy, 21.91 GiB free. Keep 01:17:16 UTC
+assessment and 01:47:16 hard deadline. Independent audit and Hotels repeat remain
+due. Accounting unchanged, active teach excluded. No push, MR, merge or deletion.
