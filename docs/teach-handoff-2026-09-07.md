@@ -1,6 +1,22 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 18:17 PDT
+## Current continuation — September 11, 18:41 PDT
+
+Flights 28 active around 83 minutes, PID 65930, home-28, unchanged 0ce9fe9.
+Three tools published: lookup, grid, search. Search narrowed to coherent nonstop
+return options after a connecting selection omitted its final segment; connecting
+support is not proven. Booking baseline and dependency check returned status-13
+payloads and empty normalized results despite successful preparation/binding.
+Master returned booking to retained research for current-state/capture investigation
+and retired its stale plan. Suspected state mismatch is not a verified root cause.
+
+Hard deadline remains 01:47:16 UTC September 12, roughly six minutes left. Collector
+healthy, 21.75 GiB free; no parent changes/private findings supplied. Accounting
+unchanged. Audit published tools after the run ends, preserving any missing scope;
+a partial audit cannot establish full success. Read newest timeline. No push, MR,
+merge, deletion, failed-run resume or extension.
+
+## Previous checkpoint — September 11, 18:17 PDT
 
 Flights 28 one-hour assessment: continue to the original 01:47:16 UTC hard
 deadline September 12, with about 30 minutes left. Only search_flight_locations

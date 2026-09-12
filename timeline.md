@@ -9278,3 +9278,28 @@ Collector healthy, 21.82 GiB free. No parent code/prompt change, previous tools,
 private diagnosis or concurrent live diagnostic. Accounting unchanged through
 Hotels audit 7; active teach excluded. Preserve failures, audit afterward, then
 Hotels repeat if supported. No push, MR, merge, deletion or failed-run resume.
+
+
+## 2026-09-11 18:41 PDT — Three Flights tools publish; booking returns to research after empty results
+
+Flights 28 is active around 83 minutes with lookup, grid and search published.
+Grid's repaired check returned the requested November 10/17 cell at USD 175.
+Search's first continuation output included a connecting LAX–LAS–SFO itinerary
+whose selection bundle stopped at LAS. Retained repair narrowed returned items
+to two coherent nonstop return options, each preserving the selected outbound
+and its matching return/token. This does not establish connecting-flight support.
+
+Booking compiled and its preparation/chain binding passed, but both standalone
+and dependency-check calls returned tiny status-13 responses and normalized empty
+itineraries/options. Master rejected both results, returned booking to retained
+research, and retired its stale implementation plan. It suspects missing current
+request/page state; that is an agent hypothesis, not a verified root cause. The
+earlier positive direct-fetch research does not waive these generated failures.
+No binding-path or parser fix is inferred merely from empty transport output.
+
+Keep the original 01:47:16 UTC hard deadline, about six minutes away. PID 65930,
+unchanged 0ce9fe9, collector healthy, 21.75 GiB free. No parent code/prompt change,
+private findings supplied or concurrent live diagnostic. Accounting unchanged,
+active teach excluded. Audit whatever is published after the run ends, preserve
+missing scope and failures, and do not call a partial audit full success. No push,
+MR, merge, deletion, failed-run resume or deadline extension.
