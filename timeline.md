@@ -9331,3 +9331,33 @@ Teach adds $31.8108136; its final master review has missing
 usage, bringing missing semantic calls to 24. Prior CLI/pricing caveats remain;
 active audit excluded. Collector healthy, 21.71 GiB free. No parent implementation
 change, private findings supplied, push, MR, merge, deletion or deadline extension.
+
+
+## 2026-09-11 19:03 PDT — Partial audit passes with timeout; another fresh Flights teach starts
+
+Audit 28 ended in 9.3795 minutes with 24/24 graded correct: 15 actual
+calls, 14 correct and one calendar timeout excluded as infrastructure. All ten
+parameters worked across lookup, grid and search. Booking is absent. The valid
+SFO–LAX October 21/27 grid probe exceeded the audit MCP deadline; a paced identical
+retry passed. Preserve that timeout. Search continuation used its exact fresh
+outbound selection and returned the matching reverse leg with both legs retained.
+This is a partial pass with an exclusion, not full Flights success or repeatability.
+
+Private flights-audit-28-timing.json records whole-second full calls: lookup 5/5;
+grid 71/8/8/125-failed/38-retry/8; search 69/8/8/8/8/52/7. First calls include setup;
+no separate setup-only timer is claimed. The capture repair from late teach 28
+was not generated or validated. Available evidence does not justify another
+runtime/prompt rule, so fresh validation continues on unchanged implementation.
+
+Fresh Flights 29 launched 02:01:49 UTC September 12, PID 1904, unused home-29,
+unchanged 0ce9fe9. Original recording and exact four-operation guidance, no prior
+tools/examples or private diagnosis. Target 02:31:49, assessment 03:01:49, hard
+deadline 03:31:49 UTC. Teach 65930 and audit 99946 ended. No concurrent live
+diagnostic. Independent audit follows; Hotels 8 waits for full Flights success.
+
+Accounting 35 teaches/28 audits, 63 traces/6,596 spans/2,216 usage carriers,
+2669.5041086584 summed minutes; input 482,678,599, cache reads 398,177,792,
+output 5,147,318, emitted writes 0, base estimate $600.2207048.
+Audit adds $0.6899280, no new missing usage. Twenty-four
+prior missing semantic calls and pricing/CLI caveats remain; active teach excluded.
+Collector healthy, 21.57 GiB free. No push, MR, merge, deletion, resume or extension.

@@ -1,6 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 18:49 PDT
+## Current continuation — September 11, 19:03 PDT
+
+ACTIVE fresh Flights 29, PID 1904, home-29, unchanged 0ce9fe9. Started 02:01:49 UTC
+September 12; target 02:31:49, assess 03:01:49, hard deadline 03:31:49 UTC. Verify
+flights-teach-29-manifest.json/log. Exact original recording/four-operation scope;
+no previous tools/examples or private diagnosis. No current evidence justifies a
+new runtime/prompt rule. Audit independently afterward; Hotels 8 waits for a full
+Flights success. No concurrent live diagnostic or failed-run resume.
+
+Partial audit 28 passed 24/24 graded in 9.3795 minutes: 15 calls, 14 correct, one
+calendar MCP timeout excluded, ten working inputs. Exact paced retry passed.
+Booking absent; this is not a clean/full pass. Fresh search continuation preserved
+both legs. Timing source and limits are in newest timeline/accounting. Teach 65930
+and audit 99946 ended; failed teach 28 remains preserved.
+
+Accounting through audit 28: 35 teaches/28 audits, 63 traces/6,596 spans/2,216 usage,
+2669.5041086584 minutes, input 482,678,599, cache reads 398,177,792,
+output 5,147,318, emitted writes 0, $600.2207048 base estimate. Twenty-four
+missing semantic calls and prior caveats remain; active teach excluded. Collector
+healthy, 21.57 GiB free. No push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 11, 18:49 PDT
 
 ACTIVE independent Flights audit 28, PID 99946, home-28, started 01:47:48 UTC,
 cap 02:32:48 UTC September 12. Verify flights-audit-28-manifest.json/log. Three
