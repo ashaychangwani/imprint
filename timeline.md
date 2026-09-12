@@ -9189,3 +9189,35 @@ live diagnostic. Accounting 34 teaches/27 audits,61 traces/6,348 spans/2,134 usa
 $567.7199632. Audit adds $0.3157992, no missing usage;23 earlier missing semantic
 calls and prior CLI/pricing caveats remain. Active Flights excluded. No push, MR,
 merge, deletion, resume or deadline extension.
+
+
+## 2026-09-11 17:52 PDT — Flights repeat misses target; retained research closes two gaps
+
+Flights 28 remains active about 35 minutes after launch on unchanged 0ce9fe9.
+No tools are published, so the 30-minute target was missed. Lookup is proven;
+retained research has now also proved search continuation and the narrowed grid.
+Booking has called the updated search producer for fresh values; a successful
+booking response and generated-tool validation remain due.
+
+The master rejected the first-pass search selection representation and required
+a fresh outbound selection followed by a remaining-leg search. Research then
+returned credible LAX–SFO return options for the selected SFO–LAX outbound,
+with matching token and ordered segment components for the booking consumer.
+Grid initially advertised four ignored window bounds. The master removed those
+inputs and required a fresh check of origin, destination, departure and return
+dates. The revised check captured nearby-date fares for SFO–LAX, including the
+requested October 19/23 cell. Dropping bounds is scope narrowing, not their repair.
+A failed grid capture's page diagnostic supplied visible route corroboration;
+page facts remain separate from the successful API response.
+
+The first booking test used an old selection and returned a null payload. Its
+retained follow-up is now calling the fresh producer, as directed by the master.
+No success is inferred from transport completion. This is ordinary partial-proof
+repair; original malformed-handoff recovery remains unexercised live.
+No code/prompt changes, previous tools or private parent diagnosis supplied.
+
+PID 65930, run 4bcb1df7-d022-4f0b-9b6b-4241e55b5e33, home-28.
+Keep the original 01:17:16 UTC assessment and 01:47:16 hard deadline September 12.
+Collector healthy, 21.92 GiB free. Accounting unchanged through Hotels audit 7;
+active teach excluded. Independent audit and unchanged-code Hotels repeat remain
+due. No push, MR, merge, deletion, failed-run resume or deadline extension.

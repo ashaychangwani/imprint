@@ -1,6 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 17:19 PDT
+## Current continuation — September 11, 17:52 PDT
+
+Flights 28 is active around 35 minutes, unchanged 0ce9fe9, PID 65930, home-28.
+The 30-minute target was missed; no published tools. Lookup, repaired round-trip
+search continuation, and narrowed four-input grid research are proven. Booking
+is now calling the updated search producer for fresh values; positive booking
+proof, compilation, generated chain and independent audit remain due.
+
+Master retained the missing-proof repairs: search now carries matching token and
+ordered segments, while ignored grid-window bounds were removed and the narrower
+contract tested. The removed bounds are not repaired. Grid failure-page feedback
+provided route corroboration separately from successful API output. Initial
+booking stale-selection failure remains preserved. Original malformed-handoff
+catch remains unexercised. No parent implementation or private diagnosis supplied.
+
+Keep original assessment 01:17:16 UTC and hard deadline 01:47:16 UTC September 12.
+Collector healthy, 21.92 GiB free. Accounting unchanged through Hotels audit 7;
+active teach excluded. Independent audit follows completion, then fresh Hotels 8
+on unchanged code if results support it. Read newest timeline. No push, MR, merge,
+deletion, failed-run resume or deadline extension.
+
+## Previous checkpoint — September 11, 17:19 PDT
 
 **ACTIVE fresh repeat Flights 28**, PID 65930, started **00:17:16 UTC
 September 12**, home-28, unchanged **0ce9fe9**. Verify flights-teach-28-manifest.json/
