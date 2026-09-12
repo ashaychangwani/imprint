@@ -1,6 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 18:00 PDT
+## Current continuation — September 11, 18:17 PDT
+
+Flights 28 one-hour assessment: continue to the original 01:47:16 UTC hard
+deadline September 12, with about 30 minutes left. Only search_flight_locations
+is published. Positive research exists for all four operations; concrete retained
+repairs justify continuing without extending the deadline.
+
+Search's focused two-branch request graph was rejected before compilation for
+mismatch with the proven pre-plan request. Master returned it to retained research
+for initial/continuation alignment and retired the stale implementation plan.
+Grid compiled but its generated live check timed out after 151.560 seconds despite
+a SEA–DEN results page and Date grid control. Master recalled the retained compiler
+for capture repair. Booking waits for search; its chain path was corrected to
+items[0].selected_flights and still needs live validation. Page facts are not API
+proof. Read newest timeline; preserve both failures.
+
+PID 65930, home-28, unchanged 0ce9fe9; collector healthy, 21.82 GiB free. Original
+malformed-handoff catch remains unexercised. No parent implementation/private
+findings supplied. Accounting unchanged through Hotels audit 7. Independent audit
+follows; then Hotels 8 if supported. No push, MR, merge, deletion or failed-run resume.
+
+## Previous checkpoint — September 11, 18:00 PDT
 
 Flights 28 active around 43 minutes, PID 65930, unchanged 0ce9fe9, no published
 tools. All four research handoffs are proven; master review/compilation pending.

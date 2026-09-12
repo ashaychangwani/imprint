@@ -9247,3 +9247,34 @@ change, and no concurrent live diagnostic. Original malformed-handoff catch rema
 unexercised. PID 65930, collector healthy, 21.91 GiB free. Keep 01:17:16 UTC
 assessment and 01:47:16 hard deadline. Independent audit and Hotels repeat remain
 due. Accounting unchanged, active teach excluded. No push, MR, merge or deletion.
+
+
+## 2026-09-11 18:17 PDT — One-hour assessment: continue focused repairs within original deadline
+
+Flights 28 has one published tool, search_flight_locations, at the one-hour
+assessment. Continue to the original 01:47:16 UTC hard deadline: all four
+operations have positive research evidence, lookup passed its generated live
+check, and the remaining failures have specific retained-agent repair paths.
+About 30 minutes remain. The 30-minute target was missed; no deadline extension.
+
+The focused search plan proposed a two-branch request graph that did not match
+the exact proven pre-plan request, so verification rejected it before compilation.
+The master returned search to its retained researcher to align the initial and
+continuation construction; the stale implementation plan was retired. Its public
+contract and booking dependency remain. Earlier planning also corrected booking's
+producer path from options[0].selected_flights to items[0].selected_flights.
+That corrected path still needs a generated live dependency check.
+
+Grid compiled, but generated live verification failed after 151.560 seconds
+waiting for GetCalendarGrid. The page diagnostic showed a SEA–DEN results page
+with the Date grid control. The master recalled the retained compiler for capture
+repair, preserving the actual failure; visible results are not API proof.
+Booking remains pending its producer. Lookup's fresh LHR result was accepted.
+No generated search, grid or booking success, independent audit, or repeatability
+is claimed. Original malformed-handoff recovery remains unexercised live.
+
+PID 65930, run 4bcb1df7-d022-4f0b-9b6b-4241e55b5e33, unchanged 0ce9fe9.
+Collector healthy, 21.82 GiB free. No parent code/prompt change, previous tools,
+private diagnosis or concurrent live diagnostic. Accounting unchanged through
+Hotels audit 7; active teach excluded. Preserve failures, audit afterward, then
+Hotels repeat if supported. No push, MR, merge, deletion or failed-run resume.
