@@ -9165,3 +9165,27 @@ input 459,871,983/cache 380,580,480/output 4,900,298, base estimate $567.404164.
 Teach adds $6.5821616; one deferred finesse call brings missing semantic calls
 to 23. Prior CLI/pricing caveats remain; active audit excluded. Collector healthy,
 22.27 GiB free. No push, MR, merge, deletion, resume or deadline extension.
+
+
+## 2026-09-11 17:19 PDT — Hotels audit is clean; unchanged-code Flights repeat starts
+
+Hotels audit 7 passed 11/11 graded in 2.8026 minutes: six correct calls, all five
+parameters working, no failures or exclusions. Adult-count change altered inventory
+and the two-adult currency control reproduced the baseline IDs. Currency changed
+prices while preserving properties, including $206 to €177. Destination names/
+coordinates and both date changes were independently consistent. This is one
+clean Hotels teach/audit on 0ce9fe9; repeatability remains due.
+
+Fresh Flights 28 launched 00:17:16UTC September 12, PID 65930, unused home-28,
+unchanged 0ce9fe9. Target 00:47:16, assessment 01:17:16, hard deadline 01:47:16UTC.
+Exact combined recording and four-operation scope; no previous tools, examples
+or private diagnosis supplied. Independent audit follows, then Hotels 8 if results
+support it. Preserve Flights 27's grid failure; do not call its 96%pass clean.
+Connecting booking also remains unproven by the earlier nonstop audit selections.
+
+Teach 53416 and audit 64859 ended. Collector healthy,22.21 GiB free, no concurrent
+live diagnostic. Accounting 34 teaches/27 audits,61 traces/6,348 spans/2,134 usage:
+2,570.1253 minutes, input 460,151,870/cache 380,815,488/output 4,902,412, base estimate
+$567.7199632. Audit adds $0.3157992, no missing usage;23 earlier missing semantic
+calls and prior CLI/pricing caveats remain. Active Flights excluded. No push, MR,
+merge, deletion, resume or deadline extension.

@@ -1,6 +1,30 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 17:10 PDT
+## Current continuation — September 11, 17:19 PDT
+
+**ACTIVE fresh repeat Flights 28**, PID 65930, started **00:17:16 UTC
+September 12**, home-28, unchanged **0ce9fe9**. Verify flights-teach-28-manifest.json/
+log. Target **00:47:16**, assess **01:17:16**, hard deadline **01:47:16 UTC**.
+Exact original recording and four-operation guidance, no previous generated tools,
+examples or private diagnosis. Independently audit afterward, then Hotels 8 if
+results support it. Fresh repeated success remains due; preserve all failures.
+
+Hotels 7 audit passed 11/11 graded in 2.8026 minutes: six correct calls, all five
+parameters working, no failures/exclusions/untestable inputs. Adult-count and
+currency comparisons distinguished changed inventory from preserved property IDs;
+destination coordinates and both date changes matched. Teach took 26.2577 minutes.
+This is one clean Hotels result on current code. Flights 27 passed 96% with one
+retained grid failure; its booking audit covered nonstop selections only. Inspect
+full connecting selections independently when live experiments are not overlapping.
+
+Teach 53416/audit 64859 ended, collector healthy,22.21 GiB free. Accounting through
+Hotels audit 7:34 teaches/27 audits,61 traces/6348 spans/2134 usage,2570.1252785022 minutes,
+input 460151870/read 380815488/output 4902412,$567.7199632 base estimate. Audit adds
+$0.3157992, no missing usage;23 earlier missing calls and prior CLI/pricing caveats
+remain. Active Flights excluded. No push, MR, merge, deletion, resume or extension.
+Read newest timeline/accounting.
+
+## Previous checkpoint — September 11, 17:10 PDT
 
 **ACTIVE independent Hotels audit 7**, PID 64859, started **00:08:49 UTC
 September 12**, cap **00:53:49 UTC**, hotels-home-7, unchanged **0ce9fe9**.
