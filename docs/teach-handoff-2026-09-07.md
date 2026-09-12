@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 18:41 PDT
+## Current continuation — September 11, 18:49 PDT
+
+ACTIVE independent Flights audit 28, PID 99946, home-28, started 01:47:48 UTC,
+cap 02:32:48 UTC September 12. Verify flights-audit-28-manifest.json/log. Three
+published tools only: lookup, grid, search; booking missing. No concurrent live
+diagnostic. Inspect actual results and narrowed connecting scope, preserve all
+failures, then decide on evidence-backed general corrections or fresh validation.
+Hotels 8 waits for full Flights success. Never resume the failed teach.
+
+Teach 28 PID 65930 ended at its 90-minute deadline on unchanged 0ce9fe9: three
+ready, one not ready. Booking generated baseline and chain were empty. Retained
+research then proved page-generated API capture (0122da21, 98,159 bytes) after a
+fresh producer/direct-fetch comparison still returned status 13. Deadline cut off
+master review before compilation/live validation. This is a failed fresh repeat,
+not repaired generated booking. Original malformed-handoff catch unexercised.
+
+Accounting through teach 28: 35 teaches/27 audits, 62 traces/6,593 spans/2,215 usage,
+2660.1246450327 summed minutes; input 481,655,716, cache reads 397,204,352,
+output 5,142,179, emitted writes 0, $599.5307768 base estimate. Twenty-four
+missing semantic calls and prior caveats remain. Active audit excluded. Collector
+healthy, 21.71 GiB free. No push, MR, merge, deletion or deadline extension.
+Read newest timeline/accounting.
+
+## Previous checkpoint — September 11, 18:41 PDT
 
 Flights 28 active around 83 minutes, PID 65930, home-28, unchanged 0ce9fe9.
 Three tools published: lookup, grid, search. Search narrowed to coherent nonstop

@@ -9303,3 +9303,31 @@ private findings supplied or concurrent live diagnostic. Accounting unchanged,
 active teach excluded. Audit whatever is published after the run ends, preserve
 missing scope and failures, and do not call a partial audit full success. No push,
 MR, merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-11 18:49 PDT — Flights repeat hits deadline; three-tool independent audit starts
+
+Flights 28 ended at the original deadline in 89.9994 minutes: three ready,
+one not ready. Booking's generated baseline and dependency checks were empty.
+Retained research then called a fresh producer (6634878d); direct fetch e4b0d580
+still returned status 13. A navigation-based candidate 0122da21 captured 98,159
+bytes of matching F9 3308/F9 4593 itinerary and positive Frontier/Expedia offers.
+This is page-generated GetBookingResults API capture, not a playbook. It preserves
+the selected_flights input. Master review was interrupted before that researched
+repair could be compiled or validated. Positive research does not make the failed
+fresh repeat a success; original malformed-handoff recovery remains unexercised.
+
+Independent audit 28 started 01:47:48 UTC, PID 99946, home-28, cap 02:32:48 UTC.
+It covers the three published tools only, with booking absent. Teach PID 65930
+ended before audit launch. Preserve all failures and check the actual advertised
+search scope, including its omitted connecting options. No concurrent live
+diagnostic. Inspect audit results before choosing a general correction or another
+fresh run; no failed-run resume. Hotels 8 still waits for full Flights success.
+
+Accounting now 35 teaches/27 audits, 62 traces/6,593 spans/2,215 usage carriers,
+2660.1246450327 summed minutes, input 481,655,716, cache reads 397,204,352,
+output 5,142,179, emitted writes 0, base estimate $599.5307768.
+Teach adds $31.8108136; its final master review has missing
+usage, bringing missing semantic calls to 24. Prior CLI/pricing caveats remain;
+active audit excluded. Collector healthy, 21.71 GiB free. No parent implementation
+change, private findings supplied, push, MR, merge, deletion or deadline extension.
