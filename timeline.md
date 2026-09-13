@@ -10230,3 +10230,30 @@ healthy, 17.45 GiB free. Accounting remains through teach 34 at $728.7409104 bas
 estimate; active 35 excluded. Original malformed-handoff live coverage and Hotels
 provider rejection remain unresolved. No concurrent live diagnostic, previous tools,
 implementation changes, failed-run resume, push, MR, merge or evidence deletion.
+
+
+## 2026-09-13 10:52 PDT — Four direct-API tools complete; independent audit starts
+
+Flights 35 completed all four tools in 35.0605835708 minutes on unchanged 3710c47.
+It missed the 30-minute target by about five minutes. Lookup's retained parser repair
+returned the missing LHR code and passed a new semantic review; search, flexible
+calendar and fresh booking chain retained their passes. Independent completion
+review passed and four optional suggestions were saved. All core live checks used
+direct fetch. This faster run chose direct API execution; do not attribute its
+speed to the mechanical deadline change. A fresh audit and repeat are still needed.
+
+Teach PID 46361 ended with four ready and zero failed. Independent audit 35 started
+September 13 at 17:51:17 UTC, PID 64981, home-35, unchanged code, with a 45-minute
+cap at 18:36:17 UTC. Inspect actual calls, parameters, failures and exclusions,
+including connecting itinerary coverage before accepting the result. No concurrent
+live diagnostic. Prior reports and generated artifacts remain unmodified.
+
+Accounting through teach 35: 43 teaches/32 audits, 75 traces/8,324 spans/2,737 usage
+carriers, 3238.1034528085 summed minutes; input 603,662,125, cache reads 500,278,528,
+output 6,475,338, emitted writes zero; $743.1525592 base API-equivalent estimate.
+Teach 35 adds $14.4116488 and no missing semantic usage. The 28 earlier missing
+calls and all cost caveats remain; active audit excluded. Private teach accounting
+and fresh research provenance are retained. Collector healthy, host on AC, about
+18.1 GiB free. Original malformed-handoff live coverage and Hotels provider
+rejection remain unresolved. No prior tools or private parent findings supplied
+to teachers, implementation change, push, MR, merge, deletion or failed-run resume.
