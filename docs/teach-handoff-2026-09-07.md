@@ -1,6 +1,22 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 06:00 PDT
+## Current continuation — September 13, 06:16 PDT
+
+Flights 32 has all four tools published, but completion review failed. Booking
+baseline and fresh search-to-booking chain returned matching F9 3308 SFO–LAX
+with 18 priced provider offers; this nonstop check does not prove grouped behavior.
+Reviewer found two missing departure times plus promised baggage/notices absent
+from search, and promised ticketing conditions absent from booking. Master is
+revising from these findings. Do not treat publication or baseline passes as a
+completed teach. No independent audit started yet.
+
+PID 36440 remains active on unchanged 7f5af6b, home-32. Keep original 13:28:51 UTC
+hard deadline; roughly 12 minutes remain. Collector healthy, 19.25 GiB free.
+Accounting unchanged through audit 31. Audit after completion; Hotels 8 still waits
+for complete Flights success. No parent implementation change, private findings
+supplied, concurrent live diagnostic, push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 13, 06:00 PDT
 
 One-hour assessment: continue Flights 32 within original 13:28:51 UTC hard deadline.
 No published tools yet, but all four research handoffs proven and master moving to
