@@ -10705,3 +10705,33 @@ selection and final booking absent; narrowing is not repair. Accounting stays at
 $793.3236728 base API-equivalent estimate through audit37 with29 missing semantic
 calls and all prior caveats. Hotels provider rejection and same-code repeatability
 remain unresolved. No push, MR, merge, evidence deletion or model switch.
+
+
+## 2026-09-13 14:31 PDT — Fresh Flights38 starts after group-constraint clarification
+
+Fresh Flights38 started September13 at21:30:34 UTC on implementation26a3e36,
+PID43690, unused home-38, exact original recording and four-operation guidance.
+Target22:00:34, assessment22:30:34, hard23:00:34 UTC. Preflight verified clean branch,
+source ancestry, prior teach/audit/preview ended, collector healthy,hostAC,18.25GiBfree.
+No old generated tools, examples or private parent diagnosis supplied to teachers.
+
+26a3e36 clarifies existing compiler and baseline-review guidance: group-level
+properties need not hold separately for each member, including input validation
+and request construction. Runtime unchanged; no site-specific example or rule.
+README/docs/web updated;173 focused tests,1184 assertions,lint,types,web build and
+desktop/mobile visual checks passed. No prompt-mirroring tests added. This is the
+first fresh validation; it does not repair run37's output or prove repeatability.
+
+Audit37 failed23/25graded,14correct calls/1connecting-selection failure,9working
+inputs/1broken,no exclusions. Its request transform required every segment to
+repeat the full route. Offline synthetic reproduction confirmed that guard without
+network calls. Final booking was absent after teach37's90-minute deadline. Preserve
+all failures and research-only booking evidence. Next independently audit38 after
+completion, including grouped fresh consumer inputs and final booking scope.
+
+Accounting remains through audit37:45teaches/34audits,79traces/8834spans/2920usage,
+3412.66284104465minutes,input645994531,reads535844992,output6919376,write0,
+$793.3236728 base API-equivalent estimate;29 missing semantic calls and prior
+caveats remain. Active38 excluded. Hotels provider rejection and original malformed
+researcher/typed missing-field live repair coverage unresolved. No concurrent live
+diagnostic, failed-run resume, push, MR, merge, deletion or model switch.
