@@ -1,6 +1,44 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 11:57 PDT
+## Current continuation — September 13, 12:26 PDT
+
+Assessment near one hour: continue Flights 36 within the original 19:55:58 UTC
+hard deadline. All four research handoffs are now marked proven, and the master
+is reviewing them before planning. No tools are published yet. Lookup and calendar
+draft compilers have started. The new booking proof gives a concrete reason to
+use the remaining time for compilation and live checks; it does not establish
+four working generated tools or independent audit success.
+
+The master received partial search and blocked booking handoffs, then revised
+search to a narrow one-way inventory contract. Session-bound continuation tokens
+and multi-city are outside that boundary. Booking now accepts origin, destination,
+departure date, carrier code and flight number and selects the matching current
+card. This narrows the MVP; it does not repair the earlier token contract or prove
+connecting itinerary support. Runtime and prompts remain unchanged at28de4ed.
+
+Private flights-36-research-provenance.json confirms producer observation
+b6b3fd5b returned exact identity SEA-DEN-WN-3755-20261022. Consumer15ce09af used
+that record's route/date/carrier/flight fields, with no opaque token. Producer
+and consumer CDP calls took32.925s and35.453s respectively, including setup.
+The booking result identifies Southwest WN3755, SEA–DEN October22,14:10–17:55,
+with Basic149USD, Choice194USD and Choice Preferred274USD. Earlier Frontier
+F93406 returned104USD, providing a non-first selection contrast. The researcher
+also found provider/fare-specific Continue markup; independent usability remains
+to be checked. These are rendered document results through CDP, not API captures.
+
+Calendar research returned populated LAX–JFK November10/17 nearby-date cells,
+with departure headers November7–13. Search's fresh one-way SEA–DEN result has
+populated records. Earlier short protocol responses, blocked handoffs and repeated
+browser timeouts remain preserved. Original malformed-handoff catch remains
+unexercised; ordinary partial/blocked handoffs reached the master for repair.
+
+PID69200, run1eebb8a9-47f2-4509-b32e-9467dc7220cf,home-36,about19GiBfree.
+No concurrent live diagnostic, prior tools or private parent findings supplied to
+teachers, code change, push, MR, merge or deletion. Hotels provider rejection and
+same-code repeatability remain unresolved. Accounting remains through audit35 at
+$743.4714408 base API-equivalent estimate with prior caveats; active36 excluded.
+
+## Previous checkpoint — September 13, 11:57 PDT
 
 Flights 36 passed the 30-minute target with zero published tools on unchanged
 28de4ed. Lookup research is proven through direct fetch and its draft compiler
