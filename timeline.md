@@ -10257,3 +10257,47 @@ and fresh research provenance are retained. Collector healthy, host on AC, about
 18.1 GiB free. Original malformed-handoff live coverage and Hotels provider
 rejection remain unresolved. No prior tools or private parent findings supplied
 to teachers, implementation change, push, MR, merge, deletion or failed-run resume.
+
+
+## 2026-09-13 11:04 PDT — Audit fails; protocol response preserved for diagnosis
+
+Independent audit 35 failed at 3/15 graded units (20%) in 2.9929326639 minutes.
+Actual 15 calls: two correct lookup calls, twelve broken calls (five search, seven
+calendar), one invalid booking-input exclusion, no infrastructure exclusions.
+Only query worked; ten other parameters were untestable. Every tested search and
+grid call returned an empty collection, so booking could not obtain a fresh
+selection. This is a genuine failed audit, not repeatability or a partial success.
+PID 64981 ended. Keep the original report and transcript unchanged.
+
+Sequential diagnostics on unchanged generated tools reproduced the failure for
+both audit SFO–LAX October 15 and teach SEA–BOS November 12 inputs. Both emitted
+and native runtime execution received a short HTTP 200 response with a null
+wrb.fr payload and status marker 13; the parser converted that response into an
+empty list. The exact compile verification adapter also reproduced it. This
+rules out an MCP-only explanation, but does not establish what status 13 means
+or why the same tool succeeded during teach. Private in-memory variants omitting
+f.sid alone, then f.sid/bl/_reqid together, also remained empty; no recorded-
+metadata repair was demonstrated. No generated artifact was edited or re-audited.
+
+Six deterministic diagnostic calls ended, direct fetch only, no live browser pool
+or LLM usage. Exact per-call times and raw responses are preserved in
+flights-35-diagnostic-*.json and matching scripts/logs. Audit invocation timing is
+in flights-audit-35-timing.json; five/six-second calls mostly include audit pacing,
+not separately measured browser setup. These calls do not change trace usage.
+
+A separate source inspection found the emitted wrapper omits signal, onResponse
+and onPreparedRequest when calling executeWorkflow, although the native adapter
+forwards them. That is a concrete cancellation/evidence gap, not an explanation
+for the reproduced server response. Next evaluate a small general wrapper fix
+and parser guidance that distinguishes an unsupported/error envelope from valid
+empty data, then validate any change with a fresh teach. Do not add a status-13
+runtime classifier or a site-specific request fix. Hotels provider rejection and
+same-code repeatability remain unresolved; do not resume 35.
+
+Accounting through audit 35: 43 teaches/33 audits, 76 traces/8,327 spans/2,738 usage
+carriers, 3241.0963854724 summed minutes; input 604,089,894, reads 500,690,432,
+output 6,479,871, emitted writes zero; $743.4714408 base API-equivalent estimate.
+Audit adds $0.3188816 and no missing semantic usage. The 28 prior missing calls
+and all caveats remain. No active teach/audit/diagnostic. Collector healthy,
+about 18.1 GiB free. No parent diagnosis or prior tools supplied to teachers,
+push, MR, merge, deletion, model switch or provider-rejection bypass.
