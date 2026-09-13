@@ -1,6 +1,35 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 14:02 PDT
+## Current continuation — September 13, 14:10 PDT
+
+Flights 37 remains active about 82 minutes into its unchanged 7283ddb run. The
+independent completion review correctly failed the combined selection tool:
+standalone and dependency results both stopped at return_flight_choices, with no
+current completed-itinerary booking execution. Research and recorded provenance
+did not substitute for the missing generated result. Other three tools remained
+credible. The original 21:19:11 UTC hard deadline still applies.
+
+The master chose to split the boundary into select_flight for remaining-leg choices
+and get_flight_booking_options for final offers. This is five planned tools serving
+the original four requested operations, with an explicit search-to-selection-to-
+booking dependency chain. No parent runtime or prompt change was made. Retained
+research for narrowed selection passed. Final booking research first failed all
+four API execution rungs, then called select_flight for fresh completed upstream
+values and corrected a nested request-array mismatch. Subsequent direct-fetch
+tests returned responses for AS2498 and a contrasted AS3147 return selection.
+Semantic handoff, compilation, generated final booking chain and external audit
+remain pending; do not count transport responses as a booking pass. The initial
+recorded selection was a disclosed stale diagnostic, not fresh proof.
+
+Private flights-37-completion-booking-split.json preserves the master split and
+booking research decisions. The earlier exact fresh search-to-selection check is
+preserved separately. No prior artifacts or private parent diagnosis supplied to
+teachers, concurrent live diagnostic, failed-run resume, model switch, push, MR,
+merge or deletion. Accounting remains through teach36 at $760.8136888 base estimate
+with earlier caveats, active37 excluded. Original malformed-researcher and typed
+missing-field repair live coverage, Hotels rejection and repeatability unresolved.
+
+## Previous checkpoint — September 13, 14:02 PDT
 
 Continue Flights 37 within its original 21:19:11 UTC hard deadline. The one-hour
 assessment was delayed while responding to the user's status request; at 66 minutes
