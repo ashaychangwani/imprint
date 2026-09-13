@@ -1,6 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 04:22 PDT
+## Current continuation — September 13, 04:42 PDT
+
+ACTIVE full independent Flights audit 31, PID 34143, home-31. Started 11:40:47 UTC,
+cap 12:25:47 UTC September 13. Verify flights-audit-31-manifest.json/log. Audit all
+four tools, real parameter effects and complete grouped selections. No concurrent
+live diagnostic. Hotels 8 waits for complete Flights success; repeatability due.
+
+Teach 31 PID 2351 ended in 73.6252 minutes on 19bdd7c, all four tools ready and
+completion review passed. Retained repairs fixed calendar scope parsing, booking
+provider-condition leakage and premature page completion. Final OAK–LAS F9 2046
+baseline returned 13 offers; fresh LAX–SFO F9 4593 chain returned three. Both
+nonstop, no independent grouped proof yet. Four optional suggestions saved. See
+newest timeline for failures. No parent private diagnosis supplied to teachers.
+
+Totals through teach 31: 38 teaches/29 audits, 67 traces/7,341 spans/2,435 usage,
+2926.1458033057 summed minutes; input 530,903,473, reads 437,708,032,
+output 5,719,734, writes 0, $662.2596568 base estimate. No new missing usage;
+26 prior missing calls and caveats remain. Active audit excluded. Collector healthy,
+19.99 GiB free. No push, MR, merge, deletion, resume or deadline extension.
+
+## Previous checkpoint — September 13, 04:22 PDT
 
 One-hour decision: continue Flights 31 within original 11:51:32 UTC hard deadline.
 Lookup/search published, booking in fresh dependency validation, calendar still

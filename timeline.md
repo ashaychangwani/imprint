@@ -9634,3 +9634,32 @@ active teach excluded. Original malformed-handoff catch still unexercised. Audit
 independently after completion and inspect actual calls/limitations; Hotels 8
 waits for complete Flights success. No concurrent live diagnostic, code change,
 push, MR, merge, deletion or failed-run resume.
+
+
+## 2026-09-13 04:42 PDT — Flights 31 completes; full independent audit starts
+
+Flights 31 completed all four tools in 73.6252 minutes on 19bdd7c. Completion
+review passed and four optional suggestions were saved. Calendar's parser rejected
+valid rendered scope despite 49 captured cells; retained repair passed. Booking's
+parser copied Frontier fare labels and baggage conditions into other providers,
+while omitting real Frontier fare terms. Master rejected baseline and chain output;
+retained compiler repaired offer scoping. A later chain parsed the search page too
+early and returned zero offers, so the master required a booking-state wait after
+selection. Final baseline F9 2046 OAK–LAS returned 13 offers; fresh F9 4593 LAX–SFO
+chain returned three with coherent provider-specific fields. Both nonstop. The
+new grouped-selection guidance still requires independent behavioral validation.
+
+Teach PID 2351 ended. Full independent audit 31 started 11:40:47 UTC September 13,
+PID 34143, home-31, cap 12:25:47 UTC. Audit all four tools, actual parameter effects,
+complete selections and declared limitations. Preserve exclusions and failures;
+a positive percentage alone did not reveal teach 30's connecting failure. No
+concurrent diagnostic. Hotels 8 follows complete Flights success on unchanged code;
+repeatability is still due. No private parent diagnosis supplied to teachers.
+
+Accounting through teach 31: 38 teaches/29 audits, 67 traces/7,341 spans/2,435 usage,
+2926.1458033057 summed minutes; input 530,903,473, reads 437,708,032,
+output 5,719,734, emitted writes 0, $662.2596568 base estimate. Teach adds
+$19.2119856 and no missing usage; 26 prior missing semantic calls and caveats remain.
+Active audit excluded. Collector healthy, 19.99 GiB free. Original malformed-handoff
+catch still unexercised live. No push, MR, merge, deletion, failed-run resume or
+extended deadline.
