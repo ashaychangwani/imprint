@@ -214,7 +214,9 @@ research tests also work when the teach directory is reached through a symlink.
 
 Semantic agents receive the current shared deadline and remaining time on each
 turn, including output repairs, so they can budget for compilation and live
-checks. Exhausting the run deadline is reported as a failed run; provider
+checks. Baseline and dependency API calls are cancelled when that budget expires,
+with a short bounded cleanup period; late results cannot become successful checks.
+Exhausting the run deadline is reported as a failed run; provider
 unavailability is reserved for an actual provider interruption.
 
 Every teach is fresh and stays in the foreground until it reaches a terminal

@@ -1306,3 +1306,11 @@ parent diagnosis supplied to teachers, push, MR, merge, deletion or deadline ext
 Trace sPx7D60x6G6U6L3ZoR2HAA== contains 166 spans and 79 usage carriers: input
 20,523,736, cache reads 18,246,016, output 197,737, emitted writes zero;
 $20.3640264 base estimate. All emitted semantic calls report usage.
+
+
+Flights 34 timing detail: flights-teach-34-timing.json counts 38 research test
+actions, six producer calls, four partial and two blocked handoffs, and six master
+decisions. About 82 minutes elapsed before focused planning. Compile spans sum
+to 460.512 seconds; semantic spans sum to 3843.409 seconds. These can overlap and
+are not additional elapsed wall time or usage. No new live calls or accounting
+changes were introduced by this read-only extraction.

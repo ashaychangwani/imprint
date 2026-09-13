@@ -25,7 +25,7 @@ import {
   revisionSeedArtifactNames,
   revisionStagingDir,
   runFocusedWaveOrchestration,
-  runPlaybookInvocationWithDeadline,
+  runToolInvocationWithDeadline,
   sameFinesseTarget,
   terminalStatusForError,
 } from '../src/imprint/master-teach-controller.ts';
@@ -652,7 +652,7 @@ describe('master-owned focused build waves', () => {
     let failure: unknown;
 
     try {
-      await runPlaybookInvocationWithDeadline(
+      await runToolInvocationWithDeadline(
         {
           timeoutMs: 20,
           cleanupGraceMs: 15,
@@ -678,7 +678,7 @@ describe('master-owned focused build waves', () => {
     let returned: string | undefined;
     let failure: unknown;
     try {
-      returned = await runPlaybookInvocationWithDeadline(
+      returned = await runToolInvocationWithDeadline(
         {
           timeoutMs: 10,
           cleanupGraceMs: 35,

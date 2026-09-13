@@ -1,6 +1,42 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 09:58 PDT
+## Current continuation — September 13, 10:10 PDT
+
+Confirmed the Flights 34 overrun: generated baseline and dependency API calls
+received caller cancellation but no timer tied to the remaining run budget. The
+playbook path already had a host-side guard. Both API paths now use that same
+guard with the remaining shared deadline, pass its child signal into the backend
+ladder, reject late results, and refuse a new invocation after the budget expires.
+An uncooperative runner is bounded by the existing 2.5-second cleanup allowance.
+The helper and cleanup dependency names now describe both kinds of tool calls.
+No new timeout setting, site rule, backend choice, or agent strategy was added.
+
+Two synthetic end-to-end tests stall a baseline or dependency API call through
+the shared deadline and verify cancellation and prompt controller return. Existing
+late-result and playbook checks still pass. 187 focused controller/end-to-end/ladder
+tests passed (957 assertions, 21.58 seconds), plus lint, types and web build. Website
+checked at desktop 1440x1000 and mobile 390x844, with no page errors or horizontal
+overflow; existing bundle warning remains. The initial web build command lacked
+bunx on PATH; retry with the documented Bun directory succeeded. README, architecture
+and website describe bounded live-check cancellation. Private api-deadline-* test
+logs and screenshots retained; temporary preview stopped before any new teach.
+
+Read-only timing extraction for Flights 34 is saved in flights-teach-34-timing.json.
+It counts 38 research test actions, six producer calls, four partial and two blocked
+handoffs across completed semantic outputs. Six master decisions; about 82 minutes
+elapsed before focused planning. Compile spans sum to 460.512 seconds and semantic
+spans to 3843.409 seconds, with overlap; these are not extra elapsed wall minutes or
+new billable calls. Accounting remains through teach 34 at $728.7409104 base estimate,
+with all previous missing-usage and pricing caveats. No generated tools were edited.
+
+Next: fresh Flights 35 from the exact original recording and four-operation scope,
+then independent audit of published tools and actual failures. Do not resume 34.
+This mechanical correction does not resolve the prior booking selector, lookup
+meaning or search failure, and fresh repeatability remains unproven. Hotels provider
+rejection remains unresolved without bypass. No prior tools or private parent
+findings supplied to teachers; no push, MR, merge or evidence deletion.
+
+## Previous checkpoint — September 13, 09:58 PDT
 
 Flights 34 ended with zero ready and four unfinished tools. The 90-minute deadline
 was 16:56:25 UTC September 13. At 16:56:52 the process was still inside its calendar

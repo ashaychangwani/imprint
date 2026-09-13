@@ -772,6 +772,50 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  for (const stalledCheck of ['live', 'chain'] as const) {
+    it(`cancels a stalled API ${stalledCheck} check at the shared run deadline`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const base = lifecycleFailureFixture({
+          runId: `run-api-${stalledCheck}-deadline`,
+          events: [],
+          promotionBatches: [],
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        });
+        let consumerCalls = 0;
+        let stalledSignal: AbortSignal | undefined;
+        let lateResultAccepted = false;
+        const startedAt = Date.now();
+        const terminal = await runFreshMasterTeach(
+          { site: SITE, fromSession: syntheticSessionPath(root), maxDurationMs: 1_000 },
+          {
+            ...base,
+            invocationCleanupGraceMs: 15,
+            runApiTool: async (input) => {
+              const isConsumer = input.workflowPath.includes(`/${CONSUMER_ID}/`);
+              if (isConsumer) consumerCalls += 1;
+              const shouldStall =
+                stalledCheck === 'live' ? !isConsumer : isConsumer && consumerCalls === 2;
+              if (shouldStall) {
+                stalledSignal = input.signal;
+                // A non-cooperative runner eventually returns success; it must not be accepted.
+                await new Promise((resolve) => setTimeout(resolve, 1_500));
+                lateResultAccepted = true;
+              }
+              if (!base.runApiTool) throw new Error('fixture runner is missing');
+              return await base.runApiTool(input);
+            },
+          },
+        );
+        expect(stalledSignal).toBeDefined();
+        expect(stalledSignal?.aborted).toBe(true);
+        expect(lateResultAccepted).toBe(false);
+        expect(Date.now() - startedAt).toBeLessThan(1_450);
+        expect(terminal.status).not.toBe('completed');
+        if (stalledCheck === 'chain') expect(consumerCalls).toBe(2);
+      });
+    });
+  }
+
   it('never labels unmatched researcher parameters as a recorded baseline', () => {
     const implementation = ImplementationPlanPayloadSchema.parse({
       version: 1,
@@ -5362,7 +5406,7 @@ describe('fresh foreground master controller end to end', () => {
           requestApiResearchStep: fixtureApiResearchStep,
           runApiResearchTool: fixtureApiResearchTool,
           playbookInvocationTimeoutMs: 25,
-          playbookCleanupGraceMs: 15,
+          invocationCleanupGraceMs: 15,
           prepareSession: async (session) => preparedSession(session),
           detectToolCandidates: async () => ({
             ...validateToolCandidateDetection({

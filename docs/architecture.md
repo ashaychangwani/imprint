@@ -741,3 +741,11 @@ A completed sibling cannot schedule teardown of another call's active browser.
 Calls using caller-owned pools do not arm global cleanup. Each idle callback
 also checks the session identity before eviction. This changes lifecycle only;
 tool/bootstrap keys and separate execution-rung state remain unchanged.
+
+
+Generated baseline and dependency API checks receive a child cancellation signal
+bounded by the remaining shared teach deadline. They use the same host-side
+invocation guard as playbook checks: cancellation reaches the backend ladder,
+late results are rejected, and an uncooperative runner cannot hold the controller
+past the bounded browser-cleanup period. An already exhausted budget prevents a
+new API invocation. This guard does not choose backends, inputs, or repair strategy.

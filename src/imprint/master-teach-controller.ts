@@ -154,7 +154,7 @@ import {
 
 const FOCUSED_COMPILE_CONCURRENCY = 2;
 const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
-const PLAYBOOK_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
+const TOOL_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
 export const FOCUSED_EVIDENCE_CHARACTER_BUDGET = 700_000;
 /** A retained thread may already hold 80k tokens when a new inspection arrives.
@@ -567,7 +567,7 @@ interface FreshTeachControllerDependencies {
     signal?: AbortSignal;
   }) => Promise<{ result: ToolResult<unknown>; executionMechanism: string }>;
   playbookInvocationTimeoutMs: number;
-  playbookCleanupGraceMs: number;
+  invocationCleanupGraceMs: number;
   promote: (input: {
     site: string;
     runId: string;
@@ -627,7 +627,7 @@ const defaultDependencies: FreshTeachControllerDependencies = {
     executionMechanism: 'playbook',
   }),
   playbookInvocationTimeoutMs: DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS,
-  playbookCleanupGraceMs: PLAYBOOK_INVOCATION_SETTLE_GRACE_MS,
+  invocationCleanupGraceMs: TOOL_INVOCATION_SETTLE_GRACE_MS,
   promote: promoteCompletedTools,
 };
 
@@ -3550,7 +3550,10 @@ async function runLiveCheck(input: {
       expectedResult: verification.expectedResult,
     };
   }
-  const checked = await input.deps.runApiTool({
+  const checked = await runApiToolCheck({
+    deps: input.deps,
+    runDeadline: input.runDeadline,
+    label: `live check for "${input.tool.id}"`,
     workflowPath: input.compiled.workflowPath,
     parameters,
     ...(input.apiResearch?.backend ? { backend: input.apiResearch.backend } : {}),
@@ -3565,10 +3568,10 @@ async function runLiveCheck(input: {
   };
 }
 
-/** Bound an external playbook promise even when an injected runner ignores
+/** Bound an external tool promise even when an injected runner ignores
  * cancellation. The normal runner receives the child signal and gets a short
  * chance to close its browser before this host-side guard gives up waiting. */
-export async function runPlaybookInvocationWithDeadline<T>(
+export async function runToolInvocationWithDeadline<T>(
   input: {
     timeoutMs: number;
     label: string;
@@ -3580,7 +3583,7 @@ export async function runPlaybookInvocationWithDeadline<T>(
   const timeoutMs = Math.max(1, Math.floor(input.timeoutMs));
   const cleanupGraceMs = Math.max(
     1,
-    Math.floor(input.cleanupGraceMs ?? PLAYBOOK_INVOCATION_SETTLE_GRACE_MS),
+    Math.floor(input.cleanupGraceMs ?? TOOL_INVOCATION_SETTLE_GRACE_MS),
   );
   const controller = new AbortController();
   const timeoutError = new TimeoutError(input.label, timeoutMs);
@@ -3627,6 +3630,27 @@ export async function runPlaybookInvocationWithDeadline<T>(
   }
 }
 
+async function runApiToolCheck(
+  input: Parameters<ApiToolRunner>[0] & {
+    deps: FreshTeachControllerDependencies;
+    runDeadline: RunDeadlineRef;
+    label: string;
+  },
+): ReturnType<ApiToolRunner> {
+  const { deps, runDeadline, label, ...invocation } = input;
+  const remainingRunMs = runDeadline.deadlineMs - Date.now();
+  if (remainingRunMs <= 0) throw new TimeoutError(label, 0);
+  return await runToolInvocationWithDeadline(
+    {
+      timeoutMs: remainingRunMs,
+      label,
+      signal: input.signal,
+      cleanupGraceMs: deps.invocationCleanupGraceMs,
+    },
+    async (signal) => await deps.runApiTool({ ...invocation, signal }),
+  );
+}
+
 async function runPlaybookToolCheck(input: {
   deps: FreshTeachControllerDependencies;
   playbookPath: string;
@@ -3648,12 +3672,12 @@ async function runPlaybookToolCheck(input: {
     input.deps.playbookInvocationTimeoutMs,
     input.maxDurationMs === undefined ? Number.POSITIVE_INFINITY : input.maxDurationMs,
   );
-  return await runPlaybookInvocationWithDeadline(
+  return await runToolInvocationWithDeadline(
     {
       timeoutMs,
       label: input.label,
       signal: input.signal,
-      cleanupGraceMs: input.deps.playbookCleanupGraceMs,
+      cleanupGraceMs: input.deps.invocationCleanupGraceMs,
     },
     async (signal) =>
       await input.deps.runPlaybookTool({
@@ -4212,7 +4236,10 @@ async function compileAndCheckCurrentPlan(input: {
                 maxDurationMs: input.maxDurationMs,
                 label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
               })
-            : await input.deps.runApiTool({
+            : await runApiToolCheck({
+                deps: input.deps,
+                runDeadline: input.runDeadline,
+                label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
                 workflowPath: focused.workflowPath,
                 parameters,
                 ...(apiResearch?.backend ? { backend: apiResearch.backend } : {}),
