@@ -10301,3 +10301,40 @@ Audit adds $0.3188816 and no missing semantic usage. The 28 prior missing calls
 and all caveats remain. No active teach/audit/diagnostic. Collector healthy,
 about 18.1 GiB free. No parent diagnosis or prior tools supplied to teachers,
 push, MR, merge, deletion, model switch or provider-rejection bypass.
+
+
+## 2026-09-13 11:25 PDT — Forward emitted execution controls and cancel ordinary fetches
+
+Confirmed a second cancellation gap beyond the emitted wrapper: ordinary
+executeWorkflow requests ignored opts.signal, although authentication actions
+already used it. The emitted wrapper now forwards signal, onPreparedRequest and
+onResponse. Ordinary fetch execution combines caller cancellation with its existing
+request timeout, retaining both through response reading. Cancellation before
+sending prevents the request; cancelled transport/body reads return cancellation
+instead of a timeout diagnosis or a successful empty result. Browser cancellation
+remains the backend ladder's responsibility. No backend or semantic strategy added.
+
+Four emitted-module behavior tests use synthetic transports to verify both
+observers, pre-cancelled execution, active fetch cancellation and body-read
+cancellation. 223 focused emitter/runtime/prompt-example/ladder/controller-end-to-end
+tests passed (1048 assertions, 23.28 seconds), lint 214 files and type checking
+passed. Initial type checking caught two test-fixture typing mistakes; both were
+fixed before final validation. Web build and desktop/mobile review passed without
+page errors or horizontal overflow; existing bundle warning remains. Private
+emitted-cancellation-* logs/screenshots retained and temporary preview stopped.
+
+Compiler guidance and its examples now distinguish a valid empty collection from
+missing or unsupported result data, including framed responses with earlier metadata.
+Agents determine the protocol meaning and author a focused empty-versus-missing
+parser test; the runtime adds no site-specific error classifier. No tests merely
+mirroring new prompt wording. README, architecture and website updated.
+
+This fixes cancellation and evidence forwarding, not the cause of Flights 35's
+short protocol response. That failure and all diagnostics remain preserved. Next
+fresh Flights 36 on the committed change, exact original recording/four-operation
+scope, unused home/log/manifest; never resume 35 or feed private parent findings or
+old generated tools to teachers. Independent audit and same-code repeats remain
+required. Hotels provider rejection and original malformed-handoff live coverage
+remain unresolved. Accounting unchanged through audit 35 at $743.4714408 base
+API-equivalent estimate with prior caveats. Host AC, about18GiB free, collector
+healthy, no live teach/audit/diagnostic at checkpoint. No push, MR, merge or deletion.

@@ -625,7 +625,8 @@ The response is a deeply nested array with no key names: `[null, [[...], [...], 
    ```typescript
    export function extract(rawResponse: unknown): unknown {
      const data = rawResponse as any[];
-     const items = data[1]?.[0] || [];
+     const items = data?.[1]?.[0];
+     if (!Array.isArray(items)) throw new Error('Expected result collection is absent');
      return {
        items: items.map((item: any) => ({
          name: item[2]?.[0]?.[0] || 'Unknown',
@@ -649,6 +650,16 @@ The response is a deeply nested array with no key names: `[null, [[...], [...], 
    ```
 
 6. **Refine on failure.** If assertions fail (e.g., extracted id/name/category is wrong), re-inspect the indices and adjust. Opaque positional payloads are parseable when you anchor on recorded values and verify the discovered shape with concrete assertions.
+
+Before returning an empty collection, establish that the response is a valid
+result envelope for this operation. A missing payload, protocol error, or
+unrecognized envelope is not evidence of zero matching records. Preserve a
+useful parser failure when the expected result structure is absent, while
+allowing a valid empty collection where the protocol supports it. Test those
+two cases separately with small synthetic responses based on the observed
+structure. For framed responses, inspect all relevant frames before deciding
+that result data is absent; do not reject a metadata frame ahead of later data.
+Agents determine the protocol meaning from evidence, not HTTP status alone.
 
 ## Test Assertion Bar
 
@@ -940,12 +951,13 @@ support any blocker with evidence.
 <!-- canonical-example:parser.ts -->
 ```typescript
 type CatalogResponse = {
-  items?: Array<{ id?: unknown; name?: unknown; price?: unknown }>;
+  items: Array<{ id?: unknown; name?: unknown; price?: unknown }>;
 };
 
 export function extract(rawResponse: unknown): unknown {
   const response = (rawResponse ?? {}) as CatalogResponse;
-  const items = (response.items ?? []).flatMap((item) => {
+  if (!Array.isArray(response.items)) throw new Error('Expected items collection is absent');
+  const items = response.items.flatMap((item) => {
     if (typeof item.id !== 'string' || typeof item.name !== 'string') return [];
     return [{
       id: item.id,

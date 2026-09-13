@@ -211,6 +211,11 @@ a fixture's shape must not silently become a restriction on callers.
 
 Generated modules reload from their resolved filesystem paths, so repeated
 research tests also work when the teach directory is reached through a symlink.
+Generated wrappers forward caller cancellation and request/response observation
+callbacks. Cancellation reaches active fetch requests and response reads; a
+cancelled call is reported separately from a request timeout. Raw prepared-request
+observations stay inside host diagnostics. Parsers distinguish a valid empty
+result from a missing or unsupported result envelope.
 
 Semantic agents receive the current shared deadline and remaining time on each
 turn, including output repairs, so they can budget for compilation and live

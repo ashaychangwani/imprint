@@ -109,6 +109,8 @@ import {
   executeWorkflow,
   type BrowserNavigationTransport,
   type CredentialStore,
+  type PreparedRequestObservation,
+  type ResponseObservation,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
 
@@ -120,7 +122,15 @@ ${paramTypeFields}
 
 export async function ${camelCase(workflow.toolName)}(
   ${workflow.parameters.length === 0 ? '_input' : 'input'}: ${pascalCase(workflow.toolName)}Input,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
+  opts: {
+    credentials?: CredentialStore;
+    fetchImpl?: typeof fetch;
+    browser?: BrowserNavigationTransport;
+    initialState?: Record<string, unknown>;
+    signal?: AbortSignal;
+    onPreparedRequest?: (observation: PreparedRequestObservation) => void;
+    onResponse?: (observation: ResponseObservation) => void;
+  } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -134,6 +144,9 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     fetchImpl: opts.fetchImpl,
     browser: opts.browser,
     initialState: opts.initialState,
+    signal: opts.signal,
+    onPreparedRequest: opts.onPreparedRequest,
+    onResponse: opts.onResponse,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

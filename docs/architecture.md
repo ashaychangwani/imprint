@@ -749,3 +749,16 @@ invocation guard as playbook checks: cancellation reaches the backend ladder,
 late results are rejected, and an uncooperative runner cannot hold the controller
 past the bounded browser-cleanup period. An already exhausted budget prevents a
 new API invocation. This guard does not choose backends, inputs, or repair strategy.
+
+
+Emitted workflow wrappers forward the caller's signal, prepared-request observer,
+and response observer to executeWorkflow, matching the native adapter. Ordinary
+fetch execution combines that signal with the per-request timeout and keeps it
+active through response reading. Already cancelled calls do not send requests;
+cancelled calls return a cancellation error instead of a timeout diagnosis or a
+late successful response. Browser transport cancellation remains owned by the
+backend ladder. Prepared-request observations are raw host-only diagnostics;
+response observations retain the existing bounded/redacted representation.
+Compiler parser examples and guidance distinguish a structurally valid empty
+collection from missing or unsupported result data. Agents establish protocol
+meaning and handle framing from evidence; there is no runtime envelope classifier.

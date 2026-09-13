@@ -434,6 +434,12 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   }
 
   for (let i = 0; i < opts.workflow.requests.length; i++) {
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
+    }
     const req = opts.workflow.requests[i];
     if (!req) continue;
 
@@ -540,6 +546,13 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
     observePreparedRequest(opts, i, subbed);
 
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
+    }
+
     let resp: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
@@ -579,12 +592,21 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           method: subbed.method,
           headers: subbed.headers,
           body: subbed.body,
-          signal: controller.signal,
+          signal: opts.signal
+            ? AbortSignal.any([opts.signal, controller.signal])
+            : controller.signal,
           redirect: 'follow',
         });
       } catch (err) {
         if (responseAbortTimer) clearTimeout(responseAbortTimer);
         const msg = err instanceof Error ? err.message : String(err);
+        if (opts.signal?.aborted) {
+          requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+          return withRequestStageFacts(
+            { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+            requestStageFacts,
+          );
+        }
         if (msg.includes('aborted') || msg.includes('AbortError')) {
           requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
           return withRequestStageFacts(
@@ -619,6 +641,13 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       responseReadError = err instanceof Error ? err.message : String(err);
     } finally {
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
+    }
+
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
     }
 
     const bodyPreview = responseReadError

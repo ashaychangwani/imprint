@@ -2,15 +2,16 @@
  * Tests for the codegen emitter (`imprint emit`). Verifies the shape of
  * the generated <assetRoot>/<site>/<toolName>/index.ts: WORKFLOW const, Input
  * interface, exported camelCase tool function, runtime import, default
- * fallbacks. Doesn't actually execute the generated tool — that's
- * runtime.test.ts territory.
+ * fallbacks, plus execution of emitted modules with synthetic transports.
  */
 
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
 import { emit } from '../src/imprint/emit.ts';
+import type { PreparedRequestObservation, ResponseObservation } from '../src/imprint/runtime.ts';
+import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import type { Workflow } from '../src/imprint/types.ts';
 
 function withTempDir<T>(fn: (dir: string) => T): T {
@@ -44,6 +45,114 @@ const MIN_WORKFLOW: Workflow = {
   ],
   site: 'demo',
 };
+
+async function withEmittedTool(fn: (tool: ResolvedTool['toolFn']) => Promise<void>): Promise<void> {
+  const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-emitted-execution-'));
+  try {
+    const dir = pathJoin(root, 'demo', 'do_thing');
+    mkdirSync(dir, { recursive: true });
+    const workflowPath = writeWorkflow(dir, MIN_WORKFLOW);
+    const { outPath } = emit({ workflowPath, outDir: dir });
+    const mod = await import(outPath);
+    await fn(mod.doThing);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const EMPTY_CREDENTIALS = { site: 'demo', cookies: [], values: {} };
+
+describe('emitted workflow execution', () => {
+  it('delivers prepared request and response evidence through the emitted wrapper', async () => {
+    await withEmittedTool(async (tool) => {
+      const requests: PreparedRequestObservation[] = [];
+      const responses: ResponseObservation[] = [];
+      const result = await tool(
+        { q: 'fixture query' },
+        {
+          credentials: EMPTY_CREDENTIALS,
+          fetchImpl: async () => Response.json({ items: [{ id: 'fixture-item' }] }),
+          onPreparedRequest: (value: PreparedRequestObservation) => requests.push(value),
+          onResponse: (value: ResponseObservation) => responses.push(value),
+        },
+      );
+      expect(result.ok).toBe(true);
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        requestIndex: 0,
+        method: 'GET',
+        url: 'https://example.com/api/x?q=fixture%20query&n=10',
+      });
+      expect(responses).toHaveLength(1);
+      expect(responses[0]).toMatchObject({
+        requestIndex: 0,
+        status: 200,
+        valueType: 'object',
+        topLevelKeys: ['items'],
+      });
+      expect(responses[0]?.bodyByteLength).toBeGreaterThan(0);
+    });
+  });
+
+  it('does not send a request when the caller already cancelled', async () => {
+    await withEmittedTool(async (tool) => {
+      const controller = new AbortController();
+      controller.abort();
+      let calls = 0;
+      const result = await tool(
+        { q: 'fixture' },
+        {
+          credentials: EMPTY_CREDENTIALS,
+          signal: controller.signal,
+          fetchImpl: async () => {
+            calls++;
+            return Response.json({ items: [] });
+          },
+        },
+      );
+      expect(calls).toBe(0);
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'NETWORK',
+        message: 'Request 0 was cancelled.',
+      });
+    });
+  });
+
+  for (const phase of ['fetch', 'body'] as const) {
+    it(`propagates caller cancellation during ${phase} without reporting a timeout`, async () => {
+      await withEmittedTool(async (tool) => {
+        const controller = new AbortController();
+        let transportSignal: AbortSignal | null | undefined;
+        const cancel = () => {
+          controller.abort();
+          expect(transportSignal?.aborted).toBe(true);
+          throw new DOMException('aborted', 'AbortError');
+        };
+        const result = await tool(
+          { q: 'fixture' },
+          {
+            credentials: EMPTY_CREDENTIALS,
+            signal: controller.signal,
+            fetchImpl: async (_url: unknown, init?: RequestInit) => {
+              transportSignal = init?.signal;
+              if (phase === 'fetch') cancel();
+              const response = Response.json({ items: [] });
+              Object.defineProperty(response, 'text', { value: async () => cancel() });
+              return response;
+            },
+          },
+        );
+        expect(transportSignal?.aborted).toBe(true);
+        expect(result).toMatchObject({
+          ok: false,
+          error: 'NETWORK',
+          message: 'Request 0 was cancelled.',
+        });
+      });
+    });
+  }
+});
 
 describe('emit', () => {
   it('writes <assetRoot>/<site>/<toolName>/index.ts with the expected exports', () => {
