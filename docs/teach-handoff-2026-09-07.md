@@ -1,6 +1,22 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 03:22 PDT
+## Current continuation — September 13, 03:53 PDT
+
+Flights 31 missed the 30-minute target with no published tools. Lookup/grid research
+proven; search rendered results useful but booking selection unproven. Booking's
+stale recorded request returned only error 13 and a blocked handoff reached the
+master. The master retained working research and revised search/booking together
+around a coherent booking_context, with fresh search proof first. No generated
+chain or independent grouped result yet; original malformed-handoff catch still
+unexercised. See newest timeline for actual facts and exclusions.
+
+PID 2351, run 0f4bd323-5e73-4a94-ab66-d0d35f8b54a6, home-31, unchanged 19bdd7c.
+Original assessment 11:21:32 UTC and hard deadline 11:51:32 UTC September 13.
+Collector healthy, 20.31 GiB free. Accounting unchanged through audit 30. Audit
+completion independently; Hotels 8 waits for complete Flights success. No parent
+private findings, prior tools, concurrent diagnostics, resume or deadline extension.
+
+## Previous checkpoint — September 13, 03:22 PDT
 
 ACTIVE fresh Flights 31, PID 2351, home-31, implementation 19bdd7c. Started
 10:21:32 UTC September 13; target 10:51:32, assessment 11:21:32, hard deadline

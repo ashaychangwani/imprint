@@ -9572,3 +9572,31 @@ failures and audit independently afterward. No previous tools, examples or priva
 parent diagnostic results supplied. Hotels 8 waits for complete Flights success.
 Accounting remains through audit 30; active teach excluded. No push, MR, merge,
 deletion, failed-run resume, concurrent live diagnostic or deadline extension.
+
+
+## 2026-09-13 03:53 PDT — Flights 31 misses target; master repairs fresh booking context
+
+Flights 31 passed 30 minutes with no published tools. Lookup and grid research
+report proven; search has useful rendered one-way results but lacks a grounded
+booking selection and remains partial. Booking returned a blocked handoff: the
+exact recorded 608-byte request body produced only protocol error 13, with no
+itinerary or offers. Its researcher preserved that failed observation and requested
+fresh search output plus the matching route/date/carrier/flight context instead of
+claiming stale-token success. This ordinary blocked return is not live exercise of
+the original malformed-handoff recovery catch.
+
+The master received those facts, kept lookup/grid work, removed unsupported
+flight-number output from the search promise, and revised search and booking
+contracts together around an opaque booking_context containing coherent same-record
+selection and itinerary fields. Search research is continuing before fresh booking
+proof. A new CDP call completed after a 35.658-second capture failure, but transport
+completion is not semantic proof. No generated chain or independent group result
+exists yet. Narrowing unproven output does not establish that output was repaired.
+
+PID 2351, run 0f4bd323-5e73-4a94-ab66-d0d35f8b54a6, home-31, unchanged 19bdd7c.
+Keep original 11:21:32 UTC assessment and 11:51:32 hard deadline September 13.
+Collector healthy, 20.31 GiB free. Accounting unchanged through audit 30; active
+teach excluded. No parent private findings, prior generated tools, code change,
+concurrent live diagnostics, failed-run resume or deadline extension. Audit after
+completion; Hotels 8 still waits for complete Flights success. No push, MR, merge
+or deletion.
