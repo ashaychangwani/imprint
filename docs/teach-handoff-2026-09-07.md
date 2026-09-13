@@ -1,6 +1,21 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 04:59 PDT
+## Current continuation — September 13, 05:00 PDT
+
+ACTIVE fresh Flights 32, PID 36440, home-32, implementation 7f5af6b. Started
+11:58:51 UTC September 13; target 12:28:51, assessment 12:58:51, hard deadline
+13:28:51 UTC. Verify flights-teach-32-manifest.json/log. Original recording and
+four-operation scope. No concurrent live diagnostic. Audit completion independently;
+Hotels 8 waits for complete Flights success and runs on unchanged code.
+
+7f5af6b adds general compiler/reviewer guidance for explicit hidden input guards
+and parent-versus-child metadata, without runtime changes. Passed 133 tests,
+lint, types, web build and desktop/mobile visual checks. Prior audit failure and
+artifacts preserved. Host open on AC, collector healthy, 19.82 GiB free. Accounting
+through audit 31, active teach excluded. No private findings or previous tools
+supplied to teachers. No push, MR, merge, deletion, resume or extension.
+
+## Previous checkpoint — September 13, 04:59 PDT
 
 Audit 31 ended FAIL 9/18 graded: 15 actual calls, four correct, nine broken,
 two timeouts excluded, five working and six untestable inputs. Search mapped
