@@ -1,6 +1,40 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 14:10 PDT
+## Current continuation — September 13, 14:20 PDT
+
+Flights 37 ended after 90.0034140861 minutes on unchanged 7283ddb, four ready and
+one not ready. The original deadline stopped the newly started final-booking
+compiler. Narrowed select_flight passed its regenerated baseline and fresh chain;
+get_flight_booking_options was not published. The four published tools therefore
+cover lookup, search, fixed-duration calendar and intermediate return selection.
+This is a failed full-scope teach, not a four-operation success or repeatability.
+
+Completion review correctly rejected the prior combined tool's absent final-booking
+execution, and the master split the dependency chain. Late booking research proved
+direct API offers for SJC–SAN AS1307 outbound and AS2498 versus AS3147 return.
+Private flights-37-booking-research-provenance.json checks each consumer's token and
+return-flight identity co-occur in its matching fresh producer row. This bounded
+check does not prove the full generated booking chain or connecting support. Earlier
+HTTP400/BAD_RESPONSE transport attempts, completion failures and initial stale-value
+diagnostic remain preserved. No private parent diagnosis was supplied to teachers.
+
+Independent audit 37 started at 21:19:57 UTC, PID41953, home-37, deadline22:04:57 UTC.
+It covers only the four published tools; final booking is absent. Teach PID2999
+ended before launch. Inspect actual calls, failures, exclusions and public input
+scope; a partial audit pass cannot establish the original goal. Code remains
+unchanged. Collector healthy, host AC, about18GiBfree, no concurrent live diagnostic.
+
+Accounting through teach37:45 teaches/33 audits,78 traces/8831 spans/2919 usage
+carriers,3405.9682271773 summed minutes; input645107661, cache reads535002240,
+output6914149, emitted writes0; $792.70556 base API-equivalent estimate. Teach37
+adds $31.8918712, input25675590/read21198208/output275153,342 spans/100 usage,
+trace8EEW3LcQDRtWhBK4TvP7Bg==. Final master decision has no reported usage,
+bringing missing semantic calls to29; interrupted booking compiler usage may also
+be incomplete. Preserve all earlier pricing/cache/CLI caveats. Active audit excluded.
+No push, MR, merge, deletion, failed-run resume or model switch. Original malformed
+researcher catch, typed missing-field live repair and Hotels rejection unresolved.
+
+## Previous checkpoint — September 13, 14:10 PDT
 
 Flights 37 remains active about 82 minutes into its unchanged 7283ddb run. The
 independent completion review correctly failed the combined selection tool:
