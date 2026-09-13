@@ -9747,3 +9747,37 @@ Collector healthy, 19.51 GiB free. No parent private findings, prior generated
 tools, runtime change or concurrent live diagnostic. Accounting unchanged through
 audit 31; active teach excluded. Audit independently afterward; Hotels 8 waits for
 complete Flights success. No push, MR, merge, deletion, resume or deadline extension.
+
+
+## 2026-09-13 06:00 PDT — One-hour assessment: complete research, narrower grounded calendar
+
+Continue Flights 32 to its original 13:28:51 UTC hard deadline. At one hour no
+tools are published, but all four research handoffs are now proven and the master
+is moving to focused planning with retained drafts. About 29 minutes remain for
+compilation and validation; a full finish is uncertain, but there is a concrete
+complete research set to validate. The target was missed; no deadline extension.
+
+The master removed four unproven calendar-window inputs after research showed that
+the page-owned request did not consume them. The contract now honestly exposes
+origin, destination, departure_date and return_date for an anchor-centered 7-by-7
+round-trip grid. Fresh SFO–BOS November and December contrasts moved the grid axes;
+a route contrast changed the same anchor fare from 365 to 317. This is grounded
+narrowing, not repair of arbitrary-width windows. Latest research has two retained
+observations for the revised boundary; earlier failures remain in prior evidence.
+
+Booking research used fresh producer 94eca744 and successful consumer 4027de6d,
+which captured GetBookingResults for F9 3308 SFO–LAX October 22, 08:58–10:35, with
+Frontier and Booking.com offers. Parent read-only inspection found exact token
+matches after nested JSON decoding at the producer record's [2][0][0][1][1] path
+in multiple frames. selected_flights is explicitly reconstructed JSON containing
+origin, formatted date, destination, null, carrier and flight number from that same
+record's segment fields; the mapped list matches the consumer input exactly. It is
+not a raw byte-for-byte producer string. This one-segment research chain does not
+prove generated or independent grouped behavior. No private findings supplied.
+
+PID 36440, run ade1ab26-d0d3-4d74-a21b-0ee71a5b3692, home-32, unchanged 7f5af6b.
+Host on AC, collector healthy, 19.36 GiB free. Accounting through audit 31 remains;
+active teach excluded. Original malformed-handoff catch still unexercised. Audit
+independently after completion; Hotels 8 waits for complete Flights success. No
+concurrent diagnostic, parent implementation change, prior tools, push, MR, merge,
+deletion, failed-run resume or extended deadline.

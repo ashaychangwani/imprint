@@ -1,6 +1,24 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 05:30 PDT
+## Current continuation — September 13, 06:00 PDT
+
+One-hour assessment: continue Flights 32 within original 13:28:51 UTC hard deadline.
+No published tools yet, but all four research handoffs proven and master moving to
+focused planning with retained drafts; about 29 minutes remain. Finish uncertain.
+Calendar narrowed to explicit departure/return anchors for the observed 7-by-7 grid;
+four unused window inputs removed. Narrowing does not prove arbitrary-width support.
+
+Fresh booking producer 94eca744 / consumer 4027de6d match F9 3308 SFO–LAX Oct22.
+Parent read-only check verified exact decoded token plus reconstructed same-record
+segment list; serialized representation change is explicit. This is API research,
+not generated or independent group proof. No private findings supplied to teachers.
+
+PID 36440, run ade1ab26-d0d3-4d74-a21b-0ee71a5b3692, home-32, unchanged 7f5af6b.
+Collector healthy, host AC, 19.36 GiB free. Accounting unchanged through audit 31.
+Audit afterward; Hotels 8 waits for complete Flights success. No concurrent live
+diagnostic, prior tools, push, MR, merge, deletion, resume or deadline extension.
+
+## Previous checkpoint — September 13, 05:30 PDT
 
 Flights 32 missed the 30-minute target with no published tools. Lookup/search
 research proven; current search captured a real GetShoppingResults API response.
