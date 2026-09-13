@@ -1,6 +1,23 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 12, 01:59 PDT
+## Current continuation — September 13, 01:37 PDT
+
+ACTIVE fresh Flights 30, PID 68551, home-30, unchanged 0ce9fe9. Started
+08:36:06 UTC September 13; target 09:06:06, assess 09:36:06, hard deadline
+10:06:06 UTC. Verify flights-teach-30-manifest.json/log. Host is open and on AC
+power (8% battery charging), collector healthy, 21.40 GiB free. No prior live
+teach/audit remains. Original recording/exact four-operation guidance; no previous
+tools/examples/private diagnosis supplied. Independent audit follows; Hotels 8
+waits for full Flights success. No concurrent live diagnostic or failed-run resume.
+
+Flights 29's sleep-interrupted failure is accounted, zero tools and no audit.
+Totals unchanged: 36 teaches/28 audits, 64 traces/6,743 spans/2,277 usage,
+2762.9076446682 summed minutes, input 492,826,593, reads 406,562,944, output
+5,301,206, writes 0, $613.7038936 base estimate; 26 missing semantic calls and
+prior caveats remain. Active teach 30 excluded. Read newest timeline/accounting.
+No implementation change, forced wake, deletion, push, MR or merge.
+
+## Previous checkpoint — September 12, 01:59 PDT
 
 NO ACTIVE teach or audit. Flights 29 PID 1904 ended with zero tools after host
 clamshell sleep at 03:02:41 UTC. Terminal failure recorded 03:35:13 UTC during

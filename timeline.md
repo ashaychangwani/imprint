@@ -9418,3 +9418,22 @@ while the host remains in battery clamshell sleep; monitor can start a fresh
 Flights 30 on unchanged 0ce9fe9 when the host is awake, after usual checks. No
 failed-run resume, forced wake, parent private findings, deletion, push, MR or merge.
 Hotels 8 still waits for full Flights success. Repeatability remains unproven.
+
+
+## 2026-09-13 01:37 PDT — Host awake on power; fresh Flights 30 starts
+
+The host is now open and on AC power (8% battery, charging). Collector responds,
+21.40 GiB is free, the exact recording is present, branch is clean, and no prior
+teach or audit remains active. No live run was launched during battery clamshell
+sleep. The delayed task continued only after these current checks.
+
+Fresh Flights 30 started 08:36:06 UTC September 13, PID 68551, unused home-30,
+unchanged 0ce9fe9. Original recording and exact four-operation scope. Target
+09:06:06, assessment 09:36:06, hard deadline 10:06:06 UTC. No previous tools,
+examples, private parent diagnosis or failed-run resume. Independently audit
+afterward; Hotels 8 waits for full Flights success. No concurrent live diagnostic.
+
+Flights 29 remains a sleep-interrupted failure with zero published tools and no
+audit. Accounting stays through that attempt: 36 teaches/28 audits, $613.7038936
+base estimate, 26 missing semantic calls with prior caveats. Active teach 30 is
+excluded until completion. No code/prompt change, deletion, push, MR or merge.
