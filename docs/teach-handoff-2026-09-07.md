@@ -1,6 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 04:42 PDT
+## Current continuation — September 13, 04:59 PDT
+
+Audit 31 ended FAIL 9/18 graded: 15 actual calls, four correct, nine broken,
+two timeouts excluded, five working and six untestable inputs. Search mapped
+connecting destinations to layover codes; calendar rejected schema-valid ranges
+because its parser silently requires exactly seven days. Fresh nonstop booking
+and lookup passed. No grouped booking success. Preserve all evidence and counts.
+
+General prompt correction checks explicit parser/request restrictions against the
+public contract and distinguishes parent-record metadata from first-child fields.
+Runtime and generated tools unchanged. Checks passed: 133 tests/795 assertions,
+lint, types, web build and desktop/mobile visuals. Next: fresh Flights 32, not a
+resume of failed teach 31. No teach/audit active; verify prior processes ended.
+
+Accounting through audit 31: 38 teaches/30 audits, 68 traces/7,344 spans/2,436 usage,
+2935.1760957252 minutes, input 531,971,970, reads 438,734,336, output 5,725,234,
+writes 0, $662.9489504 base estimate. Twenty-six missing semantic calls and prior
+caveats remain. Hotels 8 waits for complete Flights success. No push, MR, merge,
+deletion or private findings supplied to teachers. See newest timeline/accounting.
+
+## Previous checkpoint — September 13, 04:42 PDT
 
 ACTIVE full independent Flights audit 31, PID 34143, home-31. Started 11:40:47 UTC,
 cap 12:25:47 UTC September 13. Verify flights-audit-31-manifest.json/log. Audit all

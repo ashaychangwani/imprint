@@ -9663,3 +9663,42 @@ $19.2119856 and no missing usage; 26 prior missing semantic calls and caveats re
 Active audit excluded. Collector healthy, 19.99 GiB free. Original malformed-handoff
 catch still unexercised live. No push, MR, merge, deletion, failed-run resume or
 extended deadline.
+
+
+## 2026-09-13 04:59 PDT — Independent audit fails; expose hidden contract restrictions
+
+Flights audit 31 ended in 9.0303 minutes with FAIL 9/18 graded units. The actual
+15 calls comprise four correct, nine broken and two infrastructure timeouts;
+five inputs worked and six calendar inputs were untestable. Both fresh nonstop
+booking comparisons passed (NH 107 with 12 offers, JL 1 with 27). No connecting
+booking success was established. All four search calls returned contradictory
+connecting records: the first segment's destination code was paired with the
+whole itinerary's destination name. Calendar returned five parser failures and
+two GetCalendarGrid timeouts; keep both failure classes.
+
+Read-only source inspection isolated the calendar defect: public start/end inputs
+allow ordinary ranges, but the parser rejects any width other than exactly seven
+days. Audit used October 20–22 and October 27–29, which its request transform
+accepts. This explicit guard guarantees the parser failure; no speculative live
+retry is needed. Search's regex reads just the first segment of the itinerary
+attribute and combines it with the whole-card summary. No artifacts were edited.
+
+Make a general prompt correction: compiler and baseline reviewer compare explicit
+parser/request rejection guards with the public input domain and report exact
+contradictions even when the sampled baseline passes. A fixture's width or shape
+cannot silently restrict callers. Also clarify parent-record versus first-child
+metadata. The master chooses repair or an explicit narrower contract; runtime
+unchanged, no site-specific condition or broad mandatory parameter sweep. Update
+README, architecture and website. Validation passed: 133 tests/795 assertions,
+lint 214 files, type checking, web build and desktop/mobile visual checks without
+page errors or overflow. Existing bundle-size warning remains. No new tests that
+merely mirror prompt wording. Next is fresh Flights 32 after this checkpoint.
+
+Accounting: 38 teaches/30 audits, 68 traces/7,344 spans/2,436 usage carriers,
+2935.1760957252 summed minutes; input 531,971,970, reads 438,734,336,
+output 5,725,234, emitted writes 0, $662.9489504 base estimate. Audit adds
+$0.6892936 with no missing usage; 26 prior missing semantic calls and caveats remain.
+Whole-second audit timings retained in flights-audit-31-timing.json. No teach or
+audit active after audit PID 34143 ended. Original malformed-handoff catch remains
+unexercised. Hotels 8 waits for complete Flights success. No push, MR, merge,
+deletion, private parent findings supplied, failed-run resume or deadline extension.

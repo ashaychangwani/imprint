@@ -37,6 +37,12 @@ including identities and order. A singleton success does not prove preservation
 of multiple members. If a fixed planned example cannot exercise that distinction,
 the compiler reports the gap for a master decision. Selection and interpretation
 remain agent decisions; the runtime adds no group classifier or sampling rule.
+The compiler checks that group-level metadata is not taken from the first child.
+Semantic review also reports concrete rejection guards in supplied parser/request
+source that contradict the declared core input domain, even if the sampled
+baseline passes. This is evidence-based contract review, not an exhaustive
+parameter sweep. The master chooses repair or an explicit narrower contract;
+the runtime does not infer restrictions from the fixture's width or shape.
 Semantic result evidence includes the actual invocation inputs. A planned
 verification expectation applies only when its inputs match those actually
 sent. Otherwise the reviewer judges the tool's general promised output for

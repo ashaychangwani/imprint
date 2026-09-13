@@ -203,6 +203,9 @@ producer outputs and consumer inputs together; fresh live proof is still require
 For tools that accept grouped selections, chain checks and audits use a fresh
 multi-member record when available and compare the complete returned group.
 A passing singleton check does not establish that every selected member survives.
+Parsers keep group metadata separate from child metadata. Reviewers also report
+explicit parser or request guards that reject inputs allowed by the public contract;
+a fixture's shape must not silently become a restriction on callers.
 
 Generated modules reload from their resolved filesystem paths, so repeated
 research tests also work when the teach directory is reached through a symlink.
