@@ -10338,3 +10338,21 @@ required. Hotels provider rejection and original malformed-handoff live coverage
 remain unresolved. Accounting unchanged through audit 35 at $743.4714408 base
 API-equivalent estimate with prior caveats. Host AC, about18GiB free, collector
 healthy, no live teach/audit/diagnostic at checkpoint. No push, MR, merge or deletion.
+
+
+## 2026-09-13 11:26 PDT — Start fresh emitted-cancellation validation
+
+Fresh Flights 36 started September 13 at 18:25:58 UTC on implementation 28de4ed.
+PID69200, unused home-36, exact original recording and four-operation guidance.
+Target18:55:58, assessment19:25:58, hard deadline19:55:58 UTC. Verified clean branch
+and source ancestry, prior teach/audit/preview ended, collector healthy,18.04GiB
+free, host on AC. No prior tools or private parent diagnosis supplied to teachers.
+
+This is the first fresh validation after emitted callback forwarding, ordinary
+fetch cancellation and parser envelope guidance. Independent audit remains required
+if tools publish; retain actual failures and fresh complete booking provenance.
+Do not resume35, reroll its failed audit, or call this repeatability. Hotels provider
+rejection and original malformed-handoff live coverage remain unresolved. No
+concurrent live diagnostic. Accounting stays through audit35 at $743.4714408 base
+API-equivalent estimate with all prior caveats; active36 excluded. No push, MR,
+merge, evidence deletion, model switch or provider-rejection bypass.
