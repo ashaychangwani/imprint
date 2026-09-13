@@ -1,6 +1,17 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 03:21 PDT
+## Current continuation — September 13, 03:22 PDT
+
+ACTIVE fresh Flights 31, PID 2351, home-31, implementation 19bdd7c. Started
+10:21:32 UTC September 13; target 10:51:32, assessment 11:21:32, hard deadline
+11:51:32 UTC. Verify flights-teach-31-manifest.json/log. Original recording and
+exact four-operation scope. Monitor full fresh grouped selections, master repairs,
+and truthful public scope. No concurrent live diagnostic. Independently audit
+completion; Hotels 8 waits for complete Flights success. Never resume failed 30.
+Host open on AC, collector healthy, 20.55 GiB free. No private diagnosis or prior
+generated tools supplied. Accounting through audit 30, active teach excluded.
+
+## Previous checkpoint — September 13, 03:21 PDT
 
 Audit 30 ended: PASS 21/21 graded, 13 correct calls, eight working inputs,
 two booking inputs untestable, no failures/exclusions. Follow-up on fresh outputs

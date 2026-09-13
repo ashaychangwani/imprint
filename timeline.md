@@ -9556,3 +9556,19 @@ semantic calls and prior caveats remain. Five deterministic diagnostic calls hav
 no LLM usage; separate invocation timings and evidence are preserved in accounting.
 Original malformed-handoff catch still unexercised live. No push, MR, merge,
 deletion, failed-run resume, private parent diagnosis supplied or deadline extension.
+
+
+## 2026-09-13 03:22 PDT — Fresh Flights 31 validates grouped-selection guidance
+
+Fresh Flights 31 started at 10:21:32 UTC, PID 2351, unused home-31, implementation
+19bdd7c. Exact original recording and four-operation guidance, two-worker setting.
+Target 10:51:32, assessment 11:21:32, hard deadline 11:51:32 UTC September 13.
+No prior teach, audit or diagnostic remains active. Host open on AC, 80% battery;
+collector healthy, 20.55 GiB free, branch clean before launch. No forced wake.
+
+Monitor whether the compiler chooses a complete fresh group and whether the master
+repairs gaps without narrowing away useful producer records. Preserve all actual
+failures and audit independently afterward. No previous tools, examples or private
+parent diagnostic results supplied. Hotels 8 waits for complete Flights success.
+Accounting remains through audit 30; active teach excluded. No push, MR, merge,
+deletion, failed-run resume, concurrent live diagnostic or deadline extension.
