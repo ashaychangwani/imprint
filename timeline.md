@@ -9520,3 +9520,39 @@ output 5,522,055, emitted writes 0, $642.0972592 base estimate. Teach adds
 $28.3933656, no new missing usage; 26 prior missing semantic
 calls and other caveats remain. Active audit excluded. Collector healthy,
 20.83 GiB free. No push, MR, merge, deletion, resume or deadline extension.
+
+
+## 2026-09-13 03:21 PDT — Audit sample passes; fresh connecting booking drops a segment
+
+Flights audit 30 ended in 6.7824 minutes: PASS 21/21 graded, comprising 13 correct
+calls and eight working parameters, no broken calls or infrastructure exclusions.
+Both booking inputs remained individually untestable because the auditor changed
+coherent pairs together. Its Frontier F9 2858 and Southwest WN 2847 calls were
+nonstop. A recovered provider stream reset did not prevent completion.
+
+A targeted follow-up used the current generated tools and fresh upstream outputs.
+Search returned AS 1397 LAX–PDX / AS 336 PDX–JFK for October 22–23. Booking with
+that record's exact pair returned 12 offers and an itinerary for LAX–PDX only.
+The request transform reconstructs the first segment and the result is wrong for
+the full selection. Preserve the original audit pass alongside this actual failure;
+do not call Flights complete or advance Hotels on this result. A separate invalid
+`x` token still returned the same 20 nonstop offers and semantic fields; token
+necessity remains unproven. This negative input is not a valid independent contrast.
+
+Add a small general prompt correction: when a consumer supports grouped selections,
+compiler chain checks and independent audits choose a fresh multi-member record
+when available and compare every member and order. A singleton cannot prove group
+preservation. Unavailable coverage remains a reported gap for the master. Runtime,
+generated artifacts and input recordings are unchanged; no site-specific rule.
+Update README, architecture and website. Checks: 56 tests/242 assertions passed,
+lint 214 files clean, types and web build passed, desktop/mobile visual inspection
+passed with no page errors or overflow. Existing bundle-size warning remains.
+No new prompt-mirroring tests. Next is fresh Flights 31, never resume teach 30.
+
+Accounting through audit 30: 37 teaches/29 audits, 66 traces/7,067 spans/2,355 usage,
+2852.5206442564 summed minutes; input 514,028,278, reads 423,225,728,
+output 5,527,359, emitted writes 0, $643.0476712 base estimate. Twenty-six missing
+semantic calls and prior caveats remain. Five deterministic diagnostic calls have
+no LLM usage; separate invocation timings and evidence are preserved in accounting.
+Original malformed-handoff catch still unexercised live. No push, MR, merge,
+deletion, failed-run resume, private parent diagnosis supplied or deadline extension.

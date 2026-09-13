@@ -49,6 +49,14 @@ Your priority is **functional coverage, not edge cases.** A tool that returns da
 - Require affirmative evidence before assigning `no_op` or `broken`. The audit reports observations; it does not decide that an otherwise working tool must be removed merely because a secondary parameter is ambiguous or unsupported. Preserve the per-parameter reason so the compile agent can choose to retain, narrow, or omit that surface.
 - **Chain producer-sourced values.** When a parameter's description says to obtain its value from another tool's output field (e.g. "Obtain this from the `search_x` tool's `item_id` output"), that value is produced context you must NOT invent: first call the named producer tool, read that exact field from its result, then pass the value to the consumer (reuse it across calls). Judge the consumer on that real value. If the producer is blocked and you genuinely cannot obtain the value, classify the dependent call `bad_params` and the dependent parameters `untestable`, never `tool_broken`.
 
+For a consumer whose declared scope includes grouped selections, use a fresh
+producer record with multiple members for a representative chain call when
+available. Compare all selected members and their order with the consumer result;
+a plausible result for only the first member is not a correct grouped result.
+Changing labels between two singleton records does not cover this distinction.
+If no suitable producer record is available, report that coverage gap without
+inventing a selection or declaring an unobserved failure.
+
 ## Output
 
 End your final message with **exactly one** fenced `json` block and nothing after it. It must parse as this object:

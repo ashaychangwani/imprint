@@ -200,6 +200,9 @@ retries that exact delivery once on the same conversation and deadline.
 Researchers can return a concrete input or dependency gap for a master decision
 without exhausting transport permutations. The master coordinates affected
 producer outputs and consumer inputs together; fresh live proof is still required.
+For tools that accept grouped selections, chain checks and audits use a fresh
+multi-member record when available and compare the complete returned group.
+A passing singleton check does not establish that every selected member survives.
 
 Generated modules reload from their resolved filesystem paths, so repeated
 research tests also work when the teach directory is reached through a symlink.

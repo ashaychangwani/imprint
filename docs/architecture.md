@@ -31,6 +31,12 @@ that same record for related consumer inputs. The runtime does not choose a
 row or serialize objects implicitly. Binding failures report the bad path and
 explain that the consumer was not called; a wiring-only repair keeps working
 artifacts and reruns the chain check.
+For consumers that accept grouped selections, the compiler and auditor choose a
+fresh multi-member producer record when available and compare the complete group,
+including identities and order. A singleton success does not prove preservation
+of multiple members. If a fixed planned example cannot exercise that distinction,
+the compiler reports the gap for a master decision. Selection and interpretation
+remain agent decisions; the runtime adds no group classifier or sampling rule.
 Semantic result evidence includes the actual invocation inputs. A planned
 verification expectation applies only when its inputs match those actually
 sent. Otherwise the reviewer judges the tool's general promised output for

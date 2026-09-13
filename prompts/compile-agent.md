@@ -1153,6 +1153,12 @@ would fool that shortcut; preserve the full selected group when the contract
 requires it. Checking identity also does not apply a selection: the resulting
 request or interaction must choose the corresponding record, not a fixed
 default that happened to match the baseline.
+When the declared consumer accepts a selected group, choose a fresh producer
+record with multiple members for a representative chain check when available.
+Compare the complete returned group with the chosen record, including member
+identities and order. A successful singleton does not exercise preservation of
+multiple members. If the plan's fixed example cannot distinguish these behaviors,
+report that coverage gap to the master instead of extrapolating the singleton.
 
 ## WorkflowSchema Reference
 

@@ -1,6 +1,25 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 03:05 PDT
+## Current continuation — September 13, 03:21 PDT
+
+Audit 30 ended: PASS 21/21 graded, 13 correct calls, eight working inputs,
+two booking inputs untestable, no failures/exclusions. Follow-up on fresh outputs
+found a real connecting-booking failure: LAX–PDX–JFK selected, LAX–PDX only returned.
+No complete Flights success. Preserve both outcomes. Hotels 8 waits. See newest
+timeline and accounting for exact evidence, timings and negative token diagnostic.
+
+General compiler/audit prompt correction asks for a representative multi-member
+selection within declared scope and comparison of the complete group. Runtime
+unchanged. Validation passed: 56 tests, lint, types, web build and desktop/mobile
+visual checks. Fresh Flights 31 is next; never resume the failed prior output.
+No active teach/audit after audit 30; verify diagnostic processes ended before launch.
+
+Totals: 37 teaches/29 audits, 66 traces/7,067 spans/2,355 usage, 2852.5206442564
+minutes, input 514,028,278, reads 423,225,728, output 5,527,359, writes 0,
+$643.0476712 base estimate. Twenty-six missing semantic calls; prior caveats remain.
+Original malformed-handoff catch still unexercised. No push, MR, merge or deletion.
+
+## Previous checkpoint — September 13, 03:05 PDT
 
 ACTIVE full independent Flights audit 30, PID 99332, home-30, started 10:03:20 UTC,
 cap 10:48:20 UTC September 13. Verify flights-audit-30-manifest.json/log. Audit all
