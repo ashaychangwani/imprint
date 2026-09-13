@@ -10197,3 +10197,36 @@ zero published tools and remains fully preserved. Accounting stays through
 teach 34 at $728.7409104 base estimate; active 35 excluded. Hotels provider
 rejection and original malformed-handoff live coverage remain unresolved.
 No concurrent live diagnostic, failed-run resume, push, MR, merge or deletion.
+
+
+## 2026-09-13 10:44 PDT — Three direct-API tools pass; lookup repair misses target
+
+Flights 35 missed the 30-minute completion target. At 32.5 minutes, search,
+calendar and booking were published through direct API execution. Lookup still
+requires repair: the generated LHR response identified Heathrow Airport but omitted
+the airport code required by its contract. The master is reviewing that factual
+failure; the other three tools retain their successful work. Completion review
+and independent audit have not run, so this is not a four-tool success.
+
+Search returned 16 coherent SEA–BOS one-way itineraries for November 12. Calendar
+returned the exact changed three-by-four grid (12 records), beyond its researched
+five-by-five window shape. Booking's AA 238 baseline passed, then the generated
+fresh search-to-booking chain selected Delta DL 474 SEA–BOS November 12 and returned
+five matching offers with fares and purchase paths. All are direct fetch results;
+additional independent route, parameter and connecting coverage remains required.
+
+Read-only provenance check saved in flights-35-research-provenance.json: the
+non-first AA 238 consumer observation 2cbad0c9 used an exact token from fresh search
+observation d9ab1392, decoded record [2][0][2], token at [1][1] inside that record.
+Its route, date and flight identity come from that same record's segment. The
+public selected_flights string is JSON wrapping the exact token and reconstructed
+segment tuple; it is not a literal opaque-string copy. No parent findings were
+supplied to teaching agents. Earlier research also tested first-result JetBlue,
+and the master required a non-first contrast before accepting chosen-record control.
+
+PID 46361, run 9711af94-3bc2-4ea7-83f6-7b704581e370, home-35, unchanged 3710c47.
+Keep 18:11:36 UTC assessment and 18:41:36 hard deadline September 13. Collector
+healthy, 17.45 GiB free. Accounting remains through teach 34 at $728.7409104 base
+estimate; active 35 excluded. Original malformed-handoff live coverage and Hotels
+provider rejection remain unresolved. No concurrent live diagnostic, previous tools,
+implementation changes, failed-run resume, push, MR, merge or evidence deletion.
