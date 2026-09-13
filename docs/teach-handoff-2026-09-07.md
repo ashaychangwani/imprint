@@ -1,6 +1,43 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 13:24 PDT
+## Current continuation — September 13, 14:02 PDT
+
+Continue Flights 37 within its original 21:19:11 UTC hard deadline. The one-hour
+assessment was delayed while responding to the user's status request; at 66 minutes
+three tools were published, and at 72 minutes all four were published. Search and
+calendar repairs produced useful API captures, providing a concrete reason to use
+the remaining time for completion review. Code remains unchanged at 7283ddb. The
+30-minute target was missed; publication is not full completion or an audit pass.
+
+Search's revised CDP API capture returned 22 LAX–LAS outbound choices. Calendar's
+CDP API capture returned five departure dates, October 20–24, each paired with a
+return nine days later. Its public inputs are origin, destination,
+departure_date_range and trip_duration_days. This is a fixed-duration calendar MVP;
+it does not repair or establish independent departure and return ranges. Initial
+direct-fetch BAD_RESPONSE failures remain preserved.
+
+Selection passed direct-fetch baseline and generated dependency checks, returning
+three LAS–LAX choices with cumulative selection contexts. A private read-only check
+in flights-37-chain-provenance-check.json confirms the consumer's selected_flights
+input exactly equals row zero of the fresh generated search output, including its
+token and serialized segments. Each result adds a return segment. This proves an
+intermediate selection path, not final booking offers or connecting itineraries.
+Independent completion review is now running; a separate live audit must inspect
+both branches and all advertised inputs after teach completion.
+
+Recorded generated call durations: lookup 0.328s, search 47.356s, calendar 34.227s,
+selection baseline 0.436s, dependency invocation 6.983s including pacing. Search
+and calendar include browser setup; no separate setup-only or warm-call timing is
+claimed. API capture through CDP is not a playbook. No concurrent live diagnostic,
+parent findings or prior tools supplied to teachers, failed-run resume, code change,
+push, MR, merge or deletion. PID 2999, home-37, run c9e8a472-6cf0-45ef-8cfe-0ae50b81bd36.
+
+Accounting remains through teach 36 at $760.8136888 base API-equivalent estimate,
+with prior missing-usage and pricing caveats; active 37 excluded. About 18 GiB free.
+Original malformed-researcher catch and live typed missing-field repair remain
+unexercised. Hotels provider rejection and unchanged-code repeatability unresolved.
+
+## Previous checkpoint — September 13, 13:24 PDT
 
 Flights37 missed the30-minute target. At34 minutes, lookup had passed its core
 check and published; generated search and flexible-date calendar both returned
