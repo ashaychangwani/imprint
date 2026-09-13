@@ -1,6 +1,23 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 12:48 PDT
+## Current continuation — September 13, 12:49 PDT
+
+Fresh Flights37 started September13 at19:49:11 UTC on implementation7283ddb.
+PID2999, unused home-37, exact original recording and four-operation guidance.
+Target20:19:11, reasoned assessment20:49:11, hard deadline21:19:11 UTC.
+Preflight verified clean branch and source ancestry, prior teach/audit/preview
+ended, collector healthy,18.52GiBfree,hostAC. No old generated tools, shipped
+examples or private parent diagnosis supplied to teaching agents.
+
+This is the first fresh validation after expected-type repair diagnostics. No
+correctness or repeatability success claimed. Audit published tools independently
+after completion, preserve actual failures and fresh complete booking provenance.
+Original malformed-researcher handoff coverage and Hotels provider rejection remain
+unresolved. No concurrent live diagnostic or failed-run resume. Accounting stays
+through teach36 at $760.8136888 base API-equivalent estimate with all earlier
+caveats; active37 excluded. No push, MR, merge, evidence deletion or model switch.
+
+## Previous checkpoint — September 13, 12:48 PDT
 
 Confirmed from Flights36's retained repair payload that missing follow-up fields
 were reported only as Required. Semantic schema diagnostics now include the
