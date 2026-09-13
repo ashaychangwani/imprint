@@ -37,7 +37,10 @@ including identities and order. A singleton success does not prove preservation
 of multiple members. If a fixed planned example cannot exercise that distinction,
 the compiler reports the gap for a master decision. Selection and interpretation
 remain agent decisions; the runtime adds no group classifier or sampling rule.
-The compiler checks that group-level metadata is not taken from the first child.
+The compiler distinguishes group-level properties from member properties in
+validation, request construction and parsing. The first member does not define
+the entire group, and a group constraint need not hold for each member separately.
+Agents establish those relationships from the structure and declared contract.
 Semantic review also reports concrete rejection guards in supplied parser/request
 source that contradict the declared core input domain, even if the sampled
 baseline passes. This is evidence-based contract review, not an exhaustive

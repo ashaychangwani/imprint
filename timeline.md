@@ -10678,3 +10678,30 @@ missing semantic calls and all pricing/cache/interruption caveats. AuditPID41953
 ended. No active teach/audit, push, MR, merge, evidence deletion or model switch.
 Original malformed researcher/typed missing-field live repair coverage, Hotels
 provider rejection and repeatability remain unresolved.
+
+
+## 2026-09-13 14:30 PDT — Clarify group constraints in existing compiler and review guidance
+
+The compiler and baseline reviewer already received request-transform source,
+but their existing group guidance emphasized output metadata and first-child
+confusion. It now explicitly applies to input validation and request construction:
+properties of a whole group need not hold independently for every member. Agents
+must derive member relationships from the actual structure and declared contract.
+This addresses the observed guard category without a site-specific example, runtime
+classifier, new schema, or compulsory broad test matrix. Existing group-selection
+chain guidance and strict rejection remain. Generated run37 artifacts are untouched.
+
+README, architecture and website describe the same behavior. Existing focused
+agent/controller-end-to-end checks passed:173 tests,1184 assertions,16.15seconds;
+lint214files,types,web build and desktop/mobile visual checks passed, with no page
+errors or horizontal overflow. Existing bundle-size warning remains. No tests that
+merely mirror prompt wording were added. Private group-constraints-* test and image
+evidence preserved; preview stopped before the next teach.
+
+Next run must be fresh Flights38, original recording and four-operation guidance,
+unused home/log/manifest, two workers,90-minute deadline. Never resume37 or provide
+its tools or private diagnosis to teachers. Audit remains failed for connecting
+selection and final booking absent; narrowing is not repair. Accounting stays at
+$793.3236728 base API-equivalent estimate through audit37 with29 missing semantic
+calls and all prior caveats. Hotels provider rejection and same-code repeatability
+remain unresolved. No push, MR, merge, evidence deletion or model switch.

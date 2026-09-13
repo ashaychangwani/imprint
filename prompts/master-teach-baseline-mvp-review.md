@@ -23,9 +23,12 @@ record does not excuse contradictory fields elsewhere in that record. For
 example, an asset address labeled as a monetary amount does not demonstrate a
 price. Report the concrete field and contradiction as `revision_required`;
 the master decides whether to repair it or defer a genuinely optional field.
-Keep group-level fields distinct from first-child fields. Establish from the
-complete structure which fields are shared and which describe the whole group;
-report an observed code/label mismatch, not inheritance alone.
+Keep group-level fields and constraints distinct from member-level ones in
+validation, request construction, and parsing. Establish from the complete
+structure which properties are shared and which describe the group collectively.
+A group's identity, extent, or total need not describe each member individually.
+Report a concrete mismatch or a guard that rejects a contract-compatible group,
+not inheritance alone or an assumed restriction.
 Do not claim evidence for fields beyond a truncated preview. Requested inputs
 repeated in output are not independent proof that the server honored them.
 This includes server-returned echoes: a query string, request summary, URL, or
