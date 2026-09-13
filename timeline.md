@@ -9966,3 +9966,32 @@ semantic calls and caveats remain. Active audit excluded. Collector healthy, hos
 AC, 18.55 GiB free. Original malformed-handoff catch still unexercised. No parent
 implementation change, private findings supplied to teachers, prior tools, push,
 MR, merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-13 08:21 PDT — Partial audit leaves search and booking unproven
+
+Flights audit 33 ended with partial PASS 12/12 graded, but this does not establish
+repeat success. Thirteen calls comprise seven correct, four infrastructure exclusions
+and two bad-input exclusions. Search SFO–JFK October 15 failed three paced calls;
+booking had no fresh producer and only rejected empty inputs. Five inputs worked,
+five untestable. Lookup and the narrow calendar passed; preserve all exclusions.
+
+A separate unchanged-artifact comparison reproduced search failure in 91.867 seconds,
+then the teach's SEA–LAS November 2 input returned 17 records in 3.672 seconds using
+the same warm tool pool. Both sessions closed. This is concrete input-dependent
+behavior, not enough evidence to assert its cause. The generated workflow navigates
+and waits for an XHR without an explicit trigger action. A second bounded diagnostic
+is capturing the failed page's current evidence using the existing response-observer
+option; it does not alter the workflow or run teaching agents.
+
+Audit PID 7631 ended. Private flights-33-search-diagnostic.ts/log and raw per-call
+JSON retained; page diagnostic script/log also retained. No teach/audit active.
+Accounting through audit 33: 41 teaches/32 audits, 73 traces/7,917 spans/2,609 usage,
+3112.3727644696 summed minutes; input 571,914,820, reads 472,831,360, output 6,145,525,
+emitted writes zero, $708.3768840 base estimate. Twenty-eight missing semantic calls
+and caveats remain. Diagnostics contain no LLM usage and are timed separately.
+
+Implementation 7f5af6b unchanged. Hotels provider rejection remains unresolved;
+no automatic retry or prompt workaround. Fresh repeatability still unproven. No
+parent findings supplied to teachers, prior tools, push, MR, merge, deletion,
+failed-run resume or deadline extension. Preserve this audit rather than rerolling it.
