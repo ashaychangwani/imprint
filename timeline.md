@@ -9463,3 +9463,33 @@ Collector healthy, 21.09 GiB free. No parent code/prompt change, private finding
 supplied, previous tools or concurrent live diagnostic. Accounting unchanged;
 active teach excluded. Audit independently afterward; Hotels 8 waits for full
 Flights success. No push, MR, merge, deletion, resume or deadline extension.
+
+
+## 2026-09-13 02:40 PDT — One-hour assessment: two tools ready, search capture repair proven
+
+Flights 30 has lookup and grid published after one hour. Continue to the original
+10:06:06 UTC hard deadline: roughly 26 minutes remain, both completed tools passed,
+and retained search research has a concrete successful replacement for its failing
+capture. The 30-minute target was missed. No deadline extension or parent changes.
+
+Search generated checks timed out after 76.548 and 106.416 seconds, then retained
+research's background-response matcher timed out after 120.982 seconds despite
+rendered results. The researcher changed to returning the parameterized navigation
+document itself. Two consecutive exact-candidate calls succeeded in 33.249 and
+33.057 seconds, each with a new browser setup. Those are not warm-call timings.
+Both returned roughly 3.36 MB HTML containing complete hidden itinerary records,
+including a coherent F9 3292 option with both required booking selection values.
+Rendered HTML extraction is not background API capture or a playbook.
+
+The master accepted the new document provenance and revised search and booking
+dependency plans together. Their public paths/parameters remain; stale focused
+plans were retired for replanning. Generated parser/selection correctness, booking
+baseline and fresh chain still need validation. Two successful research captures
+are not repeated fresh teaches. Lookup/grid remain retained and published.
+
+PID 68551, run 758d19c4-6939-4294-8f25-a36b01729b5e, unchanged 0ce9fe9.
+Host on AC, 75% charging; collector healthy, 20.97 GiB free. No private findings,
+previous tools or examples supplied to teachers. Original malformed-handoff catch
+still unexercised. Accounting unchanged through teach 29; active run excluded.
+Audit afterward and preserve failures. Hotels 8 waits for full Flights success.
+No push, MR, merge, deletion, failed-run resume or deadline extension.

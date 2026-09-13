@@ -1,6 +1,24 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 02:12 PDT
+## Current continuation — September 13, 02:40 PDT
+
+Flights 30 one-hour assessment: continue to original 10:06:06 UTC deadline
+September 13. Two tools published, search_locations and get_date_grid. Search
+background captures failed three times, but retained research replaced the matcher
+with the returned navigation document. Two exact-candidate calls succeeded in
+33.249/33.057 seconds including separate setup, with hidden coherent itinerary
+records and both booking values. This is rendered HTML extraction, not background
+API capture; those two research calls do not prove teach repeatability or warm speed.
+
+Master revised search request and booking dependency provenance together, retiring
+stale focused plans. Replanning, generated search, booking baseline and fresh chain
+remain due. About 26 minutes left at checkpoint; no extension. PID 68551, home-30,
+unchanged 0ce9fe9. AC 75% charging, collector healthy, 20.97 GiB free. No parent
+implementation/private findings supplied. Accounting unchanged through teach 29.
+Read newest timeline, audit afterward; Hotels 8 waits for full Flights success.
+No push, MR, merge, deletion or failed-run resume.
+
+## Previous checkpoint — September 13, 02:12 PDT
 
 Flights 30 active, PID 68551, home-30, unchanged 0ce9fe9; no tools published at
 about 35 minutes. Target missed. All four research handoffs report proven, drafts
