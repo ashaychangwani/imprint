@@ -10356,3 +10356,30 @@ rejection and original malformed-handoff live coverage remain unresolved. No
 concurrent live diagnostic. Accounting stays through audit35 at $743.4714408 base
 API-equivalent estimate with all prior caveats; active36 excluded. No push, MR,
 merge, evidence deletion, model switch or provider-rejection bypass.
+
+
+## 2026-09-13 11:57 PDT — Target missed with booking research still blocked
+
+Flights 36 passed the 30-minute target with zero published tools on unchanged
+28de4ed. Lookup research is proven through direct fetch and its draft compiler
+has started. Search research is partial: a rendered SFO–LAX one-way October 20
+result contains useful inventory, but the fresh selection/continuation contract
+needed by booking is unresolved. Earlier direct search responses contain the same
+short null payload shape seen after teach 35. This run has not repaired that failure.
+
+Booking research reported a factual block; the log records no fresh booking
+producer call yet. Calendar research remains active, with 12 test actions recorded
+at this checkpoint. Several CDP calls timed out after roughly 91–92 seconds;
+other calls returned transport responses, which do not establish a working grid.
+No completed calendar handoff or master repair decision is recorded yet. Preserve
+both the returned bodies and failed attempts; do not classify every timeout as
+infrastructure or equate rendered HTML with captured API data.
+
+Continue observing the retained run until the reasoned 19:25:58 UTC assessment,
+with hard deadline19:55:58 UTC September13. PID69200, run
+1eebb8a9-47f2-4509-b32e-9467dc7220cf, home-36. Collector healthy, about19GiB free.
+No independent audit yet, concurrent live diagnostic, implementation change,
+private parent findings supplied to teachers, prior generated tools, push, MR,
+merge or deletion. Original malformed-handoff live coverage, Hotels provider
+rejection and same-code repeatability remain unresolved. Accounting unchanged
+through audit35 at $743.4714408 base estimate with prior caveats; active36 excluded.
