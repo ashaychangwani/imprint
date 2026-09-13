@@ -1,6 +1,23 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 10:10 PDT
+## Current continuation — September 13, 10:12 PDT
+
+Fresh Flights 35 started September 13 at 17:11:36 UTC on implementation 3710c47.
+PID 46361, unused home-35, exact original recording and four-operation guidance.
+Target 17:41:36, assessment 18:11:36, hard deadline 18:41:36 UTC. The prior teach
+and temporary preview ended; branch clean before launch, collector healthy,
+17.68 GiB free, host on AC. No prior tools, examples or private parent findings
+were supplied to teaching agents. This is the first live validation of the API
+check deadline correction; no correctness or repeatability success is claimed.
+
+Independently audit any published tools after completion and inspect failures,
+exclusions and fresh grouped booking coverage before a repeat. Flights 34 has
+zero published tools and remains fully preserved. Accounting stays through
+teach 34 at $728.7409104 base estimate; active 35 excluded. Hotels provider
+rejection and original malformed-handoff live coverage remain unresolved.
+No concurrent live diagnostic, failed-run resume, push, MR, merge or deletion.
+
+## Previous checkpoint — September 13, 10:10 PDT
 
 Confirmed the Flights 34 overrun: generated baseline and dependency API calls
 received caller cancellation but no timer tied to the remaining run budget. The
