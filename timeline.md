@@ -10807,3 +10807,40 @@ audit37 at $793.3236728 base estimate with29 missing semantic calls and prior
 caveats; active38 excluded. No concurrent audit/live diagnostic, failed-run resume,
 push, MR, merge, deletion or model switch. Hotels provider rejection and same-code
 repeatability remain unresolved. Audit published scope after teach ends.
+
+
+## 2026-09-13 16:02 PDT — Deadline interrupts continuation repair; audit published artifacts
+
+Flights38 ended after90.00019261388 minutes on unchanged26a3e36. Final plan reports
+3ready/2notready: lookup, initial search and date grid have current passing receipts;
+continue_flight_search requires revision; revised get_booking_options has no current
+receipts. Four directories remain published, including the earlier standalone
+booking build. Preserve this distinction between files on disk and final-plan
+readiness. The full workflow did not pass and repeatability remains unproven.
+
+Late continuation baseline and fresh chain both returned useful reverse-route
+choices through CDP API capture, but semantic review rejected an explicit guard:
+airline codes had to be exactly two characters and flight numbers exactly four,
+restrictions absent from the declared contract. The current review caught that
+source-level contradiction despite plausible results. Continuation was not
+published. Final master repair was interrupted at the original deadline. Earlier
+one-segment-to-booking failure, invalid self-edge repair and failed completion
+review remain preserved. The repeated same-tool invocation limitation drove an
+extra public stage and re-research; investigate this mechanical plan limitation
+after the audit without weakening proof or adding site rules.
+
+Audit38 started23:01:25 UTC,PID79661,home-38,deadline23:46:25 UTC September13.
+It tests four published artifacts; continuation is absent and the revised booking
+chain is unproven. TeachPID43690 ended before audit launch. Interpret actual calls
+and exclusions honestly; passing a partial or stale published scope cannot establish
+full teach success. No concurrent live diagnostic or implementation change.
+Collector healthy,hostAC,about18GiBfree. Raw evidence and terminal.json preserved.
+
+Accounting through teach38:46teaches/34audits,80traces/9127spans/3009usage carriers,
+3502.6630336585335minutes,input670706604,cache reads557006848,output7184922,
+emitted writes0,$821.3002032 base API-equivalent estimate. Teach adds$27.9765304,
+input24712073/read21161856/output265546,293spans/89usage,traceYYOkb0sOqMEgMQthM4uMoQ==.
+Final master decision has missing usage,bringing missing semantic calls to30.
+All earlier pricing/cache/CLI caveats remain; active audit excluded. No model switch,
+failed-run resume, private parent diagnosis or old tools supplied to teachers, push,
+MR, merge or evidence deletion. Hotels provider rejection remains unresolved.
