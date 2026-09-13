@@ -1,6 +1,44 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 09:25 PDT
+## Current continuation — September 13, 09:58 PDT
+
+Flights 34 ended with zero ready and four unfinished tools. The 90-minute deadline
+was 16:56:25 UTC September 13. At 16:56:52 the process was still inside its calendar
+browser check; parent sent SIGINT at 16:57:05 and cancellation completed around
+16:57:06. Trace duration is 90.6701 minutes. The 40-second overrun is preserved,
+not rounded into an on-time stop. PID 10848 ended; no published tool exists to audit.
+
+The master spent about 82 minutes on research before accepting three tools for
+focused planning and marking booking unresolved. Booking returned API offers for
+two fixed itinerary constructions. Later tests dynamically encoded the outbound
+state and opened a distinct non-first return, but could not complete its final
+selection. Partial handoffs retained the successful candidate and actual failed
+tests; no dynamic candidate was falsely attached to an older success. This is
+ordinary partial-handoff recovery, not a live exercise of the original malformed-
+handoff catch. Fresh producer calls were used; no stale booking proof accepted.
+
+Generated verification then found another real defect: lookup labeled Tokyo
+Station's record value as airport_code despite the record identifying a station.
+Search's browser call failed after 33.307 seconds; calendar was interrupted during
+its browser check. No core-check failure is waived, no generated success claimed,
+and no partial audit score substituted for the four-operation goal.
+
+Accounting through teach 34: 42 teaches/32 audits, 74 traces/8,083 spans/2,688 usage
+carriers, 3203.0428692377 summed minutes; input 592,438,556, cache reads 491,077,376,
+output 6,343,262, emitted writes zero; $728.7409104 base API-equivalent estimate.
+This run adds $20.3640264. No newly missing semantic usage; 28 prior missing calls
+and all earlier accounting caveats remain. Private flights-teach-34-accounting.json
+and flights-teach-34-deadline-stop.json preserve the totals and stop evidence.
+
+Implementation 39f065e remains unchanged. Next inspect the failed generated checks
+and timing before another fresh teach. Source inspection already shows the API
+check passes caller cancellation without the remaining run deadline, unlike the
+bounded playbook path; confirm and make a small mechanical correction if justified.
+Do not resume 34. Hotels provider rejection and repeatability remain unresolved.
+Collector healthy, about 17.7 GiB free, no concurrent live work. No prior tools or
+parent diagnosis supplied to teachers, push, MR, merge, deletion or deadline extension.
+
+## Previous checkpoint — September 13, 09:25 PDT
 
 Assessment near one hour: continue Flights 34 within its original 16:56:25 UTC
 hard deadline. At 58.7 minutes no tools were published. Lookup, calendar and staged
