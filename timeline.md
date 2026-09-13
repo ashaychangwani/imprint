@@ -10512,3 +10512,32 @@ Original malformed-researcher handoff coverage and Hotels provider rejection rem
 unresolved. No concurrent live diagnostic or failed-run resume. Accounting stays
 through teach36 at $760.8136888 base API-equivalent estimate with all earlier
 caveats; active37 excluded. No push, MR, merge, evidence deletion or model switch.
+
+
+## 2026-09-13 13:24 PDT — Lookup published; search and calendar return bad responses
+
+Flights37 missed the30-minute target. At34 minutes, lookup had passed its core
+check and published; generated search and flexible-date calendar both returned
+BAD_RESPONSE on direct-fetch verification. The master retained the lookup and
+sent search back to its existing research conversation. Booking/selection is not
+yet compiled or published. Keep these actual failures even though all four
+research handoffs previously passed. No four-tool or repeatability success.
+
+Research used direct APIs for the scoped functions after earlier failed transport
+attempts. Search demonstrated round-trip LAX–LAS inventory and return-date influence
+with outbound F93292: changing return October25 to November2 changed its price
+from189 to162. Selection research called fresh search observation32eaac24 and
+reported both an intermediate next-leg result and final booking offers for F93292
+outbound/F93291 return, including providers and click targets. That is research
+proof only; exact grouped provenance and generated chain behavior still require
+independent checking. Calendar research exercised route contrasts and a date-range
+superset whose parser must filter to the advertised bounds.
+
+Run c9e8a472-6cf0-45ef-8cfe-0ae50b81bd36,PID2999,home-37,unchanged7283ddb.
+Keep the20:49:11 UTC assessment and21:19:11 UTC hard deadline September13.
+Collector healthy,about18GiBfree,branch clean. No concurrent live diagnostic,
+private parent diagnosis or old tools supplied to teachers,failed-run resume,
+push,MR,merge or deletion. Typed missing-field repair feedback has not yet been
+shown to repair a live missing-field error; original researcher malformed-handoff
+coverage and Hotels rejection remain unresolved. Accounting stays through teach36
+at $760.8136888 base estimate with prior caveats; active37 excluded.
