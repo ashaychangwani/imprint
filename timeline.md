@@ -9719,3 +9719,31 @@ audit independently afterward. Hotels 8 waits for complete Flights success on
 unchanged code; repeated fresh success remains due. Accounting unchanged through
 audit 31; active teach excluded. No concurrent diagnostics, failed-run resume,
 forced wake, deadline extension, push, MR, merge or deletion.
+
+
+## 2026-09-13 05:30 PDT — Flights 32 misses target; calendar contract corrected before testing
+
+Flights 32 reached 30 minutes with no published tools. Lookup and search research
+are proven. Search captured a 332,896-character GetShoppingResults response through
+CDP in 43.066 seconds after earlier capture failures. The researcher identified
+current SFO–LAX October 22 records with schedules, prices and selection values;
+this API response is distinct from rendered-page extraction. Generated semantics
+and complete grouped selections remain unverified.
+
+Calendar research rejected the master's initial one-way contract without testing
+a guessed request. All supplied GetCalendarGrid requests and results describe
+two route segments and paired departure/return date axes. The blocked handoff
+reached the master, which revised the operation to expose the recorded round-trip
+inputs and requested fresh research. Booking's recorded 608-byte request matched
+but returned only null/error 13. The master made the proven search producer
+available and requested exact same-record token/selection provenance; booking
+called it successfully in 40.737 seconds and began testing the fresh pair.
+Transport completion alone is not proof of booking offers. These are ordinary
+blocked handoffs, not live exercise of the malformed-handoff recovery catch.
+
+PID 36440, run ade1ab26-d0d3-4d74-a21b-0ee71a5b3692, home-32, unchanged 7f5af6b.
+Keep original 12:58:51 UTC assessment and 13:28:51 hard deadline September 13.
+Collector healthy, 19.51 GiB free. No parent private findings, prior generated
+tools, runtime change or concurrent live diagnostic. Accounting unchanged through
+audit 31; active teach excluded. Audit independently afterward; Hotels 8 waits for
+complete Flights success. No push, MR, merge, deletion, resume or deadline extension.

@@ -1,6 +1,21 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 05:00 PDT
+## Current continuation — September 13, 05:30 PDT
+
+Flights 32 missed the 30-minute target with no published tools. Lookup/search
+research proven; current search captured a real GetShoppingResults API response.
+Calendar's initial one-way contract contradicted all recorded date-pair responses;
+research returned blocked and the master revised it to round-trip inputs. Booking
+recorded-token error 13 is preserved; it now has a fresh successful producer call
+and is testing the coherent pair. No generated/independent group proof yet.
+
+PID 36440, run ade1ab26-d0d3-4d74-a21b-0ee71a5b3692, home-32, unchanged 7f5af6b.
+Original assessment 12:58:51 UTC and hard deadline 13:28:51 UTC September 13.
+Collector healthy, 19.51 GiB free. Accounting through audit 31; active teach excluded.
+No private findings supplied, prior tools, concurrent diagnostic, resume or extension.
+Audit afterward; Hotels 8 waits for complete Flights success. See newest timeline.
+
+## Previous checkpoint — September 13, 05:00 PDT
 
 ACTIVE fresh Flights 32, PID 36440, home-32, implementation 7f5af6b. Started
 11:58:51 UTC September 13; target 12:28:51, assessment 12:58:51, hard deadline
