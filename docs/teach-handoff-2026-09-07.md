@@ -1,6 +1,37 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 16:32 PDT
+## Current continuation — 2026-09-13 16:34 PDT
+
+Fresh Flights39 started September13 at23:33:32 UTC on implementation69be77e,
+PID83965, unused home-39, original recording and exact four-operation guidance.
+Target September14 00:03:32, assessment00:33:32, hard01:03:32 UTC. Preflight verified
+clean source-descended branch, old teach/audit and website preview ended, collector
+healthy, host on AC, both recording sizes unchanged and17.61GiB free. Raw manifest
+and exclusive log are flights-teach-39-manifest.json and flights-teach-39.log.
+
+The change lets agents name finite repeated calls and bind an exact earlier call's
+output, without creating a separate public tool for continuation. It retains
+rejected results as evidence, blocks their downstream use, and invalidates all
+receipts that transitively depend on a replaced result or changed binding. All291
+focused tests/1634 assertions, lint, types, website build and desktop/mobile checks
+passed. This is its first fresh live validation; no claim of a repaired generated
+contract or repeatability. No old tools, examples or private diagnosis were supplied.
+
+Monitor whether the master actually uses the new invocation references, whether
+final booking uses fresh completed selection, and whether semantic input/output
+restrictions are caught and repaired. Original malformed researcher catch remains
+unexercised live. Independently audit after teach completion, including any missing
+scope. Do not change implementation or run concurrent audits/diagnostics during39.
+
+Audit38 remains failed18/21 graded:10 correct calls, three broken search calls,
+one excluded bad booking input, eight working inputs and two untestable; no infra
+exclusions. Booking lacks a connected completed selection. All accounting through
+audit38 is complete at $821.8669232 base API-equivalent estimate, input671498900,
+reads557762688, output7190850, writes0; thirty missing semantic calls and prior
+caveats remain. Active39 is excluded. Hotels provider rejection remains unresolved.
+No push, MR, merge, reset, model switch or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 16:32 PDT
 
 The plan can now name repeated consumer invocations and explicitly select the
 result of an earlier chain call. Omitting the new optional fields preserves the
