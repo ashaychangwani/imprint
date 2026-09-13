@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 06:44 PDT
+## Current continuation — September 13, 06:58 PDT
+
+Hotels 8 ended before planning after 7.5926 minutes, zero ready and one not ready.
+Research stopped when the provider rejected its prompt as potentially violating
+usage policy. Completed request transports do not prove tool semantics; no generated
+tool exists to audit. Preserve all evidence. No automatic retry, prompt workaround
+or model switch for the rejected request. Hotels validation remains unresolved.
+Run 26343b91-02de-4b19-b95d-db3350064dca, hotels-home-8, PID 73995 ended.
+
+Continue the independently authorized Flights repeatability check on unchanged
+7f5af6b. Fresh Flights 33 started at 13:57:14 UTC September 13, PID 81101, unused
+home-33, exact original recording and four-operation guidance. Target 14:27:14,
+assessment 14:57:14, hard deadline 15:27:14 UTC. No previous tools or private
+findings supplied. Independently audit afterward and inspect connecting coverage.
+One Flights result is supported; repeated fresh success remains unproven.
+
+Accounting through Hotels 8: 40 teaches/31 audits, 71 traces/7,668 spans/2,543 usage,
+3039.6365972363 summed minutes; input 557,136,253, reads 460,808,576, output 5,964,774,
+emitted writes zero, $688.9296184 base estimate. One rejected call adds missing usage,
+now 28; prior caveats remain. Active Flights 33 excluded. Host AC, collector healthy,
+18.90 GiB free. Original malformed-handoff catch still unexercised. No parent code
+change, concurrent live run, push, MR, merge, deletion, resume or extended deadline.
+
+## Previous checkpoint — September 13, 06:44 PDT
 
 Flights audit 32 passed 21/21 graded units in 8.6822 minutes: 14 actual calls,
 13 correct and one calendar network timeout excluded, with its paced retry passing.
