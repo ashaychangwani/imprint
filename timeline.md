@@ -9437,3 +9437,29 @@ Flights 29 remains a sleep-interrupted failure with zero published tools and no
 audit. Accounting stays through that attempt: 36 teaches/28 audits, $613.7038936
 base estimate, 26 missing semantic calls with prior caveats. Active teach 30 is
 excluded until completion. No code/prompt change, deletion, push, MR or merge.
+
+
+## 2026-09-13 02:12 PDT — Flights 30 misses target; fresh booking research values verified
+
+Flights 30 remains active about 35 minutes after launch with no published tools,
+so the 30-minute target was missed. All four research handoffs report proven;
+search and grid drafts have compiled or are compiling while master review runs.
+The selected search MVP is one-way with origin, destination and departure date.
+
+Booking called fresh search producer 3599bd57 and selected F9 2334 LAX–LAS on
+October 22. Read-only inspection confirmed selection_token equals a decoded
+producer scalar. selected_flights is a JSON serialization of the producer's
+one-element array at [2][0][0][8] after nested decoding; the structures match
+exactly although raw string equality does not. This representation change is
+explicit, not substitution from an old run. Successful consumer ca90cf21 captured
+72,819 bytes identifying the matching itinerary and Frontier/Booking.com offers.
+Earlier direct-fetch null and CDP failure remain in its four observations.
+This is research evidence, not generated booking or independent audit success;
+independent effects of the two advertised inputs still need audit coverage.
+
+PID 68551, run 758d19c4-6939-4294-8f25-a36b01729b5e, unchanged 0ce9fe9.
+Keep original 09:36:06 UTC assessment and 10:06:06 hard deadline September 13.
+Collector healthy, 21.09 GiB free. No parent code/prompt change, private findings
+supplied, previous tools or concurrent live diagnostic. Accounting unchanged;
+active teach excluded. Audit independently afterward; Hotels 8 waits for full
+Flights success. No push, MR, merge, deletion, resume or deadline extension.

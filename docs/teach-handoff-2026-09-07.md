@@ -1,6 +1,23 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 01:37 PDT
+## Current continuation — September 13, 02:12 PDT
+
+Flights 30 active, PID 68551, home-30, unchanged 0ce9fe9; no tools published at
+about 35 minutes. Target missed. All four research handoffs report proven, drafts
+and master review underway. One-way search scope: origin/destination/departure.
+Fresh booking producer 3599bd57 and consumer ca90cf21 returned matching F9 2334
+LAX–LAS October 22 and offers. Parent read-only verification found exact decoded
+token equality; selected_flights is explicit JSON serialization of the producer's
+one-element array, structurally identical. Preserve earlier null/capture failures.
+No generated or independent booking success yet; audit both input effects.
+
+Run 758d19c4-6939-4294-8f25-a36b01729b5e. Original assessment 09:36:06 UTC and hard
+deadline 10:06:06 UTC September 13 remain. Collector healthy, 21.09 GiB free. No
+parent implementation/private findings supplied. Accounting unchanged through
+teach 29. Read newest timeline, audit afterward, then Hotels 8 after full Flights
+success. No push, MR, merge, deletion, failed-run resume or extension.
+
+## Previous checkpoint — September 13, 01:37 PDT
 
 ACTIVE fresh Flights 30, PID 68551, home-30, unchanged 0ce9fe9. Started
 08:36:06 UTC September 13; target 09:06:06, assess 09:36:06, hard deadline
