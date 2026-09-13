@@ -9828,3 +9828,36 @@ diagnostic adds a missing usage call, now 27; prior caveats remain. Active audit
 excluded. Collector healthy, host AC, 19.16 GiB free. Original malformed-handoff
 catch still unexercised live. No concurrent diagnostic, push, MR, merge, deletion,
 failed-run resume, parent implementation change or deadline extension.
+
+
+## 2026-09-13 06:44 PDT — Audit and connecting check pass; fresh Hotels starts
+
+Flights audit 32 passed 21/21 graded units in 8.6822 minutes: 14 actual calls,
+13 correct and one calendar network timeout excluded, with its paced retry passing.
+Eight inputs worked; the two producer-bound booking inputs could not be isolated.
+Both audit bookings were nonstop. Preserve the exclusion and individual-input gap.
+
+A separate fresh connecting check after audit completion passed: LAX–PDX–JFK on
+October 22, AS 1397 then AS 336. Search returned 33 options in 59.101 seconds;
+booking used the exact same-record token and selected_flights and returned both
+ordered segments with matching dates/airports/carriers/numbers and 18 offers in
+31.777 seconds. Parent itinerary origin LAX and destination JFK agreed with its
+segments. Separate cold tool pools, both closed; no setup-only timing or LLM calls.
+Private flights-32-connecting-diagnostic.ts/log and flights-32-diagnostic-*.json
+retain raw results and exact comparison. Generated artifacts unchanged. This is
+one supported Flights result, with an audit timeout exclusion, not repeatability.
+
+Fresh Hotels 8 started on unchanged implementation 7f5af6b at 13:43:50 UTC
+September 13, PID 73995, unused hotels-home-8, exact original recording, no guidance.
+Target 14:13:50, assessment 14:43:50, hard deadline 15:13:50 UTC. Teach/audit and
+connecting diagnostic all ended before launch. Host AC, collector healthy,
+18.97 GiB free. Audit Hotels independently after completion, then fresh Flights
+repeat on unchanged code if supported. No guessed optional scope or prior tools.
+
+Accounting through audit 32: 39 teaches/31 audits, 70 traces/7,647 spans/2,526 usage,
+3032.0440277016 summed minutes; input 554,706,426, reads 458,608,768, output 5,953,784,
+emitted writes zero, $686.9098192 base estimate. Twenty-seven missing semantic calls
+and prior caveats remain. Active Hotels excluded; deterministic two-call diagnostic
+is separate from LLM teach/audit totals. Original malformed-handoff recovery catch
+still unexercised live. No parent implementation change, private findings supplied
+to teachers, push, MR, merge, deletion, failed-run resume or deadline extension.
