@@ -1,6 +1,33 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 08:57 PDT
+## Current continuation — September 13, 09:25 PDT
+
+Assessment near one hour: continue Flights 34 within its original 16:56:25 UTC
+hard deadline. At 58.7 minutes no tools were published. Lookup, calendar and staged
+search research are proven, and booking has a positive API diagnostic with one
+remaining route-construction gap under test. Roughly 30 minutes remain for that
+focused repair, compilation and generated checks; completion remains uncertain.
+
+Search's selected_flights input now controls the outbound selection and returns
+compatible return options. Booking requested fresh producer observations and then
+captured a fresh same-session continuation for F9 3308 SFO–LAX November 5 and
+F9 2857 LAX–SFO November 12. Direct and bootstrapped requests returned null status;
+several browser tests failed while loading or selecting. The researcher reports
+that observation fb861ef0 returned GetBookingResults for both flights with Frontier
+and FlightHub offers, including USD 48 and USD 112 fare products. That successful
+diagnostic used a fixed, previously observed return-stage URL. It does not prove
+a general input contract. The current candidate derives the route and both
+selections from the fresh composite input and scopes the fare action to its exact
+return card. No completed dynamic booking proof or generated success yet.
+
+PID 10848, run 5e78e59e-df49-4179-aaec-3f3afc3eedec, home-34, unchanged 39f065e.
+Host on AC, collector healthy, 17.89 GiB free. Accounting remains through audit 33;
+active teach excluded. Original malformed-handoff catch remains unexercised.
+Hotels provider rejection and repeatability remain unresolved. No parent findings
+supplied to teachers, implementation change, concurrent diagnostic, previous tools,
+push, MR, merge, deletion, failed-run resume or deadline extension.
+
+## Previous checkpoint — September 13, 08:57 PDT
 
 Flights 34 reached 30 minutes with no published tools. Lookup and calendar research
 are proven, with retained drafts; search is partial and booking remains blocked.
