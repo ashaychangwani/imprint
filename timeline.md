@@ -10768,3 +10768,42 @@ Accounting unchanged through audit37 at $793.3236728 base estimate with prior
 caveats, active38 excluded. No concurrent live diagnostic, failed-run resume,
 push, MR, merge, deletion or model switch. Hotels rejection and repeatability
 remain unresolved.
+
+
+## 2026-09-13 15:30 PDT — One-hour assessment: continue explicit continuation-chain repair
+
+Continue Flights38 within its original23:00:34 UTC deadline. Four tools are
+published with credible baselines: lookup, search,49-cell nearby date grid, and
+booking. Booking returned four American options with both selected legs, numeric
+USD prices, fare products and click targets. These working artifacts and retained
+research give the remaining continuation-chain repair a concrete path within the
+last30 minutes. The30-minute target was missed; no full completion or audit pass.
+
+The first generated booking edge failed in request construction because initial
+search supplied one selected segment and booking requires a completed itinerary.
+The master attempted a repeated-search edge, but self-referential edges are
+prohibited by the plan schema. It then removed the invalid edges while describing
+manual repeated search. Independent completion review correctly rejected that
+unexecuted continuation and missing fresh final chain. Private
+flights-38-chain-repair-decisions.json preserves these decisions and findings.
+
+The master now splits search_flights (initial search) and continue_flight_search
+(caller-selected return choices), followed by get_booking_options. This makes
+five planned tools for the original four operations. Lookup and grid stay retained;
+affected search/booking boundaries undergo focused research/planning. Do not call
+the missing stage fixed merely because the graph is expressible, or claim that a
+standalone booking result proves the caller-obtainable chain. Parent implementation
+remains26a3e36; no site-specific runtime/prompt change or private diagnosis supplied.
+
+Earlier revised search research used a non-first AA6274 outbound and a matching
+return choice, rather than silently picking the first outbound. The master had
+accepted its optional continuation input before encountering the graph limitation.
+Research provenance, generated group handling and final booking still need the
+independent audit. This graph limitation is a separate concern from the prior
+run's member-versus-group guard defect and from original malformed-handoff coverage.
+
+PID43690,home-38,run071d4bc5-c1e0-48db-81a2-ab6ec0d92eb1. Accounting stays through
+audit37 at $793.3236728 base estimate with29 missing semantic calls and prior
+caveats; active38 excluded. No concurrent audit/live diagnostic, failed-run resume,
+push, MR, merge, deletion or model switch. Hotels provider rejection and same-code
+repeatability remain unresolved. Audit published scope after teach ends.
