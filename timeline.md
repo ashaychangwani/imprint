@@ -9493,3 +9493,30 @@ previous tools or examples supplied to teachers. Original malformed-handoff catc
 still unexercised. Accounting unchanged through teach 29; active run excluded.
 Audit afterward and preserve failures. Hotels 8 waits for full Flights success.
 No push, MR, merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-13 03:05 PDT — Flights 30 completes all four tools; independent audit starts
+
+Flights 30 completed in 82.8306 minutes on unchanged 0ce9fe9, with all four
+tools published and completion review passed. Generated search's document approach
+returned 30 itineraries; retained repair fixed an arrival reported as 18:undefined
+with a contradictory null segment time. Booking first mislabeled F9 carrier code
+and legroom dimensions as ticketing conditions. Master rejected both baseline and
+chain results and recalled the compiler. Repaired booking returned 20 choices for
+F9 3292 baseline and 20 for fresh F9 2334 chain, with matching itineraries, providers,
+USD fares and redirect metadata. Both flights are nonstop; connecting booking is
+not independently proven. Earlier capture failures remain preserved.
+
+Full independent audit 30 started 10:03:20 UTC, PID 99332, home-30, cap 10:48:20.
+Teach PID 68551 ended before audit launch. Inspect all four tools and actual input
+contrasts, especially selection_token/selected_flights independent effects. No
+concurrent live diagnostic. Hotels 8 follows only full Flights audit success on
+unchanged code; fresh repeatability remains unproven. Four optional suggestions
+saved without changing the MVP. No parent implementation/private findings supplied.
+
+Accounting 37 teaches/28 audits, 65 traces/7,064 spans/2,354 usage carriers,
+2845.7382900363 summed minutes; input 512,744,683, cache reads 422,034,048,
+output 5,522,055, emitted writes 0, $642.0972592 base estimate. Teach adds
+$28.3933656, no new missing usage; 26 prior missing semantic
+calls and other caveats remain. Active audit excluded. Collector healthy,
+20.83 GiB free. No push, MR, merge, deletion, resume or deadline extension.

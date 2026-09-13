@@ -1,6 +1,28 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 02:40 PDT
+## Current continuation — September 13, 03:05 PDT
+
+ACTIVE full independent Flights audit 30, PID 99332, home-30, started 10:03:20 UTC,
+cap 10:48:20 UTC September 13. Verify flights-audit-30-manifest.json/log. Audit all
+four tools and independent input effects, especially both booking inputs. No
+concurrent live diagnostic. Hotels 8 follows only full audit success on unchanged
+code; repeated fresh success remains due.
+
+Teach 30 PID 68551 ended successfully in 82.8306 minutes on unchanged 0ce9fe9.
+All four published; completion passed. Retained agents repaired malformed arrival
+schedule and booking conditions that incorrectly contained carrier/legroom values.
+Booking baseline F9 3292 and fresh chain F9 2334 returned 20 matching choices each.
+Both nonstop, so independent connecting proof is absent. Search uses rendered
+document extraction after repeated API matcher failures. Preserve all failures;
+no parent code/private findings supplied. See newest timeline.
+
+Accounting through teach 30: 37 teaches/28 audits, 65 traces/7,064 spans/2,354 usage,
+2845.7382900363 minutes; input 512,744,683, reads 422,034,048, output 5,522,055,
+writes 0, $642.0972592 base estimate. No added missing usage; 26 prior missing
+calls and caveats remain. Active audit excluded. Collector healthy, 20.83 GiB free.
+No push, MR, merge, deletion, resume or deadline extension.
+
+## Previous checkpoint — September 13, 02:40 PDT
 
 Flights 30 one-hour assessment: continue to original 10:06:06 UTC deadline
 September 13. Two tools published, search_locations and get_date_grid. Search
