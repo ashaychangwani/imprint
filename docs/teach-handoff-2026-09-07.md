@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 08:27 PDT
+## Current continuation — September 13, 08:57 PDT
+
+Flights 34 reached 30 minutes with no published tools. Lookup and calendar research
+are proven, with retained drafts; search is partial and booking remains blocked.
+The master chose a round-trip search with staged selection for this run. Its initial
+255,602-character API response proves scoped SFO–LAX November 5/12 outbound results,
+but the advertised selected_flights input was ignored. Master identified that
+contract gap and requested fresh continuation proof before booking can receive a
+completed-itinerary selection. Recorded booking values are stale; no fresh completed
+booking success is claimed. Latest search transport completed, semantics pending.
+
+Calendar research captured an 8,905-byte GetCalendarGrid response for LAX–JFK
+centered October 23/31, covering the 49 combinations October 20–26 and October
+28–November 3. Seven observations preserve earlier failures. Broader window shapes
+remain deferred, and any exposed range contract still needs generated validation
+and independent audit. Research proof is not generated tool completion.
+
+PID 10848, run 5e78e59e-df49-4179-aaec-3f3afc3eedec, home-34, unchanged 39f065e.
+Keep original 16:26:25 UTC assessment and 16:56:25 hard deadline September 13.
+Collector healthy, 18.11 GiB free. Accounting unchanged through audit 33; active
+teach excluded. Hotels rejection and fresh repeatability remain unresolved. Original
+malformed-handoff catch still unexercised. No parent private findings, prior tools,
+implementation change, concurrent live diagnostic, push, MR, merge, deletion,
+failed-run resume or deadline extension.
+
+## Previous checkpoint — September 13, 08:27 PDT
 
 Fresh Flights 34 started at 15:26:25 UTC September 13, PID 10848, unused home-34,
 implementation 39f065e. Exact original recording and four-operation scope. Target
