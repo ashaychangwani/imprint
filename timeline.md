@@ -9885,3 +9885,31 @@ emitted writes zero, $688.9296184 base estimate. One rejected call adds missing 
 now 28; prior caveats remain. Active Flights 33 excluded. Host AC, collector healthy,
 18.90 GiB free. Original malformed-handoff catch still unexercised. No parent code
 change, concurrent live run, push, MR, merge, deletion, resume or extended deadline.
+
+
+## 2026-09-13 07:28 PDT — Flights repeat misses target; fresh booking provenance verified
+
+Flights 33 reached its 30-minute target with no published tools. Lookup, search
+and booking research are proven; calendar remains partial. Its successful captured
+GetCalendarGrid response contains 49 date pairs, but a route-only contrast failed
+with the fixed selector and general start/end extents are not implemented. Preserve
+the successful candidate and failed contrast for master repair or honest narrowing.
+Master is reviewing first-pass research; retained lookup/search drafts exist.
+
+Booking called fresh search producer 5199d099 (SFO–LAX, November 12) and final
+consumer 0bae0a25 returned a 26,624-byte GetBookingResults response identifying
+AA 2211, 07:03–08:40, with American fare offers and outbound handoff. Parent
+read-only provenance found exact token matches at [2][0][0][1][1] in decoded
+producer frames. selected_flights is serialized JSON wrapping one opaque value;
+its inner value matches that same record's [2][0][0][8] decoded array element.
+The wrapper is a representation change, not a literal copy of the raw string.
+This nonstop research does not prove generated or independent grouped behavior.
+No private parent findings supplied to teachers.
+
+PID 81101, run 50addcb4-53b9-46b2-84a5-819ec80bcb1c, home-33, unchanged 7f5af6b.
+Keep original 14:57:14 UTC assessment and 15:27:14 hard deadline September 13.
+Collector healthy, 18.66 GiB free. Accounting unchanged through failed Hotels 8;
+active Flights excluded. Hotels validation remains unresolved after provider policy
+rejection; do not retry or alter the rejected prompt to bypass it. Original
+malformed-handoff catch remains unexercised. No concurrent live diagnostic, parent
+implementation change, prior tools, push, MR, merge, deletion, resume or extension.
