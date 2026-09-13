@@ -343,10 +343,17 @@ compiler does not produce an internally contradictory request.
 Every plan needs at least one live case. A playbook plan must not declare
 replay because recording comparison is not applicable to it.
 
-Incoming chain edges may refer only to `availableProducers`, must target this
-tool's public name, and must name a proposed public consumer parameter. The
-`id` fields in this wire format are not a second namespace: they must exactly
-equal the corresponding public `candidate.toolName`. Return no implementation-plan ref.
+Incoming chain edges may refer to `availableProducers` or this tool's own prior
+result, must target this tool's public name, and must name a proposed public
+consumer parameter. Group bindings for one call by `consumerInvocationId`; omit
+it for the original single call. Repeated calls use distinct IDs. An optional
+`producerChainEdgeId` names an edge of the earlier producer call whose output
+is required; without it the source is the standalone live result. Preserve
+those explicit references and leave the complete acyclic schedule to the master.
+Do not add this tool to its own `dependsOnTools` or split its public boundary
+merely to call it again. Tool IDs in this wire format must exactly equal the
+corresponding public `candidate.toolName`; invocation IDs and edge IDs identify
+calls and bindings separately. Return no implementation-plan ref.
 
 `outgoingChainEdges` are current consumer obligations on this tool's result.
 Account for each named `producerResultPath` when proposing the result shape.

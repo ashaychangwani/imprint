@@ -534,12 +534,26 @@ export const ChainEdgeSchema = z
     producerResultPath: canonicalText(1, 512),
     consumerToolId: ToolIdSchema,
     consumerParameter: canonicalText(1, 128),
+    /** Omit to retain the original single invocation for this consumer. */
+    consumerInvocationId: canonicalText(1, 128).optional(),
+    /** Omit to consume the producer's standalone live result. */
+    producerChainEdgeId: canonicalText(1, 128).optional(),
   })
-  .strict()
-  .refine((edge) => edge.producerToolId !== edge.consumerToolId, {
-    message: 'chain edge cannot be self-referential',
-  });
+  .strict();
 export type ChainEdge = z.infer<typeof ChainEdgeSchema>;
+
+export function chainInvocationKey(edge: ChainEdge): string {
+  return canonicalTeachingPlanJson([edge.consumerToolId, edge.consumerInvocationId ?? null]);
+}
+
+export function chainProducerBindings(edges: readonly ChainEdge[]): ChainEdge[] {
+  const bindings = new Map<string, ChainEdge>();
+  for (const edge of edges) {
+    const key = canonicalTeachingPlanJson([edge.producerToolId, edge.producerChainEdgeId ?? null]);
+    bindings.set(key, edge);
+  }
+  return [...bindings.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, edge]) => edge);
+}
 
 interface ChainInvocation {
   edges: ChainEdge[];
@@ -547,18 +561,46 @@ interface ChainInvocation {
 }
 
 /**
- * A chain plan contains one invocation per consumer. The master chooses the
- * producer bindings; the runtime only gathers all bindings for that consumer
- * and executes the call. There is no host-side grouping or route inference.
+ * The master names invocations and their exact producer bindings. Unnamed
+ * invocations retain the original single call per consumer.
  */
 export function chainInvocationForEdge(
   chainEdges: readonly ChainEdge[],
   targetEdge: ChainEdge,
 ): ChainInvocation {
   const edges = chainEdges
-    .filter((edge) => edge.consumerToolId === targetEdge.consumerToolId)
+    .filter((edge) => chainInvocationKey(edge) === chainInvocationKey(targetEdge))
     .sort((left, right) => left.id.localeCompare(right.id));
   return { edges, sha256: teachingPlanContentSha256(edges) };
+}
+
+/** Topologically order finite calls, including repeated calls to one tool. */
+export function chainInvocationsInOrder(chainEdges: readonly ChainEdge[]): ChainInvocation[] {
+  const byId = new Map(chainEdges.map((edge) => [edge.id, edge]));
+  const active = new Set<string>();
+  const done = new Set<string>();
+  const ordered: ChainInvocation[] = [];
+  const visit = (edge: ChainEdge): void => {
+    const key = chainInvocationKey(edge);
+    if (done.has(key)) return;
+    if (active.has(key)) throw new TeachingPlanValidationError('chain invocation cycle');
+    active.add(key);
+    const invocation = chainInvocationForEdge(chainEdges, edge);
+    for (const binding of invocation.edges) {
+      if (!binding.producerChainEdgeId) continue;
+      const source = byId.get(binding.producerChainEdgeId);
+      if (!source || source.consumerToolId !== binding.producerToolId)
+        throw new TeachingPlanValidationError(
+          `chain edge "${binding.id}" references an unknown or mismatched producer invocation`,
+        );
+      visit(source);
+    }
+    active.delete(key);
+    done.add(key);
+    ordered.push(invocation);
+  };
+  for (const edge of chainEdges) visit(edge);
+  return ordered;
 }
 
 export const TeachingPlanDecisionSchema = z
@@ -862,6 +904,8 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
       edge.producerResultPath,
       edge.consumerToolId,
       edge.consumerParameter,
+      edge.consumerInvocationId ?? null,
+      edge.producerChainEdgeId ?? null,
     ]);
     if (ids.has(edge.id) || tuples.has(tuple)) {
       throw new TeachingPlanValidationError(`duplicate chain edge "${edge.id}"`);
@@ -876,13 +920,16 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
         `chain edge "${edge.id}" references unknown consumer parameter`,
       );
     }
-    if (!consumer.candidate.dependsOnTools.includes(producer.candidate.toolName)) {
+    if (
+      producer.id !== consumer.id &&
+      !consumer.candidate.dependsOnTools.includes(producer.candidate.toolName)
+    ) {
       throw new TeachingPlanValidationError(
         `chain edge "${edge.id}" is absent from the explicit tool dependency`,
       );
     }
     const consumerParameter = canonicalTeachingPlanJson([
-      edge.consumerToolId,
+      chainInvocationKey(edge),
       edge.consumerParameter,
     ]);
     if (consumerParameters.has(consumerParameter)) {
@@ -894,6 +941,7 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
     ids.add(edge.id);
     tuples.add(tuple);
   }
+  chainInvocationsInOrder(plan.chainEdges);
 }
 
 function assertConcretePublicParameters(tool: EditableTeachingTool): void {

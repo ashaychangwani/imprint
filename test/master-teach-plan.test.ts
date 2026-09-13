@@ -11,6 +11,7 @@ import {
   type TeachingToolCandidate,
   canonicalTeachingPlanJson,
   chainInvocationForEdge,
+  chainInvocationsInOrder,
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   implementationPlanRequestProvenanceSha256,
@@ -666,6 +667,47 @@ describe('editable master teaching plan', () => {
       consumerParameter: 'item_id',
     });
     expect(() => create(alternative)).toThrow('binds consumer parameter "item_id" more than once');
+  });
+
+  it('orders explicitly named repeated calls and rejects invocation cycles or wrong sources', () => {
+    const search = tool('search-id', 'search');
+    const details = tool('details-id', 'details', { dependencies: ['search'], seq: 2 });
+    const first: ChainEdge = {
+      id: 'first-continuation',
+      producerToolId: search.id,
+      consumerToolId: search.id,
+      producerResultPath: 'items[0].id',
+      consumerParameter: 'query',
+      consumerInvocationId: 'page-two',
+    };
+    const second: ChainEdge = {
+      ...first,
+      id: 'second-continuation',
+      consumerInvocationId: 'page-three',
+      producerChainEdgeId: first.id,
+    };
+    const final: ChainEdge = {
+      ...first,
+      id: 'details',
+      consumerToolId: details.id,
+      producerChainEdgeId: second.id,
+    };
+    const plan = desired([search, details], [final, second, first]);
+    expect(create(plan).tools).toHaveLength(2);
+    expect(chainInvocationsInOrder(plan.chainEdges).map(({ edges }) => edges[0]?.id)).toEqual([
+      first.id,
+      second.id,
+      final.id,
+    ]);
+    const cyclic = structuredClone(plan);
+    const cyclicFirst = cyclic.chainEdges.find(({ id }) => id === first.id);
+    if (!cyclicFirst) throw new Error('missing first call');
+    cyclicFirst.producerChainEdgeId = second.id;
+    expect(() => create(cyclic)).toThrow('chain invocation cycle');
+    cyclicFirst.producerChainEdgeId = final.id;
+    expect(() => create(cyclic)).toThrow('mismatched producer invocation');
+    cyclicFirst.producerChainEdgeId = 'missing';
+    expect(() => create(cyclic)).toThrow('unknown or mismatched producer invocation');
   });
 
   it('treats candidate metadata-only changes as no compile work', () => {

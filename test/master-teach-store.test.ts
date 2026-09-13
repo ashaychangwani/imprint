@@ -364,6 +364,124 @@ function passedCompletionOutput(input: CompletionReviewInput) {
 }
 
 describe('small fresh teach journal', () => {
+  it('binds repeated calls to exact results and invalidates transitive consumers', () => {
+    const search = tool('search-id', 'search', 1);
+    const details = tool('details-id', 'details', 2, ['search']);
+    for (const target of [search, details])
+      target.candidate.likelyParams = [
+        { name: 'cursor', type: 'string', description: 'Cursor from a prior invocation.' },
+      ];
+    const continuation: ChainEdge = {
+      id: 'continue',
+      producerToolId: search.id,
+      consumerToolId: search.id,
+      producerResultPath: 'next',
+      consumerParameter: 'cursor',
+    };
+    const final: ChainEdge = {
+      ...continuation,
+      id: 'details',
+      consumerToolId: details.id,
+      producerChainEdgeId: continuation.id,
+    };
+    details.candidate.likelyParams.push({
+      name: 'original_cursor',
+      type: 'string',
+      description: 'Cursor from the first result.',
+    });
+    const original: ChainEdge = {
+      id: 'original',
+      producerToolId: search.id,
+      consumerToolId: details.id,
+      producerResultPath: 'next',
+      consumerParameter: 'original_cursor',
+    };
+    const { journal } = fixture([search, details], [continuation, final, original]);
+    const desired = desiredFrom(journal.currentPlan());
+    for (const target of desired.tools) {
+      const payload = implementation(target);
+      payload.parameterMappings = target.candidate.likelyParams.map(({ name }) => ({
+        parameterName: name,
+        artifactRequestIndices: [0],
+        guidance: 'Use this supplied cursor.',
+      }));
+      for (const check of payload.verificationCases)
+        check.parameterValues = target.candidate.likelyParams.map(({ name }) => ({
+          parameterName: name,
+          value: 'fixture-cursor',
+        }));
+      target.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(target),
+      );
+    }
+    journal.revisePlan(desired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    issueBuild(journal, search.id);
+    issueBuild(journal, details.id);
+    const baseline = passRequiredChecks(journal, search.id, [1]);
+    passRequiredChecks(journal, details.id, [2]);
+    const issue = (edge: ChainEdge) =>
+      journal.issueReceipt({
+        toolId: edge.consumerToolId,
+        check: 'chain',
+        chainEdgeId: edge.id,
+        facts: [passedInvocation('chain')],
+      });
+    expect(() => issue(final)).toThrow('chain producer');
+    const continued = issue(continuation);
+    const downstream = issue(final);
+    expect(continued.dependencyBuilds[0]?.resultReceiptRef).toEqual(baseline.ref);
+    expect(downstream.dependencyBuilds).toHaveLength(2);
+    expect(downstream.dependencyBuilds.map(({ resultReceiptRef }) => resultReceiptRef)).toEqual(
+      expect.arrayContaining([continued.ref, baseline.ref]),
+    );
+    const replacement = issue(continuation);
+    expect(
+      journal
+        .readState()
+        .tools.find(({ toolId }) => toolId === details.id)
+        ?.currentReceiptRefs.some(({ key }) => key === 'chain:details'),
+    ).toBeFalse();
+    const replacedDownstream = issue(final);
+    expect(replacedDownstream.dependencyBuilds[0]?.resultReceiptRef).toEqual(replacement.ref);
+    const rewired = desiredFrom(journal.currentPlan());
+    const rewiredSource = rewired.chainEdges.find(({ id }) => id === continuation.id);
+    if (!rewiredSource) throw new Error('missing continuation edge');
+    rewiredSource.producerResultPath = 'next_cursor';
+    const revision = journal.revisePlan(rewired, {
+      expectedRevision: journal.currentPlan().revision,
+      decision: decision(),
+    });
+    expect(revision.recompileToolIds).toHaveLength(0);
+    expect(
+      journal
+        .readState()
+        .tools.flatMap(({ currentReceiptRefs }) => currentReceiptRefs)
+        .filter(({ key }) => key.startsWith('chain:')),
+    ).toHaveLength(0);
+    issue(continuation);
+    issue(final);
+    journal.issueReceipt({ toolId: search.id, check: 'live', facts: [passedInvocation('live')] });
+    expect(
+      journal
+        .readState()
+        .tools.flatMap(({ currentReceiptRefs }) => currentReceiptRefs)
+        .filter(({ key }) => key.startsWith('chain:')),
+    ).toHaveLength(0);
+    expect(journal.readState().supersededReceiptRefs).toEqual(
+      expect.arrayContaining([
+        baseline.ref,
+        continued.ref,
+        downstream.ref,
+        replacement.ref,
+        replacedDownstream.ref,
+      ]),
+    );
+  });
+
   it('keeps every master-planned tool and its waves, including more than 32 tools', () => {
     const tools = Array.from({ length: 40 }, (_, index) =>
       tool(`tool-${index}`, `operation_${index}`, (index % 4) + 1),
@@ -559,7 +677,7 @@ describe('small fresh teach journal', () => {
         chainEdgeId: edge.id,
         facts: [passedInvocation('chain')],
       }),
-    ).toThrow('chain producer has no current build with a passed live result');
+    ).toThrow('chain producer has no current build with a passed result');
     const producerLive = passRequiredChecks(journal, 'producer-id', [1]);
     const receipt = journal.issueReceipt({
       toolId: 'consumer-id',

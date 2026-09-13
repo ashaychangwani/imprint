@@ -10884,3 +10884,42 @@ pricing/cache/interrupted CLI caveats remain. Private flights-audit-38-accountin
 preserved. About18GiB free. Latest implementation26a3e36 remains unchanged; no
 teach/audit/live diagnostic is running. Hotels provider rejection and same-code
 repeatability remain unresolved. No push, MR, merge, reset, or evidence deletion.
+
+
+## 2026-09-13 16:32 PDT — Support repeated calls with explicit source receipts
+
+The plan can now name repeated consumer invocations and explicitly select the
+result of an earlier chain call. Omitting the new optional fields preserves the
+standalone producer and single consumer-call behavior. The runtime validates
+finite acyclic call references, groups only bindings for the same named call,
+and executes them in dependency order. Self-use does not add a self-dependency
+to the distinct-tool build graph. Agents still choose boundaries, parameters,
+call sequences and source paths; there is no site-specific example or rule.
+
+Chain receipts bind the selected prior call, including multiple results from
+one build. Replacing a result or changing an upstream binding invalidates its
+transitive consumers, including calls of the same tool. Rejected semantic
+results remain available as repair evidence but cannot supply downstream calls.
+An initial regression removed rejected evidence and disrupted no-progress repair;
+the existing end-to-end test caught it and the correction retains that history.
+An initial TypeScript narrowing error and rejection-fixture terminal expectation
+were corrected; all failed test logs remain private. Generated run38 artifacts
+were not changed, and its search metadata and continuation defects remain failed.
+
+Four new behavior cases cover ordered repeated calls and exact receipt provenance,
+blocking a rejected continuation, cycle/mismatched-source rejection, and receipt
+invalidation after source replacement or edge revision. The journal test also
+binds two different results of the same build. All291 focused tests pass with1634
+assertions in17.70seconds. Lint214files, types, website build, desktop/mobile full
+page and changed-card review passed, no page errors or horizontal overflow.
+The existing bundle warning remains. README, architecture, master/planner prompts
+and website are updated. Private invocation-* logs and screenshots retained;
+preview stopped before live validation. No prompt-mirroring tests added.
+
+Next validate in fresh Flights39 using the original recording and four-operation
+guidance, two workers and original30/60/90-minute experiment limits. Never resume38
+or supply its tools or private diagnosis. Observe whether agents use explicit
+continuations and final booking consumes that fresh call result. Synthetic proof
+is not live validation or repeatability. Accounting remains through audit38 at
+$821.8669232 base estimate, with30 missing semantic calls and earlier caveats.
+Hotels provider rejection remains unresolved. No push, MR, merge or evidence deletion.

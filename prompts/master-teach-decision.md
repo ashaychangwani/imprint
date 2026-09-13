@@ -604,8 +604,16 @@ every reference to that public name before returning.
 
 Represent each producer-to-consumer parameter flow explicitly in `chainEdges`:
 producer tool ID and public result path, then consumer tool ID and parameter.
-All edges targeting the same consumer are one explicit invocation and each
-consumer parameter may be bound once. If several producer paths are plausible,
+Edges with the same consumer tool and `consumerInvocationId` form one call; omit
+that optional ID for the original single call per consumer. Each parameter may
+be bound once within a call. Set `producerChainEdgeId` to an edge of an earlier
+call to consume that call's result; omit it to consume the producer's standalone
+live result. A tool may consume its own earlier result without adding itself
+to `dependsOnTools`. Use distinct invocation IDs for repeated calls. Prior-call
+references must be acyclic and must name a call of the declared producer tool.
+Build waves still order distinct tools. The runtime executes these explicit
+bindings; it does not infer a continuation or choose a public tool boundary.
+If several producer paths are plausible,
 choose one rather than returning alternatives for the runtime to interpret.
 
 `producerResultPath` is an executable path relative to the producer's returned
@@ -672,7 +680,8 @@ Exact output schema (all objects reject extra fields):
     }>,
     buildWaves: Array<Array<tool ID>>,
     chainEdges: Array<{
-      id, producerToolId, producerResultPath, consumerToolId, consumerParameter
+      id, producerToolId, producerResultPath, consumerToolId, consumerParameter,
+      consumerInvocationId?: string, producerChainEdgeId?: string
     }>
   }
 }

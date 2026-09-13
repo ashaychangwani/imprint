@@ -166,14 +166,11 @@ const DependencyExecutionBindingSchema = strictObject({
 const DependencyListSchema = z
   .array(DependencyExecutionBindingSchema)
   .superRefine((dependencies, ctx) => {
-    const ids = new Set<string>();
     const refs = new Set<string>();
     dependencies.forEach((dependency, index) => {
-      if (ids.has(dependency.toolId)) issue(ctx, [index, 'toolId'], 'duplicate dependency');
-      if (refs.has(refKey(dependency.buildRef)))
-        issue(ctx, [index, 'buildRef'], 'duplicate build ref');
-      ids.add(dependency.toolId);
-      refs.add(refKey(dependency.buildRef));
+      const key = refKey(dependency.resultReceiptRef);
+      if (refs.has(key)) issue(ctx, [index, 'resultReceiptRef'], 'duplicate dependency result');
+      refs.add(key);
     });
   });
 /** Store/controller issues this binding from the accepted implementation plan. */

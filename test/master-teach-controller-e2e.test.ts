@@ -772,6 +772,137 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  for (const rejectContinuation of [false, true]) {
+    it(`executes repeated calls with exact receipts and blocks rejected sources: ${rejectContinuation}`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const events: string[] = [];
+        const calls: Array<{ input: unknown; output: string }> = [];
+        const base = lifecycleFailureFixture({
+          runId: 'run-e2e-repeated-invocations',
+          events,
+          promotionBatches: [],
+          requestBaselineMvpReview: (input) =>
+            baselineMvpReview(
+              input,
+              rejectContinuation && input.resultEvidence.payload.chainEdgeId === 'continue-item'
+                ? 'revision_required'
+                : 'credible',
+            ),
+        });
+        const second = {
+          id: 'continue-item',
+          producerToolId: CONSUMER_ID,
+          consumerToolId: CONSUMER_ID,
+          producerResultPath: 'id',
+          consumerParameter: 'item_id',
+          consumerInvocationId: 'second',
+          producerChainEdgeId: EDGE_ID,
+        };
+        const third = {
+          ...second,
+          id: 'continue-again',
+          consumerInvocationId: 'third',
+          producerChainEdgeId: second.id,
+        };
+        const terminal = await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: syntheticSessionPath(root),
+            noInteractive: true,
+            provider: 'codex-cli',
+            maxDurationMs: 5_000,
+          },
+          {
+            ...base,
+            requestMasterDecision: async (input) => {
+              if (input.verificationFindings)
+                throw new ProviderUnavailableError(new Error('stop after fixture rejection'));
+              const desiredPlan =
+                input.phase === 'discovery'
+                  ? initialDesiredPlan(input)
+                  : input.plannerProposals.length
+                    ? proposalDesiredPlan(input)
+                    : desiredFromCurrent(input);
+              desiredPlan.chainEdges = [third, second, chainEdge];
+              return requestValidatedMasterDecision(input, {
+                analyzer: {
+                  analyze: async () => ({
+                    text: JSON.stringify({
+                      binding: input.current?.run ?? input.discovery.run,
+                      outcome: 'accepted',
+                      reason: 'Use three finite calls with explicit prior results.',
+                      recallToolNames: [],
+                      desiredPlan,
+                    }),
+                  }),
+                },
+              });
+            },
+            runApiTool: async ({ workflowPath, parameters }) => {
+              if (workflowPath.includes(`/${PRODUCER_ID}/`))
+                return {
+                  result: { ok: true, data: { items: [{ id: 'fresh-search' }] } },
+                  executionMechanism: 'fixture-api',
+                };
+              const output = `fresh-result-${calls.length + 1}`;
+              calls.push({ input: parameters.item_id, output });
+              return {
+                result: { ok: true, data: { id: output } },
+                executionMechanism: 'fixture-api',
+              };
+            },
+            requestCompletionReview: async (input) => {
+              const proof = input.snapshot.payload.tools.find(
+                ({ toolId }) => toolId === CONSUMER_ID,
+              );
+              const firstReceipt = proof?.receipts.find(
+                ({ chainEdgeId }) => chainEdgeId === EDGE_ID,
+              );
+              const secondReceipt = proof?.receipts.find(
+                ({ chainEdgeId }) => chainEdgeId === second.id,
+              );
+              const thirdReceipt = proof?.receipts.find(
+                ({ chainEdgeId }) => chainEdgeId === third.id,
+              );
+              expect(secondReceipt?.dependencyBuilds[0]?.resultReceiptRef).toEqual(
+                firstReceipt?.ref,
+              );
+              expect(thirdReceipt?.dependencyBuilds[0]?.resultReceiptRef).toEqual(
+                secondReceipt?.ref,
+              );
+              return CompletionReviewOutputSchema.parse({
+                binding: input.run,
+                verdict: 'passed',
+                summary: 'All explicitly ordered calls completed.',
+                findings: [],
+                toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                  toolId: result.payload.toolId,
+                  ...(result.payload.chainEdgeId
+                    ? { chainEdgeId: result.payload.chainEdgeId }
+                    : {}),
+                  status: 'credible',
+                  reason: 'The fixture result matches this invocation.',
+                  evidenceRefs: [result.ref],
+                })),
+                claimDispositions: [],
+              });
+            },
+          },
+        );
+        expect(terminal.status).toBe(rejectContinuation ? 'provider_unavailable' : 'completed');
+        expect(calls.map(({ input }) => input)).toEqual(
+          rejectContinuation
+            ? ['item-1', 'fresh-search', 'fresh-result-2']
+            : ['item-1', 'fresh-search', 'fresh-result-2', 'fresh-result-3'],
+        );
+        expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
+          `compile:${PRODUCER_ID}`,
+          `compile:${CONSUMER_ID}`,
+        ]);
+      });
+    });
+  }
+
   for (const stalledCheck of ['live', 'chain'] as const) {
     it(`cancels a stalled API ${stalledCheck} check at the shared run deadline`, async () => {
       await withTemporaryImprintHome(async (root) => {

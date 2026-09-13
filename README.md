@@ -202,6 +202,10 @@ retries that exact delivery once on the same conversation and deadline.
 Researchers can return a concrete input or dependency gap for a master decision
 without exhausting transport permutations. The master coordinates affected
 producer outputs and consumer inputs together; fresh live proof is still required.
+Agents can plan repeated calls to the same tool and bind each call to an exact
+prior result. The runtime checks a finite invocation order and invalidates dependent
+proof when that source result changes; a continuation does not require a separate
+public tool. Existing single-call plans retain their behavior.
 For tools that accept grouped selections, chain checks and audits use a fresh
 multi-member record when available and compare the complete returned group.
 A passing singleton check does not establish that every selected member survives.

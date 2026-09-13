@@ -31,6 +31,13 @@ that same record for related consumer inputs. The runtime does not choose a
 row or serialize objects implicitly. Binding failures report the bad path and
 explain that the consumer was not called; a wiring-only repair keeps working
 artifacts and reruns the chain check.
+Chain bindings optionally name a `consumerInvocationId` to distinguish repeated
+calls to one tool. `producerChainEdgeId` selects the exact result of an earlier
+chain invocation; omitting it selects the standalone live result. Bindings within
+one consumer/invocation pair execute together. The runtime validates an acyclic
+invocation graph, preserves exact source receipts, and invalidates transitive
+consumers when source results or bindings change. Self-use needs no self-dependency
+in the separate tool build graph. Agents choose the sequence and public boundaries.
 For consumers that accept grouped selections, the compiler and auditor choose a
 fresh multi-member producer record when available and compare the complete group,
 including identities and order. A singleton success does not prove preservation

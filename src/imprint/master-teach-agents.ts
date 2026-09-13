@@ -45,6 +45,8 @@ import {
   type EditableTeachingTool,
   type TeachingCandidateEvidence,
   chainInvocationForEdge,
+  chainInvocationKey,
+  chainProducerBindings,
   teachingPlanContentSha256 as digest,
   teachingCandidateIssues,
   teachingToolCompileInputsSha256,
@@ -537,17 +539,26 @@ function validateFocusedPlannerEdges(
       edge.producerResultPath,
       edge.consumerToolId,
       edge.consumerParameter,
+      edge.consumerInvocationId ?? null,
+      edge.producerChainEdgeId ?? null,
     ]);
     if (tuples.has(tuple)) issue(ctx, base, 'duplicate chain edge');
-    const producer = producers.get(edge.producerToolId);
+    const producer =
+      edge.producerToolId === tool.id
+        ? { toolName: tool.candidate.toolName }
+        : producers.get(edge.producerToolId);
     if (!producer) issue(ctx, [...base, 'producerToolId'], 'unknown focused producer tool');
     if (edge.consumerToolId !== tool.id)
       issue(ctx, [...base, 'consumerToolId'], 'focused chain edge belongs to another consumer');
     if (!tool.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter))
       issue(ctx, [...base, 'consumerParameter'], 'unknown focused consumer parameter');
-    if (producer && !tool.candidate.dependsOnTools.includes(producer.toolName))
+    if (
+      producer &&
+      edge.producerToolId !== tool.id &&
+      !tool.candidate.dependsOnTools.includes(producer.toolName)
+    )
       issue(ctx, base, 'focused chain edge is absent from the proposed tool dependency');
-    const consumerParameter = digest([edge.consumerToolId, edge.consumerParameter]);
+    const consumerParameter = digest([chainInvocationKey(edge), edge.consumerParameter]);
     if (consumerParameters.has(consumerParameter))
       issue(
         ctx,
@@ -757,24 +768,23 @@ function expectedChainDependencies(
   proofs: ReadonlyMap<string, ExecutionToolProof>,
 ): ExecutionToolProof['receipts'][number]['dependencyBuilds'] | undefined {
   const dependencies: ExecutionToolProof['receipts'][number]['dependencyBuilds'] = [];
-  const producerIds = [
-    ...new Set(
-      chainInvocationForEdge(plan.chainEdges, edge).edges.map(
-        ({ producerToolId }) => producerToolId,
-      ),
-    ),
-  ].sort();
-  for (const producerToolId of producerIds) {
-    const producer = proofs.get(producerToolId);
-    const producerLive = producer?.receipts.find(
-      ({ check, status }) => check === 'live' && status === 'passed',
+  for (const binding of chainProducerBindings(
+    chainInvocationForEdge(plan.chainEdges, edge).edges,
+  )) {
+    const producer = proofs.get(binding.producerToolId);
+    const producerResult = producer?.receipts.find(
+      (receipt) =>
+        receipt.status === 'passed' &&
+        (binding.producerChainEdgeId
+          ? receipt.check === 'chain' && receipt.chainEdgeId === binding.producerChainEdgeId
+          : receipt.check === 'live'),
     );
-    if (!producer || !producerLive) return undefined;
+    if (!producer || !producerResult) return undefined;
     dependencies.push({
       toolId: producer.toolId,
       buildRef: producer.currentBuildRef,
       executionBindingSha256: producer.executionBindingSha256,
-      resultReceiptRef: producerLive.ref,
+      resultReceiptRef: producerResult.ref,
     });
   }
   return dependencies.length > 0 ? dependencies : undefined;
@@ -840,7 +850,7 @@ function validateSnapshot(
         return issue(
           ctx,
           [...base, 'receipts', receiptIndex],
-          'chain receipt has no current passed producer live result',
+          'chain receipt has no current passed producer result',
         );
       if (!same(receipt.dependencyBuilds, expected))
         issue(ctx, [...base, 'receipts', receiptIndex], 'chain receipt has stale producer result');
@@ -1337,15 +1347,21 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         edge.producerResultPath,
         edge.consumerToolId,
         edge.consumerParameter,
+        edge.consumerInvocationId ?? null,
+        edge.producerChainEdgeId ?? null,
       ]);
       if (edgeTuples.has(tuple)) issue(ctx, edgePath, 'duplicate proposal chain edge');
       const producer = authoredToolsById.get(edge.producerToolId);
       if (!producer) issue(ctx, [...edgePath, 'producerToolId'], 'unknown proposal producer tool');
       if (!tool.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter))
         issue(ctx, [...edgePath, 'consumerParameter'], 'unknown proposal consumer parameter');
-      if (producer && !tool.candidate.dependsOnTools.includes(producer.candidate.toolName))
+      if (
+        producer &&
+        producer.id !== tool.id &&
+        !tool.candidate.dependsOnTools.includes(producer.candidate.toolName)
+      )
         issue(ctx, edgePath, 'proposal edge is absent from the proposed tool dependency');
-      const consumerParameter = digest([edge.consumerToolId, edge.consumerParameter]);
+      const consumerParameter = digest([chainInvocationKey(edge), edge.consumerParameter]);
       if (consumerParameters.has(consumerParameter))
         issue(
           ctx,

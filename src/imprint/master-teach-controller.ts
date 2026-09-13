@@ -99,6 +99,7 @@ import {
   bindImplementationPlanRef,
   canonicalTeachingPlanJson,
   chainInvocationForEdge,
+  chainInvocationsInOrder,
   createEditableTeachingPlan,
   groundDetectorCandidateForMaster,
   normalizeDetectorCompileContextForMaster,
@@ -3938,7 +3939,10 @@ async function compileAndCheckCurrentPlan(input: {
   const declaredProducerIdsFor = (tool: EditableTeachingTool): string[] => [
     ...tool.candidate.dependsOnTools.flatMap((name) => toolIdByName.get(name) ?? []),
     ...plan.chainEdges
-      .filter(({ consumerToolId }) => consumerToolId === tool.id)
+      .filter(
+        ({ consumerToolId, producerToolId }) =>
+          consumerToolId === tool.id && producerToolId !== tool.id,
+      )
       .map(({ producerToolId }) => producerToolId),
   ];
   const verifiedToolIds = new Set<string>();
@@ -4147,19 +4151,12 @@ async function compileAndCheckCurrentPlan(input: {
     return live;
   };
 
-  const incomingChainInvocationsFor = (toolId: string): ChainInvocation[] => {
-    const incoming = plan.chainEdges.filter(({ consumerToolId }) => consumerToolId === toolId);
-    const visited = new Set<string>();
-    const invocations: ChainInvocation[] = [];
-    for (const edge of incoming) {
-      if (visited.has(edge.id)) continue;
-      const invocation = chainInvocationForEdge(incoming, edge);
-      for (const grouped of invocation.edges) visited.add(grouped.id);
-      invocations.push(invocation);
-    }
-    return invocations;
-  };
+  const incomingChainInvocationsFor = (toolId: string): ChainInvocation[] =>
+    chainInvocationsInOrder(plan.chainEdges).filter(
+      (invocation) => invocation.edges[0]?.consumerToolId === toolId,
+    );
 
+  const rejectedChainInvocations = new Set<string>();
   const runChainCheck = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
@@ -4167,6 +4164,7 @@ async function compileAndCheckCurrentPlan(input: {
     invocation: ChainInvocation,
     waveIndex: number,
   ): Promise<LiveCheckResult | undefined> => {
+    if (rejectedChainInvocations.has(invocation.sha256)) return undefined;
     const { edges } = invocation;
     const firstEdge = edges[0];
     if (!firstEdge) throw new Error(`chain check for "${tool.id}" has no edges`);
@@ -4190,15 +4188,55 @@ async function compileAndCheckCurrentPlan(input: {
     let parameters = liveVerificationParameters(implementation);
     let bindingFailure: { edge: ChainEdge; error: Error } | undefined;
     for (const edge of edges) {
-      const producer = liveByToolId.get(edge.producerToolId);
+      let producer = edge.producerChainEdgeId
+        ? chainByEdgeId.get(edge.producerChainEdgeId)
+        : liveByToolId.get(edge.producerToolId);
+      const producerState = input.journal
+        .readState()
+        .tools.find(({ toolId }) => toolId === edge.producerToolId);
+      const sourceRef = producer?.resultReceiptRef;
+      const hasCurrentResult =
+        sourceRef &&
+        producerState?.currentReceiptRefs.some(
+          ({ ref }) => ref.path === sourceRef.path && ref.sha256 === sourceRef.sha256,
+        );
+      const sourceRejected =
+        producer &&
+        edge.producerChainEdgeId &&
+        (rejectedChainInvocations.has(producer.chainInvocationSha256 ?? '') ||
+          input.resultDisposition?.(edge.producerToolId, producer.resultReceiptRef)?.status ===
+            'revision_required');
+      if (!hasCurrentResult || sourceRejected) producer = undefined;
+      if (!producer && !sourceRejected && edge.producerChainEdgeId) {
+        const sourceEdge = plan.chainEdges.find(({ id }) => id === edge.producerChainEdgeId);
+        const sourceTool = plan.tools.find(({ id }) => id === edge.producerToolId);
+        const sourceCompiled = compiledByToolId.get(edge.producerToolId);
+        if (sourceEdge && sourceTool?.implementationPlan && sourceCompiled) {
+          const sourceInvocation = chainInvocationForEdge(plan.chainEdges, sourceEdge);
+          const source = await runChainCheck(
+            sourceTool,
+            sourceCompiled,
+            input.journal.readJson(sourceTool.implementationPlan) as ImplementationPlanPayload,
+            sourceInvocation,
+            waveIndex,
+          );
+          if (source && (await reviewChainResult(sourceTool, sourceInvocation, source, waveIndex)))
+            producer = chainByEdgeId.get(edge.producerChainEdgeId);
+        }
+      }
       if (!producer?.result.ok) {
-        bindingFailure = {
-          edge,
-          error: new Error(
-            `producer "${edge.producerToolId}" has no successful live result for chain "${edge.id}"`,
+        failures.push(
+          checkFailure(
+            tool,
+            waveIndex,
+            'proof',
+            new Error(
+              `producer "${edge.producerToolId}" has no current successful ${edge.producerChainEdgeId ? `chain ${edge.producerChainEdgeId}` : 'live'} result for chain "${edge.id}"; consumer not called`,
+            ),
+            { chainEdgeId: edge.id },
           ),
-        };
-        break;
+        );
+        return undefined;
       }
       const binding = bindProducerResultToConsumer({
         edge,
@@ -4366,6 +4404,7 @@ async function compileAndCheckCurrentPlan(input: {
           evidenceRefs: [],
         } as const);
     if (disposition.status === 'credible') return true;
+    rejectedChainInvocations.add(invocation.sha256);
     failures.push(
       checkFailure(
         tool,

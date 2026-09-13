@@ -16,7 +16,7 @@ import {
 } from './master-teach-agent-contracts.ts';
 import { mechanicalProofFailures, parseCompletionReviewOutput } from './master-teach-agents.ts';
 // biome-ignore format: these are the complete plan mechanics owned by this journal
-import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, chainInvocationForEdge, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, unresolvedCandidateCoverage, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
+import { type ContentAddressedRef, ContentAddressedRefSchema, type DesiredTeachingPlan, type EditableTeachingPlan, type ImplementationPlanPayload, ImplementationPlanPayloadSchema, type TeachingPlanDecision, type TeachingPlanRevisionResult, type TeachingPlanValidation, TeachingPlanValidationError, bindImplementationPlanRef, canonicalTeachingPlanJson, chainInvocationForEdge, chainInvocationKey, chainProducerBindings, reviseEditableTeachingPlan, teachingPlanContentSha256, teachingToolCompileInputsSha256, unresolvedCandidateCoverage, validateBuildWorkflowProvenance, validateEditableTeachingPlan, validateImplementationPlanForTool } from './master-teach-plan.ts';
 // biome-ignore format: these are the complete factual receipt/projection mechanics
 import { type CurrentExecutionSnapshot, CurrentExecutionSnapshotSchema, ExecutionReceiptSchema, type ReceiptFact, ReceiptHistoryProjectionSchema, RunIdentitySchema, ToolExecutionBindingSchema, ToolVerificationPayloadSchema } from './master-teach-prompt-projections.ts';
 import { WorkflowSchema } from './types.ts';
@@ -182,7 +182,7 @@ export type FreshTeachBootstrapObject =
 const JournalErrorMessages = {
   bootstrap_ref_mismatch: 'bootstrap object ref mismatch',
   chain_edge_mismatch: 'chain receipt does not match a current edge',
-  chain_producer_missing: 'chain producer has no current build with a passed live result',
+  chain_producer_missing: 'chain producer has no current build with a passed result',
   completion_input_stale: 'completion review input is not current',
   completion_intent_mismatch: 'completion review intent does not match terminal status',
   completion_proof_incomplete: 'completion proof is incomplete',
@@ -432,19 +432,31 @@ export class FreshTeachJournal {
   ) {
     state.supersededReceiptRefs.push(...pointers.map(({ ref }) => ref));
   }
-  #invalidateChainsUsingProducer(state: FreshTeachJournalState, producerToolId: string): void {
-    for (const current of state.tools) {
-      if (current.toolId === producerToolId) continue;
-      const stale = current.currentReceiptRefs.filter((pointer) => {
-        if (!pointer.key.startsWith('chain:')) return false;
-        return this.readReceipt(pointer.ref).dependencyBuilds.some(
-          (dependency) => dependency.toolId === producerToolId,
-        );
-      });
-      this.#archive(state, stale);
-      current.currentReceiptRefs = current.currentReceiptRefs.filter(
-        ({ ref }) => !stale.some((pointer) => sameRef(pointer.ref, ref)),
+  #invalidateStaleChains(state: FreshTeachJournalState): void {
+    // Exact result references allow repeated calls from the same build. Remove
+    // transitive consumers too when a source result or its own source disappears.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      const currentRefs = new Set(
+        state.tools.flatMap((tool) => tool.currentReceiptRefs.map(({ ref }) => refKey(ref))),
       );
+      for (const tool of state.tools) {
+        const stale = tool.currentReceiptRefs.filter(
+          (pointer) =>
+            pointer.key.startsWith('chain:') &&
+            this.readReceipt(pointer.ref).dependencyBuilds.some(
+              (dependency) => !currentRefs.has(refKey(dependency.resultReceiptRef)),
+            ),
+        );
+        if (!stale.length) continue;
+        this.#archive(state, stale);
+        const staleRefs = new Set(stale.map(({ ref }) => refKey(ref)));
+        tool.currentReceiptRefs = tool.currentReceiptRefs.filter(
+          ({ ref }) => !staleRefs.has(refKey(ref)),
+        );
+        changed = true;
+      }
     }
   }
   #clearReview(state: FreshTeachJournalState): void {
@@ -478,8 +490,7 @@ export class FreshTeachJournal {
     const invalidatedProducerIds = new Set([...recompileToolIds, ...result.removedToolIds]);
     const priorEdges = new Map(priorPlan.chainEdges.map((edge) => [edge.id, edge] as const));
     const nextEdges = new Map(result.plan.chainEdges.map((edge) => [edge.id, edge] as const));
-    const invocationKey = (edge: (typeof priorPlan.chainEdges)[number]) =>
-      canonicalTeachingPlanJson([edge.consumerToolId]);
+    const invocationKey = (edge: (typeof priorPlan.chainEdges)[number]) => chainInvocationKey(edge);
     const invalidatedInvocationKeys = new Set<string>();
     for (const edgeId of result.changedChainEdgeIds) {
       const priorEdge = priorEdges.get(edgeId);
@@ -515,6 +526,7 @@ export class FreshTeachJournal {
             ),
       };
     });
+    this.#invalidateStaleChains(state);
     state.supersededPlanRefs.push(state.currentPlanRef);
     state.currentPlanRef = nextPlanRef;
     this.#clearReview(state);
@@ -658,7 +670,7 @@ export class FreshTeachJournal {
     const priorBuildRef = toolState.buildRef;
     this.#archive(state, toolState.currentReceiptRefs);
     toolState.currentReceiptRefs = [];
-    if (priorBuildRef) this.#invalidateChainsUsingProducer(state, tool.id);
+    if (priorBuildRef) this.#invalidateStaleChains(state);
     toolState.buildRef = ref;
     this.#clearReview(state);
     this.#commit(state);
@@ -691,36 +703,29 @@ export class FreshTeachJournal {
       if (!edge || edge.consumerToolId !== input.toolId)
         throw journalFailure('chain_edge_mismatch');
       chainEdgeSha256 = teachingPlanContentSha256(edge);
-      const producerIds = [
-        ...new Set(
-          chainInvocationForEdge(plan.chainEdges, edge).edges.map(
-            ({ producerToolId }) => producerToolId,
-          ),
-        ),
-      ].sort();
-      for (const producerToolId of producerIds) {
-        const producerState = state.tools.find(({ toolId }) => toolId === producerToolId);
+      for (const binding of chainProducerBindings(
+        chainInvocationForEdge(plan.chainEdges, edge).edges,
+      )) {
+        const producerState = state.tools.find(({ toolId }) => toolId === binding.producerToolId);
         if (!producerState?.buildRef) throw journalFailure('chain_producer_missing');
         const producerBuild = this.readBuild(producerState.buildRef);
-        const producerLivePointer = producerState.currentReceiptRefs.find(
-          ({ key }) => key === 'live',
-        );
-        const producerLive = producerLivePointer
-          ? this.readReceipt(producerLivePointer.ref)
-          : undefined;
+        const sourceKey = binding.producerChainEdgeId
+          ? `chain:${binding.producerChainEdgeId}`
+          : 'live';
+        const pointer = producerState.currentReceiptRefs.find(({ key }) => key === sourceKey);
+        const producerResult = pointer ? this.readReceipt(pointer.ref) : undefined;
         if (
-          producerLive?.check !== 'live' ||
-          producerLive.status !== 'passed' ||
-          !sameRef(producerLive.buildRef, producerState.buildRef) ||
-          producerLive.executionBindingSha256 !== producerBuild.executionBindingSha256
-        ) {
+          !producerResult ||
+          producerResult.status !== 'passed' ||
+          !sameRef(producerResult.buildRef, producerState.buildRef) ||
+          producerResult.executionBindingSha256 !== producerBuild.executionBindingSha256
+        )
           throw journalFailure('chain_producer_missing');
-        }
         chainDependencies.push({
-          toolId: producerToolId,
+          toolId: binding.producerToolId,
           buildRef: producerState.buildRef,
           executionBindingSha256: producerBuild.executionBindingSha256,
-          resultReceiptRef: producerLive.ref,
+          resultReceiptRef: producerResult.ref,
         });
       }
     }
@@ -772,9 +777,8 @@ export class FreshTeachJournal {
     }
     this.#putJson(body);
     if (previous) this.#archive(state, [previous]);
-    if (input.check === 'live' && previous)
-      this.#invalidateChainsUsingProducer(state, input.toolId);
     toolState.currentReceiptRefs = [...retained, { key, ref }];
+    if (previous) this.#invalidateStaleChains(state);
     state.nextReceiptOrdinal += 1;
     this.#clearReview(state);
     this.#commit(state);
