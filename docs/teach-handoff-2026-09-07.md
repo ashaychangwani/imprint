@@ -1,6 +1,45 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 16:02 PDT
+## Current continuation — 2026-09-13 16:20 PDT
+
+Independent audit38 is finished; PID79661 ended. It failed 18/21 graded, with
+14 actual calls: 10 correct, three broken search calls, one rejected booking input.
+Lookup and nearby-date grid passed their contrasts. Search lost return-date
+metadata on changed origin, destination and departure date; return-date behavior
+was not independently established. Booking consumed an exact fresh one-segment
+selection, rejected it as requiring two, and remained ungradeable. No infrastructure
+exclusions; eight parameters work and two are untestable. No reroll or new teach.
+
+Read-only inspection found search parser.ts uses a recursive date/string occurrence
+check to report the requested return date; that is not a decoded semantic field.
+The same parser also filters airline and flight-number lengths. These observations
+are separate from the broken overall continuation chain. Generated artifacts and
+all failed evidence are untouched; no new semantic diagnosis was fed to teachers.
+
+The repeated-call restriction is not just ChainEdgeSchema's self-edge guard:
+chainInvocationForEdge groups all edges by consumer tool; runChainCheck binds only
+liveByToolId (standalone output); issueReceipt and expectedChainDependencies bind
+only the producer live receipt. Receipt invalidation skips the producer's own tool.
+Deleting the self-edge guard would therefore leave wrong output provenance and
+stale-proof risks. A small coherent extension must distinguish finite invocation
+identities and explicit prior-call outputs, validate an acyclic invocation graph,
+execute in that order, and bind/invalidate the exact producing receipts. Build
+ordering remains about distinct tools; repeated use must not force another public
+tool. Agents choose the calls and bindings. No runtime or prompt edit made yet.
+Next test this mechanical design with synthetic same-tool continuation, downstream
+consumption, cycle rejection and stale-receipt invalidation before fresh Flights39.
+Do not conflate fixing plan mechanics with fixing generated semantic defects.
+
+Accounting is complete through audit38: 46 teaches/35 audits, 81 traces/9130 spans/
+3010 usage carriers, 3510.4335725467335 minutes, input671498900, reads557762688,
+output7190850, writes0, $821.8669232 base API-equivalent estimate. Audit adds
+$0.56672 and no missing usage calls; thirty prior missing semantic calls and all
+pricing/cache/interrupted CLI caveats remain. Private flights-audit-38-accounting.json
+preserved. About18GiB free. Latest implementation26a3e36 remains unchanged; no
+teach/audit/live diagnostic is running. Hotels provider rejection and same-code
+repeatability remain unresolved. No push, MR, merge, reset, or evidence deletion.
+
+## Previous checkpoint — September 13, 16:02 PDT
 
 Flights38 ended after90.00019261388 minutes on unchanged26a3e36. Final plan reports
 3ready/2notready: lookup, initial search and date grid have current passing receipts;
