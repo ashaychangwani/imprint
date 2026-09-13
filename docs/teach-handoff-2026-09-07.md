@@ -1,6 +1,39 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 12:45 PDT
+## Current continuation — September 13, 12:48 PDT
+
+Confirmed from Flights36's retained repair payload that missing follow-up fields
+were reported only as Required. Semantic schema diagnostics now include the
+expected type and missing value for these errors, retaining the exact field path
+and original message. The master receives array versus string expectations when
+repairing its own output. The existing schema, single repair attempt, conversation,
+shared deadline, and strict rejection remain unchanged. No coercion or site rule.
+
+The synthetic blocked-research test now omits both a string field and a proof
+array, checks the actual retained repair payload, accepts the corrected complete
+follow-up, and verifies a scalar proof remains invalid. 215 agent/controller/
+controller-end-to-end tests passed,1351 assertions,15.67 seconds; lint214files,
+types,web build,desktop/mobile checks passed. Initial test-fixture delete operators
+were replaced with undefined assignment to satisfy lint before final validation.
+Private repair-type-* logs/screenshots retained; temporary preview stopped.
+README,architecture and website updated. No prompt-mirroring test added.
+
+This improves factual feedback, not the original generated lookup/search defects
+or calendar timeout. It does not guarantee the master will repair every error;
+the failed response also names its own research target as a sibling, which requires
+agent correction under existing contextual validation. Preserve the original
+failed response and all live evidence. Next fresh Flights37 on this committed
+change, original recording/four-operation scope, unused home/log/manifest, never
+resume36. Independent audit and unchanged-code repeatability remain required.
+
+Accounting stays through teach36 at $760.8136888 base API-equivalent estimate,
+with28 earlier missing semantic calls and all prior caveats. HostAC,about19GiB
+free,collector healthy,no live teach/audit/diagnostic. Hotels provider rejection
+and original researcher malformed-handoff live coverage remain unresolved. No
+prior tools or private parent diagnosis supplied to teachers,push,MR,merge,deletion
+or model switch.
+
+## Previous checkpoint — September 13, 12:45 PDT
 
 Flights 36 ended after74.86842761875 minutes on unchanged28de4ed, with zero ready
 and four not ready. All research handoffs had reached proven, but generated checks

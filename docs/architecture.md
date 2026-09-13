@@ -762,3 +762,11 @@ response observations retain the existing bounded/redacted representation.
 Compiler parser examples and guidance distinguish a structurally valid empty
 collection from missing or unsupported result data. Agents establish protocol
 meaning and handle framing from evidence; there is no runtime envelope classifier.
+
+
+Semantic output repair feedback retains the expected type when schema validation
+finds an omitted required field. The same exact field path and original response
+return to the retained agent, alongside the current validation context. This is
+factual schema information, not coercion: strings do not become proof lists and
+invalid output still fails validation. The existing single repair attempt and
+shared deadline remain unchanged.

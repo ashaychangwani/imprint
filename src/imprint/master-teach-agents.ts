@@ -1981,9 +1981,15 @@ function parse<S extends z.ZodTypeAny>(
   if (result.success) return result.data;
   throw new SemanticAgentOutputError(
     role,
-    result.error.issues
-      .slice(0, 24)
-      .map(({ path, message }) => `${path.join('.') || '<root>'}: ${message}`.slice(0, 500)),
+    result.error.issues.slice(0, 24).map((problem) => {
+      // Zod's default "Required" diagnostic omits the missing field's type.
+      // Preserve that factual shape in repair feedback without coercing output.
+      const message =
+        problem.code === 'invalid_type' && problem.received === 'undefined'
+          ? `${problem.message} (expected ${problem.expected}, received undefined)`
+          : problem.message;
+      return `${problem.path.join('.') || '<root>'}: ${message}`.slice(0, 500);
+    }),
     attempts,
   );
 }

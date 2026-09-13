@@ -1664,6 +1664,39 @@ describe('prompts and pre-plan discovery', () => {
       continued.researchFollowUps,
     );
 
+    const missingFields = structuredClone(continued);
+    const incomplete = at(missingFields.researchFollowUps ?? [], 0) as {
+      instruction?: string;
+      missingProof?: string[];
+    };
+    incomplete.instruction = undefined;
+    incomplete.missingProof = undefined;
+    const repairPayloads: unknown[] = [];
+    const repaired = await requestMasterDecision(input, {
+      provider: 'codex-cli',
+      analyzer: {
+        async analyze(_prompt, payload) {
+          repairPayloads.push(payload);
+          return { text: JSON.stringify(repairPayloads.length === 1 ? missingFields : continued) };
+        },
+      },
+    });
+    expect(repaired.researchFollowUps).toEqual(continued.researchFollowUps);
+    expect(repairPayloads).toHaveLength(2);
+    const repairPayload = repairPayloads[1] as { parseErrors: string[]; priorResponse: string };
+    expect(repairPayload.parseErrors).toContain(
+      'researchFollowUps.0.instruction: Required (expected string, received undefined)',
+    );
+    expect(repairPayload.parseErrors).toContain(
+      'researchFollowUps.0.missingProof: Required (expected array, received undefined)',
+    );
+    expect(repairPayload.priorResponse).toBe(JSON.stringify(missingFields));
+    const wrongType = structuredClone(continued);
+    Object.assign(at(wrongType.researchFollowUps ?? [], 0), { missingProof: 'Unproven result' });
+    expect(() => parseMasterDecisionOutput(JSON.stringify(wrongType), input)).toThrow(
+      'researchFollowUps.0.missingProof: Expected array, received string',
+    );
+
     const fallback = structuredClone(unchanged);
     const fallbackTool = at(fallback.desiredPlan.tools, 0);
     fallbackTool.strategy = {
