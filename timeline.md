@@ -10735,3 +10735,36 @@ $793.3236728 base API-equivalent estimate;29 missing semantic calls and prior
 caveats remain. Active38 excluded. Hotels provider rejection and original malformed
 researcher/typed missing-field live repair coverage unresolved. No concurrent live
 diagnostic, failed-run resume, push, MR, merge, deletion or model switch.
+
+
+## 2026-09-13 15:01 PDT — Thirty-minute target missed while master repairs continuation contract
+
+Flights38 passed its30-minute target with no published tools. Lookup and nearby
+date-grid research are proven; drafts were compiled while other research continued.
+The master received a factually blocked booking handoff and returned both search
+and booking to their retained research conversations. It identified a first-leg
+search token incorrectly used for final booking and requested the recorded staged
+continuation with fresh coherent values. This is ordinary blocked-handoff recovery,
+not live coverage of the original malformed-researcher catch.
+
+Search research now proves an SFO–LAX October20/27 continuation: F92858 outbound
+and F94593 return, with option-local tokens and both records in the returned
+itinerary structure. It remains partial because the public search contract only
+accepts route and dates; its current probe silently chooses the first outbound.
+The researcher asked the master for a continuation input so callers can choose a
+flight. Do not count that probe as caller-controlled generated search behavior.
+
+Booking research then reported a positive21707-byte response naming both flights,
+Frontier/FlightHub, Basic Fare/Economy Bundle, baggage data and click targets. Its
+prepared915-byte body matches the recorded structural length; length alone is not
+semantic proof. Exact source provenance and generated full-chain execution still
+need independent checks. Earlier state-missing and BAD_RESPONSE attempts remain
+preserved. The master is reviewing these handoffs before planning; no tool audit
+has started. No parent implementation change or private findings supplied to teachers.
+
+Run071d4bc5-c1e0-48db-81a2-ab6ec0d92eb1,PID43690,home-38,unchanged26a3e36.
+Assessment22:30:34 UTC and hard23:00:34 UTC September13 remain. About18GiBfree.
+Accounting unchanged through audit37 at $793.3236728 base estimate with prior
+caveats, active38 excluded. No concurrent live diagnostic, failed-run resume,
+push, MR, merge, deletion or model switch. Hotels rejection and repeatability
+remain unresolved.
