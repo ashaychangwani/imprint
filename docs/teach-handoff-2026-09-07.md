@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 11, 19:32 PDT
+## Current continuation — September 12, 01:59 PDT
+
+NO ACTIVE teach or audit. Flights 29 PID 1904 ended with zero tools after host
+clamshell sleep at 03:02:41 UTC. Terminal failure recorded 03:35:13 UTC during
+dark wake, past the original 03:31:49 deadline. No audit possible. Current host
+is on battery with lid closed; do not launch live work during that sleep state.
+Monitor may start fresh Flights 30 on unchanged 0ce9fe9 once awake, after verifying
+power, disk, collector and unused paths. Never resume failed teach 29.
+
+All four research handoffs were proven, including a fresh connecting AS 1397/AS 336
+$204 itinerary and booking API response using same-card selection/context. Generated
+verification was interrupted before any publication. This is incomplete validation
+with an observed environmental interruption, not proof of reliable tools.
+
+Accounting through teach 29: 36 teaches/28 audits, 64 traces/6,743 spans/2,277 usage,
+2762.9076446682 summed minutes; input 492,826,593, cache reads 406,562,944,
+output 5,301,206, emitted writes 0, $613.7038936 base estimate. Teach29 uses
+93.4035 wall minutes versus 60.9783 trace minutes due to sleep. Twenty-six
+missing semantic calls and prior caveats remain. Private trace accounting/power
+evidence retained; read newest timeline/accounting. Collector healthy, 20.90 GiB
+free at prior check. No push, MR, merge, deletion or forced wake. Hotels 8 waits
+for full Flights success; original malformed-handoff catch still unexercised.
+
+## Previous checkpoint — September 11, 19:32 PDT
 
 Flights 29 active at 30 minutes, PID 1904, home-29, unchanged 0ce9fe9. No published
 tools; target missed. Lookup/grid research report proven; search/booking partial.

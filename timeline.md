@@ -9387,3 +9387,34 @@ supplied. No concurrent live diagnostic. Original malformed-handoff catch remain
 unexercised. Accounting unchanged through audit 28; active teach excluded. Audit
 independently after completion; Hotels 8 waits for full Flights success. No push,
 MR, merge, deletion, failed-run resume or deadline extension.
+
+
+## 2026-09-12 01:59 PDT — Account clamshell-sleep interruption; wait for an awake host
+
+Flights 29 ended with zero published tools. Power history records clamshell sleep
+at 20:02:41 PDT September 11, just as the one-hour assessment began. The failed
+terminal log was written at 20:35:13 during a dark wake; original deadline was
+20:31:49. The process did not receive a deadline extension. The delayed heartbeat
+cannot be treated as an on-time one-hour assessment. Raw power evidence is retained.
+
+All four research handoffs had become proven. Search identified a non-default
+connecting Alaska result, AS 1397 LAX–PDX and AS 336 PDX–JFK, with a $204 fare.
+Retained booking research replaced hardcoded route context with two same-card
+inputs: flight_selection and booking_context. Its API response matched both
+flights, connection and offer. Compilation reached initial lookup verification,
+but provider interruption/deadline prevented any publication. No generated or
+independent connecting-booking success is claimed. No tools exist to audit.
+
+Account 93.4035 wall minutes, versus 60.9783 trace minutes distorted by sleep.
+Totals: 36 teaches/28 audits, 64 traces/6,743 spans/2,277 usage carriers,
+2762.9076446682 summed minutes, input 492,826,593, cache reads 406,562,944,
+output 5,301,206, emitted writes 0, base estimate $613.7038936. Teach adds
+$13.4831888; two missing calls bring missing semantic usage
+to 26. Prior pricing/CLI caveats remain. Evidence and accounting are preserved.
+
+Current check: battery 100%, AppleClamshellState Yes, 20.90 GiB free, collector
+healthy. Teach PID 1904 ended; no teach/audit active. Hold replacement live runs
+while the host remains in battery clamshell sleep; monitor can start a fresh
+Flights 30 on unchanged 0ce9fe9 when the host is awake, after usual checks. No
+failed-run resume, forced wake, parent private findings, deletion, push, MR or merge.
+Hotels 8 still waits for full Flights success. Repeatability remains unproven.
