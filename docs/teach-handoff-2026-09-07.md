@@ -1,6 +1,24 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 08:25 PDT
+## Current continuation — September 13, 08:27 PDT
+
+Fresh Flights 34 started at 15:26:25 UTC September 13, PID 10848, unused home-34,
+implementation 39f065e. Exact original recording and four-operation scope. Target
+15:56:25, assessment 16:26:25, hard deadline 16:56:25 UTC. Previous audit, diagnostic
+and temporary preview processes ended. Branch clean before launch; host on AC,
+collector healthy, 18.35 GiB free.
+
+39f065e exposes already-inspected failed-CDP page evidence through later failed
+fallback rungs and MCP errors, plus general audit guidance for missing captures.
+No site-specific runtime or prompt strategy. 161 focused tests, lint, types, web
+build and desktop/mobile checks passed. Fresh validation is required; this run
+receives no previous tools, examples or private parent diagnosis. Audit afterward,
+inspect actual failures and connecting coverage, then fresh repeat on unchanged
+code if successful. Hotels provider rejection remains unresolved without bypass.
+Accounting unchanged through audit 33; active teach excluded. Original malformed-
+handoff catch still unexercised. No push, MR, merge, deletion, resume or extension.
+
+## Previous checkpoint — September 13, 08:25 PDT
 
 Audit 33 follow-up preserved a decisive page diagnostic: the failing SFO–JFK
 October 15 call waited for GetShoppingResults for 60 seconds while the inspected
