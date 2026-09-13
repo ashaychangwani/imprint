@@ -1,6 +1,28 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 07:57 PDT
+## Current continuation — September 13, 08:04 PDT
+
+Flights 33 completed all four tools in 62.5043 minutes on unchanged 7f5af6b.
+Retained booking repair stopped copying fare_name products into cabin; new baseline
+and fresh booking chain passed, followed by completion review. Four optional
+suggestions saved. Calendar/search/lookup stayed validated. The target was missed,
+but completion preceded the original hard deadline. Same-code independent repeat
+success is still pending audit and any needed connecting coverage.
+
+Teach PID 81101 ended. Full independent audit 33 started 15:03:17 UTC September 13,
+PID 7631, home-33, cap 15:48:17 UTC. Inspect actual invocation/parameter arrays,
+failures and exclusions. No concurrent diagnostic. Hotels validation remains open
+after the provider policy rejection; no automatic retry or prompt workaround.
+
+Accounting through teach 33: 41 teaches/31 audits, 72 traces/7,914 spans/2,608 usage,
+3102.1409141530 summed minutes; input 571,318,855, reads 472,287,488, output 6,140,981,
+emitted writes zero, $707.8600832 base estimate. No new missing usage; 28 prior missing
+semantic calls and caveats remain. Active audit excluded. Collector healthy, host
+AC, 18.55 GiB free. Original malformed-handoff catch still unexercised. No parent
+implementation change, private findings supplied to teachers, prior tools, push,
+MR, merge, deletion, failed-run resume or deadline extension.
+
+## Previous checkpoint — September 13, 07:57 PDT
 
 Assessment near one hour: continue Flights 33 within the original 15:27:14 UTC
 hard deadline. At 58.7 minutes all four tools were published, but the generated
