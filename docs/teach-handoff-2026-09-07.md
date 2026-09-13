@@ -1,6 +1,39 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 14:20 PDT
+## Current continuation — September 13, 14:28 PDT
+
+Audit37 ended after6.69461386735 minutes, FAIL23/25 graded units,92 percent.
+The15 actual calls were14 correct and1 broken, with no infrastructure or bad-input
+exclusions. Nine parameters worked; selected_flights was broken for grouped input.
+Lookup, all five search calls and all five fixed-duration calendar calls worked.
+Two singleton selections worked; the fresh OAK–SLC–LAS selection on DL3903/DL1662
+was rejected. Final booking is absent, so this is still only a partial-scope audit.
+
+Read-only inspection found request-transform.ts requires every child segment's
+origin, date and destination to equal the whole selection's origin, departure date
+and destination. That rejects a coherent connecting path before sending a request.
+An offline synthetic-token diagnostic reproduced acceptance for one segment and
+rejection for two connected segments without network calls or artifact edits.
+Private flights-37-transform-diagnostic.log preserves the exact failure. Existing
+review payloads already include request-transform source; no missing-evidence
+runtime feature is needed. Clarify the existing group/child guidance for validation
+and request construction, then use a fresh teach rather than repairing this output.
+
+Private flights-audit-37-timing.json preserves whole-second actual calls. Search:
+87 seconds first, then18/9/32/18; calendar70 first, then8/9/9/8; lookup6/5;
+selection5/5/5, last failed. These include setup/pacing and are not setup-only or
+pure warm-execution measurements. No audit reroll or concurrent live diagnostic.
+
+Accounting adds input886870/read842752/output5227/write0,$0.6181128,trace
+ezmcuT6CUurolZigYEJXag==,3spans/1usage,none missing. Totals45teaches/34audits,
+79traces/8834spans/2920usage,3412.66284104465minutes,input645994531,reads535844992,
+output6919376,write0,$793.3236728 base API-equivalent estimate. Preserve29 earlier
+missing semantic calls and all pricing/cache/interruption caveats. AuditPID41953
+ended. No active teach/audit, push, MR, merge, evidence deletion or model switch.
+Original malformed researcher/typed missing-field live repair coverage, Hotels
+provider rejection and repeatability remain unresolved.
+
+## Previous checkpoint — September 13, 14:20 PDT
 
 Flights 37 ended after 90.0034140861 minutes on unchanged 7283ddb, four ready and
 one not ready. The original deadline stopped the newly started final-booking
