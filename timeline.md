@@ -10422,3 +10422,41 @@ No concurrent live diagnostic, prior tools or private parent findings supplied t
 teachers, code change, push, MR, merge or deletion. Hotels provider rejection and
 same-code repeatability remain unresolved. Accounting remains through audit35 at
 $743.4714408 base API-equivalent estimate with prior caveats; active36 excluded.
+
+
+## 2026-09-13 12:45 PDT — Master repair format error terminates fresh validation
+
+Flights 36 ended after74.86842761875 minutes on unchanged28de4ed, with zero ready
+and four not ready. All research handoffs had reached proven, but generated checks
+found nearby-airport entity IDs mislabeled as unique airport identifiers, search
+airport names contaminated by surrounding itinerary text and missing ranking
+metadata, and a90.421-second calendar navigation timeout. Booking compilation
+and the final generated dependency chain did not run. There are no published
+tools to audit. The research-only booking proof remains valid within its limits.
+
+The master proposed focused parser repairs and a calendar research follow-up.
+Its first decision omitted four required follow-up fields, used an unsupported
+reason field, and supplied contradictory candidate-coverage entries. The retained
+repair fixed those reported issues but supplied missingProof as a string instead
+of an array. Strict validation rejected it and terminated the teach. This is a
+master reporting failure, distinct from both the real generated failures and the
+original researcher-handoff catch. No invalid plan was accepted.
+
+Private flights-36-master-decisions.json preserves seven matching master outputs
+and their actual prompt payloads. The repair diagnostics said missingProof:
+Required, without its expected array type; the retained turn added repair
+instructions and full validation context but did not repeat the original schema.
+The original schema remains in conversation history. Next make a small general
+schema-diagnostic improvement that retains expected/received types for missing
+fields, then validate it with a fresh teach. Do not coerce a string into proof,
+resume36, or add site-specific logic. Preserve all earlier failures.
+
+Accounting through teach36:44 teaches/33 audits,77 traces/8489 spans/2819 usage
+carriers,3315.9648130912 summed minutes; input619432071, cache reads513804032,
+output6638996, emitted writes0; $760.8136888 base API-equivalent estimate.
+This run adds162 spans/81 usage carriers, input15342177/read13113600/out159125,
+$17.342248, and no missing semantic usage. TracePeD9Nhy2L5x+Nz2IcPHrzg==.
+The28 prior missing calls and all pricing/interruption caveats remain. Accounting
+and terminal evidence saved privately. PID69200 ended, no active teach/audit or
+live diagnostic. No push, MR, merge, deletion, model switch, prior tools or private
+parent diagnosis supplied to teachers. Hotels rejection and repeatability unresolved.
