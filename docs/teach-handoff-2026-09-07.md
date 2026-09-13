@@ -1,6 +1,35 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 07:28 PDT
+## Current continuation — September 13, 07:57 PDT
+
+Assessment near one hour: continue Flights 33 within the original 15:27:14 UTC
+hard deadline. At 58.7 minutes all four tools were published, but the generated
+fresh booking chain required repair. The other three tools have credible live
+results and the master has isolated a concrete parser defect; about 30 minutes
+remain for retained repair and completion review. The 30-minute target was missed.
+
+Fresh search returned 17 SEA–LAS November 2 itineraries with coherent core fields.
+Calendar passed its fixed 7-by-7 grid across a month boundary, with 49 combinations
+of November 30–December 6 departures and December 14–20 returns. Prior partial
+research was repaired after removing a contradicted URL wait and using the full-load
+Date grid trigger; the fixed-window boundary remains narrower than arbitrary ranges.
+
+Booking baseline matched AA 2211 SFO–LAX with multiple American offers. The fresh
+chain returned a Frontier itinerary and offers, but semantic review rejected cabin
+values copied from fare_name: Basic Fare and Economy Bundle are fare products,
+not independently observed cabin classes. Master retained all request strategies,
+chain edges and other tools, recalling booking alone for parser repair. Transport
+success is not a semantic pass. No parent findings supplied to the compiler.
+
+PID 81101, run 50addcb4-53b9-46b2-84a5-819ec80bcb1c, home-33, unchanged 7f5af6b.
+Collector healthy, host AC, 18.57 GiB free. Audit independently after completion,
+including actual exclusions and connecting coverage. Accounting unchanged through
+Hotels 8; active Flights excluded. Hotels remains unresolved after provider policy
+rejection; no bypass or automatic retry. Original malformed-handoff catch still
+unexercised. No concurrent diagnostic, parent implementation change, prior tools,
+push, MR, merge, deletion, failed-run resume or deadline extension.
+
+## Previous checkpoint — September 13, 07:28 PDT
 
 Flights 33 reached its 30-minute target with no published tools. Lookup, search
 and booking research are proven; calendar remains partial. Its successful captured
