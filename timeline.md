@@ -9600,3 +9600,37 @@ teach excluded. No parent private findings, prior generated tools, code change,
 concurrent live diagnostics, failed-run resume or deadline extension. Audit after
 completion; Hotels 8 still waits for complete Flights success. No push, MR, merge
 or deletion.
+
+
+## 2026-09-13 04:22 PDT — One-hour assessment: continue active validation within deadline
+
+Continue Flights 31 to its original 11:51:32 UTC deadline. At one hour, lookup
+and search were published and booking had completed its live transport check,
+entered semantic review, then started the fresh dependency check. Calendar
+validation remains unfinished. Roughly 30 minutes remain; all four research
+handoffs are proven and generated validation is progressing, so the remaining
+window is useful. The 30-minute target was missed. No deadline extension.
+
+Booking research first returned direct error 13 and three roughly 121-second
+CDP capture failures. It then used a parameterized navigation and selected the
+matching live result by the supplied itinerary fields, returning the rendered
+booking page with F9 2046 OAK–LAS, October 22, 10:17–11:52 and multiple priced
+provider offers. This is rendered-page evidence, not background API capture.
+Fresh producer 07e363ad returned 2,923,903 characters; parent read-only inspection
+confirmed booking_context's token appears in that exact response, alongside its
+one-leg OAK/LAS/F9/2046 context. Successful consumer 84d9cef2 used the serialized
+context. The field's independent necessity and grouped behavior are unproven.
+
+The master revised the research-backed plans and corrected the proposed chain
+path from items[0].booking_context to flights[0].booking_context. The generated
+search baseline returned 33 LAX–SFO options on October 20; the first context agreed
+with F9 4593. Newly grounded flight numbers are included. Neither this baseline
+nor the nonstop research proves preservation of a multi-member selection.
+No parent private findings or previous generated tools were supplied to teachers.
+
+PID 2351, run 0f4bd323-5e73-4a94-ab66-d0d35f8b54a6, home-31, unchanged 19bdd7c.
+Host on AC, collector healthy, 20.10 GiB free. Accounting stays through audit 30;
+active teach excluded. Original malformed-handoff catch still unexercised. Audit
+independently after completion and inspect actual calls/limitations; Hotels 8
+waits for complete Flights success. No concurrent live diagnostic, code change,
+push, MR, merge, deletion or failed-run resume.

@@ -1,6 +1,25 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 03:53 PDT
+## Current continuation — September 13, 04:22 PDT
+
+One-hour decision: continue Flights 31 within original 11:51:32 UTC hard deadline.
+Lookup/search published, booking in fresh dependency validation, calendar still
+unfinished. All four research handoffs proven; roughly 30 minutes remain and
+validation is progressing. No extension. Target 30 minutes was missed.
+
+Booking research used fresh producer 07e363ad and consumer 84d9cef2. Exact token
+appeared in producer response; serialized same-record context identifies F9 2046
+OAK–LAS. Rendered booking offers succeeded after direct error 13 and capture
+failures. This is not background API capture or generated group proof. Search
+baseline now returns flight numbers with 33 LAX–SFO options; chain source corrected
+to flights[0].booking_context. Inspect complete grouped behavior independently.
+
+PID 2351, run 0f4bd323-5e73-4a94-ab66-d0d35f8b54a6, home-31, unchanged 19bdd7c.
+Collector healthy, host on AC, 20.10 GiB free. Accounting through audit 30, active
+teach excluded. No parent findings supplied. Audit afterward; Hotels 8 waits for
+complete Flights success. No push, MR, merge, deletion, resume or extension.
+
+## Previous checkpoint — September 13, 03:53 PDT
 
 Flights 31 missed the 30-minute target with no published tools. Lookup/grid research
 proven; search rendered results useful but booking selection unproven. Booking's
