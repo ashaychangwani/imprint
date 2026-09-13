@@ -9804,3 +9804,27 @@ audit 31, active teach excluded. Original malformed-handoff catch still unexerci
 Audit after completion; Hotels 8 waits for complete Flights success and fresh
 repeatability remains due. No concurrent live diagnostic, push, MR, merge, deletion,
 failed-run resume, parent implementation change or deadline extension.
+
+
+## 2026-09-13 06:29 PDT — Four-tool teach completes; independent audit starts
+
+Flights 32 completed in 88.1858 minutes on unchanged 7f5af6b, all four tools ready,
+final completion review passed. Master narrowed unsupported search/booking output
+promises after the failed review: schedules and other details are conditional,
+search omits baggage/notices, booking omits ticketing conditions. This is honest
+narrowing, not repair of the missing fields. Retained recompile, baseline checks
+and fresh nonstop booking chain passed. Connecting/grouped proof remains pending.
+Four optional suggestions saved; no parent private findings supplied to teachers.
+
+Teach PID 36440 ended. Independent audit 32 started 13:27:49 UTC September 13,
+PID 71902, home-32, cap 14:12:49 UTC. Inspect actual calls and declared limitations,
+not just the percentage. Hotels 8 waits for complete Flights success, then unchanged
+code and independent audit. Repeated fresh success remains due.
+
+Accounting through teach 32: 39 teaches/30 audits, 69 traces/7,644 spans/2,525 usage,
+3023.3618692370 summed minutes; input 554,012,266, reads 457,945,216, output 5,948,381,
+emitted writes zero, $686.4139064 base estimate. One provider exit 101 without a
+diagnostic adds a missing usage call, now 27; prior caveats remain. Active audit
+excluded. Collector healthy, host AC, 19.16 GiB free. Original malformed-handoff
+catch still unexercised live. No concurrent diagnostic, push, MR, merge, deletion,
+failed-run resume, parent implementation change or deadline extension.
