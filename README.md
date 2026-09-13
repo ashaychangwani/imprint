@@ -151,8 +151,10 @@ Compilers test the complete current research response before live validation,
 including result frames beyond initial metadata, alongside recording examples.
 For framed protocols, a small parser test checks that an earlier empty or metadata
 frame does not hide later records; agents derive the expected result from evidence.
-Failed teaching calls can include bounded current page evidence so agents can
-reconsider a missing API capture without mistaking rendered text for API success.
+Failed browser calls can include bounded page evidence from browser inspection,
+including through fallback and MCP audit errors. Agents use it to investigate missing
+captures without treating a timeout as automatic infrastructure failure or rendered
+text as API success.
 Parser checks distinguish unsupported missing fields from evidenced protocol defaults.
 Auditors receive exact report tool names.
 Planning and final review also check how callers obtain required inputs,

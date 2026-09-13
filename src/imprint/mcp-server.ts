@@ -410,6 +410,23 @@ export function formatToolError(
   if (result.nextAction) lines.push(`  nextAction: ${result.nextAction}`);
   if (continuationToken) lines.push(`  continuation: ${JSON.stringify(continuationToken)}`);
   if (result.remediation) lines.push(`  → ${result.remediation}`);
+  if (result.pageDiagnostic) {
+    const page = result.pageDiagnostic;
+    lines.push(
+      `Rendered page observed after a failed browser call (possibly before fallback; not the requested API response): ${JSON.stringify(
+        {
+          url: page.url.slice(0, 300),
+          title: page.title.slice(0, 300),
+          bodyText: page.bodyText.slice(0, 3_000),
+          truncated:
+            page.truncated ||
+            page.url.length > 300 ||
+            page.title.length > 300 ||
+            page.bodyText.length > 3_000,
+        },
+      )}`,
+    );
+  }
   if (attempts.length > 0) {
     lines.push('Backend attempts:');
     for (const attempt of attempts) {

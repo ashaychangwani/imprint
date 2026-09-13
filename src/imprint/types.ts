@@ -569,8 +569,8 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
-      /** Current rendered page after a failed teaching call, not an API response
-       * or evidence that the requested operation succeeded. Cookies are omitted. */
+      /** Most recently inspected page after a failed CDP call, possibly before
+       * a later fallback. Not an API response or success proof. Cookies omitted. */
       pageDiagnostic?: {
         url: string;
         title: string;

@@ -1,6 +1,40 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — September 13, 08:21 PDT
+## Current continuation — September 13, 08:25 PDT
+
+Audit 33 follow-up preserved a decisive page diagnostic: the failing SFO–JFK
+October 15 call waited for GetShoppingResults for 60 seconds while the inspected
+page showed 25 flight results. It also displayed Multi-city despite the public
+one-way label; that observation alone does not identify the request-state cause.
+The same unchanged tool returned 17 SEA–LAS results in 3.672 seconds after a
+91.867-second failing route call. A separate cold page-evidence call failed in
+91.434 seconds and retained title, URL and bounded visible results. All diagnostic
+pools closed. No generated tools or original audit records were modified.
+
+Small general correction: retain page evidence already collected during failed
+CDP browser inspection even without teaching's response callback. Carry that
+snapshot through later failed fallback rungs and expose its bounded fields in MCP
+errors, explicitly identifying it as possibly before fallback and not the requested
+API response. Successful results do not inherit failure evidence. Runtime performs
+no site classification, trigger selection or strategy change. Audit guidance no
+longer treats all timeouts as automatically environmental: inspect supplied facts,
+compare a useful input when appropriate, and state uncertainty and coverage gaps.
+
+Tests cover normal calls receiving the existing inspection, evidence surviving a
+later fallback, original failure retained, credential replacement and cookie omission,
+MCP field limits, and existing cancellation behavior. 161 tests/510 assertions passed
+in 6.64 seconds; lint 214 files, type checking, web build and desktop/mobile checks
+passed. Existing bundle-size warning remains. README, architecture and website
+updated. Private audit-page-* logs/screenshots/scripts retained. No prompt-mirroring
+tests added. Next: fresh Flights 34; do not resume 33 or reroll its partial audit.
+
+Accounting unchanged through audit 33: $708.3768840 base estimate, 28 missing semantic
+calls and previous caveats. The three deterministic diagnostic calls add no LLM
+usage and stay separate from teach/audit root durations. Hotels remains unresolved
+after provider policy rejection; no retry/workaround for that rejected request.
+No push, MR, merge, deletion, previous tools or private parent findings to teachers.
+
+## Previous checkpoint — September 13, 08:21 PDT
 
 Flights audit 33 ended with partial PASS 12/12 graded, but this does not establish
 repeat success. Thirteen calls comprise seven correct, four infrastructure exclusions

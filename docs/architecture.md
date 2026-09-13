@@ -715,13 +715,17 @@ A small framed-protocol parser test must expose discarding records after an empt
 or metadata-only envelope. The agent derives valid framing and record-combination
 expectations from evidence; the runtime does not prescribe a first/last-frame or
 concatenation rule.
-On failed CDP calls with teaching diagnostics enabled, the existing browser
-inspection contributes bounded URL, title and visible text to `pageDiagnostic`.
+When a failed CDP call triggers the existing browser inspection, its bounded URL,
+title and visible text are retained as `pageDiagnostic`, even outside teaching.
 It omits cookies, replaces known typed credentials, and takes at most three
 seconds within the caller deadline. Failed or unavailable inspection preserves
-the original failure. Research observations and master repair feedback retain
-these facts as current page evidence, never as the requested API response or a
-successful result. Agents choose any revised request strategy. Parser guidance
+the original failure. Later failed fallback rungs preserve the most recent inspected
+page, and MCP errors identify it as possibly preceding fallback. Successful results
+do not inherit failure evidence. Research observations, master repair feedback and
+auditors receive these facts as page evidence, never as the requested API response
+or a successful result. Auditors investigate missing captures and state uncertainty
+rather than automatically attributing every timeout to infrastructure. Agents choose
+any revised request strategy. Parser guidance
 also distinguishes unsupported missing fields from evidenced protocol defaults,
 with a focused omission case in existing parser tests.
 

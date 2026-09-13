@@ -239,6 +239,30 @@ describe('runSerializedBySite', () => {
 });
 
 describe('MCP failure evidence', () => {
+  it('exposes bounded page facts without replacing the failure or serializing extra page fields', () => {
+    const page = {
+      url: 'https://fixture.invalid/results',
+      title: 'Available records',
+      bodyText: 'result '.repeat(1_000),
+      truncated: false,
+      cookies: ['fixture-cookie-secret'],
+    };
+    const text = formatToolError({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Expected response never arrived.',
+      pageDiagnostic: page,
+    });
+    expect(text).toStartWith('[NETWORK] Expected response never arrived.');
+    expect(text).toContain('possibly before fallback; not the requested API response');
+    const facts = JSON.parse(text.slice(text.indexOf('{')));
+    expect(facts.title).toBe('Available records');
+    expect(facts.bodyText.length).toBe(3_000);
+    expect(facts.truncated).toBe(true);
+    expect(facts).not.toHaveProperty('cookies');
+    expect(text).not.toContain('fixture-cookie-secret');
+  });
+
   it('keeps an earlier navigation timeout when the final fallback cannot navigate', () => {
     const text = formatToolError(
       { ok: false, error: 'BAD_RESPONSE', message: 'This transport cannot navigate.' },

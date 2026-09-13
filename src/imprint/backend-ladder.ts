@@ -404,6 +404,7 @@ export async function runWithLadder(
     }
   }
   const attempts: LadderResult['attempts'] = [];
+  let lastPageDiagnostic: Extract<ToolResult, { ok: false }>['pageDiagnostic'];
   let lastResult: ToolResult | null = null;
   let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
@@ -522,6 +523,10 @@ export async function runWithLadder(
       result = { ok: false, error: 'UNKNOWN', message: `${backend} threw: ${msg}` };
     }
     if (options?.signal?.aborted) throw abortSignalError(options.signal);
+    if (!result.ok) {
+      lastPageDiagnostic = result.pageDiagnostic ?? lastPageDiagnostic;
+      if (lastPageDiagnostic) result = { ...result, pageDiagnostic: lastPageDiagnostic };
+    }
     const durationMs = Date.now() - t0;
     lastResult = result;
     lastResultBackend = backend;
@@ -1208,28 +1213,25 @@ async function runCdpReplay(
             signal ? AbortSignal.any([signal, inspectionSignal]) : inspectionSignal,
           );
           sessionAlive = true;
-          if (onResponse) {
-            const knownValues = new Map(
-              Object.entries(credentials.values).map(([name, value]) => [
-                value,
-                `\${credential.${name}}`,
-              ]),
-            );
-            const clean = (value: string): string =>
-              redactFreeformText(value, knownValues).redacted;
-            const url = clean(page.url);
-            const title = clean(page.title);
-            const bodyText = clean(page.bodyText);
-            result = {
-              ...result,
-              pageDiagnostic: {
-                url: url.slice(0, 300),
-                title: title.slice(0, 300),
-                bodyText: bodyText.slice(0, 3_000),
-                truncated: url.length > 300 || title.length > 300 || bodyText.length > 3_000,
-              },
-            };
-          }
+          const knownValues = new Map(
+            Object.entries(credentials.values).map(([name, value]) => [
+              value,
+              `\${credential.${name}}`,
+            ]),
+          );
+          const clean = (value: string): string => redactFreeformText(value, knownValues).redacted;
+          const url = clean(page.url);
+          const title = clean(page.title);
+          const bodyText = clean(page.bodyText);
+          result = {
+            ...result,
+            pageDiagnostic: {
+              url: url.slice(0, 300),
+              title: title.slice(0, 300),
+              bodyText: bodyText.slice(0, 3_000),
+              truncated: url.length > 300 || title.length > 300 || bodyText.length > 3_000,
+            },
+          };
         } catch {
           if (signal?.aborted) throw abortSignalError(signal);
           // Inspection failure does not replace the original tool failure.

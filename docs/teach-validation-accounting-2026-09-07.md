@@ -1252,3 +1252,13 @@ cache reads 543,872, output 4,544, emitted writes zero; $0.5168008 base estimate
 No new missing usage; 28 prior missing semantic calls and caveats remain. Whole-
 second call timings are retained in flights-audit-33-timing.json. Diagnostic calls
 are separate from teach/audit durations and have no LLM usage.
+
+Diagnostic comparison after audit33: unchanged SFO–JFK October15 failed in
+91.866694292 seconds, followed by a warm SEA–LAS November2 success in 3.671570333
+seconds with 17 records. A separate cold SFO–JFK diagnostic failed in 91.434340083
+seconds while its bounded page evidence showed 25 results. First/cold calls include
+setup; no separate setup-only timer. Three deterministic calls, no LLM usage, pools
+closed, original failures preserved. This evidence motivated a general correction
+to retain existing failed-CDP page inspection through fallback and MCP errors,
+plus audit guidance distinguishing missing capture from inferred infrastructure.
+Fresh validation is required after the change; audit33 remains incomplete.

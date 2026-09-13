@@ -2264,7 +2264,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
 
     expect(r.result.ok).toBe(false);
     expect(inspections).toBe(1);
-    expect(r.result).not.toHaveProperty('pageDiagnostic');
+    expect(r.result).toHaveProperty('pageDiagnostic.title', 'Unexpected page');
     expect(
       cdpPool.get(
         cdpReplayPoolKey(
@@ -2277,7 +2277,7 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     expect(closes).toBe(0);
   });
 
-  it('keeps failed teaching calls failed while attaching bounded page evidence without cookies', async () => {
+  it('retains bounded failed-page evidence through a later fallback without an observation callback', async () => {
     let inspections = 0;
     __setCdpBrowserFetchFactoryForTest(() => ({
       fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
@@ -2306,11 +2306,20 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
       error: 'NETWORK',
       message: 'Navigation timed out waiting for a background response.',
     }));
-    const r = await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
-      cdpPool: new Map(),
-      credentials: { site: 'flights', cookies: [], values: { password: 'fixture-password' } },
-      onResponse: () => {},
-    });
+    const r = await runWithLadder(
+      ['cdp-replay', 'fetch'],
+      tool,
+      { origin: 'SAN' },
+      root,
+      new Map(),
+      {
+        cdpPool: new Map(),
+        credentials: { site: 'flights', cookies: [], values: { password: 'fixture-password' } },
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.usedBackend).toBe('fetch');
+    expect(r.attempts.map((attempt) => attempt.backend)).toEqual(['cdp-replay', 'fetch']);
     expect(inspections).toBe(1);
     expect(r.result.ok).toBe(false);
     if (r.result.ok) throw new Error('expected original failure');
