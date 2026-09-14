@@ -1,6 +1,49 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 03:20 PDT: Launch fresh capture-reuse validation
+## Current continuation — 2026-09-14 03:55 PDT: Target missed; retained search tests capture reuse
+
+Flights 45 remains active on unchanged a36ec1c, PID15636, after its30-minute
+target. At10:53UTC it was still before final planning, with lookup and calendar
+research proven, search partial, and booking blocked on fresh producer values.
+Run5723f082-ef97-4d75-88f8-1c37588fa868, home-45. Original assessment11:19:09UTC
+and hard11:49:09UTC remain. Disk14.86GiB. No published-tool success or audit yet.
+
+Search's first background capture failed in61.462seconds while current results
+were visible. A pooled rendered-document call returned34SFO–LAXOctober20results
+in2.763seconds, but the researcher correctly left flight numbers and booking
+selection values unproven. Booking's one coherent recorded-value diagnostic
+returned only a null payload; it reported the missing fresh producer and did
+not claim success from stale tokens. This remains a dependency blocker, not a
+provider outage. The master returned search to its retained researcher.
+
+That researcher inspected actual trip-type control markup: the loaded page
+showed Multi-city despite the selected one-way boundary. It chose a grounded
+control action to select One way and capture the resulting page-owned API
+response. The same SFO–LAXOctober20input then completed in34.505seconds. It
+explicitly repeated that exact input/candidate (33.504seconds), then changed
+only destination to SEA (39.795seconds). The trace records the repeat/contrast
+intent, and transport completed for all three; the final research handoff was
+still pending at inspection. This exercises the new investigation guidance,
+not independent validation of generated tools or a universal diagnosis of older
+failures. Each of these calls launched a browser with existing per-tool cookies;
+these are setup-inclusive results, not warm-session timing. Earlier rendered
+pool reuse is a different candidate and cannot supply a warm API comparison.
+
+Calendar's final capture candidate has two successful observations with the
+same date windows: SFO–LAX35.859seconds and SEA–JFK33.611seconds, returning49cells
+with different fares. Both route members changed, and no identical-input repeat
+of this final candidate is recorded in its10-observation handoff. Do not claim
+full repeat-and-single-input-contrast coverage for calendar. Its classification
+field also remains a semantic review concern until meaning is supported.
+
+Keep code unchanged and let master/retained agents resolve the proof. No private
+parent diagnosis or prior generated tools supplied. Accounting remains through
+audit44 at$968.3626112baseestimate,52teaches/41audits,35missingsemanticcalls
+and prior caveats; active45excluded. Hotels policy rejection unresolved, no
+automatic retry/bypass/model switch. No push,MR,merge,reset,evidence deletion.
+
+
+## Previous continuation — 2026-09-14 03:20 PDT: Launch fresh capture-reuse validation
 
 Flights 45 started September 14 at 10:19:09.712240 UTC on implementation a36ec1c,
 PID 15636, unused home-45 and exclusive flights-teach-45.log/manifest. Target
