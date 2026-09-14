@@ -1,6 +1,45 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 17:07 PDT
+## Current continuation — 2026-09-13 17:34 PDT
+
+Continue Flights39 within its original01:03:32 UTC hard deadline. At the one-hour
+assessment, lookup, one-way search and the49-cell date grid are published. Lookup
+was repaired after review found a city identifier mislabeled as airport identity,
+then an airport labeled as a city. Search was repaired to include currency; its
+latest baseline returned23 LAX–LAS itineraries for October20 with81USD Frontier
+lead fare and both continuation values. Grid and lookup use direct fetch; search
+uses CDP API capture. These are baselines, not independently audited tools.
+
+Generated booking standalone and both grouped chain bindings failed: HTTP200
+carried a tiny wrb.fr null payload with code13, with no booking records to parse.
+The chain's two paths bound successfully, but the consumer result failed. The
+master retained three working artifacts, retired booking's implementation plan,
+and sent the failure back to retained research. It did not waive empty responses
+or replace fresh inputs with recorded itinerary data. The meaning of code13 and
+the cause are still unknown; a provider-capacity label would be unsupported.
+
+The requested fresh search producer then repeatedly timed out on its response
+matcher despite substantive rendered results. The master directed focused search
+capture research before booking repair: inspect actual method, resource type,
+occurrence and timing instead of guessing state or reusing stale inputs. The
+latest search research probe failed after61.688seconds and another is underway.
+Journal revision5 still retains lookup/search/grid implementation plans and their
+contract/live receipts; booking has none. A master proposal discusses retiring
+search's plan, but this is not the current persisted state. Private
+flights-39-late-repair-decisions.json preserves the observed decisions and blockers.
+
+The remaining30minutes have a concrete capture comparison and retained successful
+research to work from, so continue without changing code or extending the deadline.
+No explicit repeated-call plan is used;69be77e's new capability and the original
+malformed-researcher catch remain unexercised live. Search is one-way airport-code
+scope; calendar advertises independent date bounds that still need audit. Partial
+publication is not a four-operation pass or repeatability. PID83965,home-39,
+run91086204-b441-422e-b440-fc70a9660fbd. Accounting remains throughaudit38 at
+$821.8669232 base estimate; active39 excluded and previous caveats retained.
+No concurrent audit/live diagnostic, private diagnosis supplied to teachers,
+push, MR, merge, model switch, reset or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 17:07 PDT
 
 Flights39 missed its30-minute target. At33minutes the master had accepted four
 tools in two build waves. Lookup had a contract receipt and its direct live call
