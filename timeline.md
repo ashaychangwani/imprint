@@ -12801,3 +12801,38 @@ Accounting remains through audit47:55teaches/44audits,$1042.4069792 base
 API-equivalent estimate; active48excluded, prior missing usage/pricing caveats
 remain. Hotels policy rejection is unresolved; no automatic retry/bypass/model
 switch. No push,MR,merge,reset or evidence deletion.
+
+
+## 2026-09-14 09:22 PDT — Target missed with fresh booking dependency unresolved
+
+Flights48 remains active on unchanged d07a033 at the30-minute target,
+PID32522, run c72567e4-1b0b-47d6-8c3c-de6e90975f95. No published tools or final
+plan yet. Lookup research is proven and its draft compiler is active. Calendar
+research is now proven after12observations. Search is partial; booking is blocked
+pending a usable fresh producer representation. Assessment16:51:07UTC and hard
+17:21:07UTC remain unchanged. Disk12.66GiB; no concurrent live diagnostic.
+
+Calendar's history retains an initial HTTP400, short protocol responses,
+three captures with no matching network request, and two missing-target failures.
+Those last two errors explicitly exhausted the60-second navigation deadline:
+the new bounded wait was exercised live but did not recover these targets.
+Later final-candidate calls captured49date pairs twice,35.513s/34.369s including
+separate browser setup and retained per-tool cookies. The researcher compared
+SFO–London with the recording's different route/date grid; current dates span
+October17–23 and October27–November2. The selected capture uses a navigation
+click without actionIndex. No warm-reuse, independent audit or fresh-repeatability
+claim. Currency/record meanings still require generated review and audit.
+
+Search's five-observation handoff reports nine current OAK–LAX outbound choices
+for November3/10 from rendered HTML, but no return-flight segments or portable
+selection package. It correctly marks those advertised outputs unproven rather
+than substituting page-local IDs. Booking's one coherent stale diagnostic returned
+only protocol error[13]. It then asked the master for fresh search evidence and
+an exact complete selection representation; no fresh consumer success exists.
+The failed stale request cannot distinguish expiration from omitted state.
+Keep these actual failed observations and let retained agents repair the boundary.
+
+Accounting remains throughaudit47:55teaches/44audits,$1042.4069792baseestimate;
+active48excluded,prior missing usage and pricing caveats remain. Hotels policy
+rejection unresolved. No code/prompt change, resumed failure, private diagnosis
+sent to teachers,push,MR,merge,reset or evidence deletion.
