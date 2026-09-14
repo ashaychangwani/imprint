@@ -1,7 +1,40 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Current continuation — 2026-09-14 02:22 PDT: Target missed while master narrows calendar proof
 
-## Current continuation — 2026-09-14 01:47 PDT: Launch fresh result-delivery validation
+Flights 44 remains active on unchanged 9c45f99, PID 77415, after its 30-minute
+target. At 09:20 UTC, first-pass research was proven for lookup, search and
+booking, but calendar was partial; no final generated-tool completion or audit.
+The original assessment is 09:46:39 UTC and hard deadline is 10:16:39 UTC.
+Disk has 14.20 GiB free. Continue retained research without concurrent diagnostics.
+
+Booking explicitly called the same-run search producer for SFO–LAX on October
+20 before testing its consumer. That producer call completed in 35.153 seconds.
+Booking retained four observations, including two capture timeouts around 122
+seconds, then a 32.746-second API capture identifying Frontier F9 2858 and
+concrete Frontier Basic Fare/Economy Bundle and Booking.com purchase options,
+including USD 43 and 75. This establishes research-level fresh dependency use;
+exact emitted chaining, warm repeatability and independent audit remain pending.
+Do not count setup-inclusive research calls as warm generated-tool measurements.
+
+Calendar retained ten observations. Its populated 49-cell LAX–BOS response spans
+November 2–8 departures and November 9–15 returns, with a separate rendered
+observation confirming the route and anchor dates. The researcher correctly
+left arbitrary window extents and an unlabeled category scalar unproven. Master
+review chose the proven seven-by-seven scope and removed the unsupported category
+claim, then returned calendar to retained research. Narrowing removes unsupported
+breadth; it does not prove arbitrary ranges or repair every prior capture failure.
+The new missing-delivery and metadata guidance is not yet independently validated.
+
+No code changes, prior generated tools, or private parent diagnosis were supplied
+to teaching agents. Accounting remains through audit 43 at $946.7107432 base
+API-equivalent estimate, with 35 missing semantic calls and prior caveats; active
+44 is excluded. Hotels policy rejection remains unresolved, with no automatic
+retry, bypass or model switch. No push, MR, merge, reset or evidence deletion.
+
+
+
+## Previous continuation — 2026-09-14 01:47 PDT: Launch fresh result-delivery validation
 
 Flights 44 started September 14 at 08:46:39 UTC on implementation 9c45f99,
 PID 77415, unused home-44 and exclusive flights-teach-44.log/manifest. Target:
