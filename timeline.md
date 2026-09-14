@@ -12836,3 +12836,46 @@ Accounting remains throughaudit47:55teaches/44audits,$1042.4069792baseestimate;
 active48excluded,prior missing usage and pricing caveats remain. Hotels policy
 rejection unresolved. No code/prompt change, resumed failure, private diagnosis
 sent to teachers,push,MR,merge,reset or evidence deletion.
+
+
+## 2026-09-14 09:53 PDT — Continue focused generated-tool repair after one hour
+
+Flights48 remains active on unchanged d07a033, PID32522. The master created
+revision1 at16:46:14UTC, four tools in two waves, after all four research handoffs
+became proven. At the one-hour assessment no tools were published. Continue to
+the ORIGINAL17:21:07UTC hard deadline: fresh booking research has resolved the
+dependency blocker, compiled first-wave artifacts exist, and concrete validation
+failures can now guide retained repairs. No extension, code change or concurrent
+live diagnostic. Disk12.64GiB. Target30missed; repeatability remains unproven.
+
+Search's retained research now selects an outbound record and captures the
+continuation GetShoppingResults response at actionIndex1. The six-observation
+handoff identifies OAK–LAX WN2791 on November3 and return choices November10,
+including WN2586. It preserves the same record's fare token and selected-flight
+representation as one composite, instead of using page-local identifiers. The
+baseline fixes the selected outbound through its action sequence; broader outbound
+selection policies are not proven. Lookup remains ordinaryfetch; other research
+uses CDP API capture. Selected workflows still have one response each.
+
+Booking called search_flights twice for fresh upstream values,47.586s/34.853s
+including separate browser setup. Its six observations retain the stale error,
+producer calls, a four-rung failure and further tests. The selected successful
+capture5f69ffad-c64e-4e71-ad96-1fa347d63113 took33.852s including setup. It
+identifies AS1327 SFO–SEA November4 and AS688 SEA–SFO November11, with Alaska
+provider/booking handoff and USD177 total. The public composite carries the fare
+token, raw selected-flights string and both materialized legs from the same record.
+This is researched consumer proof, not a passed generated booking tool/chain or
+independent audit. No shared producer/consumer browser session was used.
+
+First generated checks: lookup fetch completed in0.329s but semantic review
+requires repair because nearby airports all received the parent London identifier
+as their own canonical_id. Search's live CDP call failed after91.514s; its contract
+passed, but transport did not. Calendar contract passed and its live check is next.
+Booking compilation/generated chain still remain. Do not mistake a transport-pass
+receipt for an accepted semantic review or published tool. Keep actual failures
+and let the master direct repairs within the shared deadline.
+
+Accounting unchanged throughaudit47:55teaches/44audits,$1042.4069792base
+API-equivalent; active48excluded and prior missing usage/pricing caveats remain.
+Hotels policy rejection unresolved, no automaticretry/bypass/modelswitch. No push,
+MR,merge,reset,evidence deletion or old artifacts/private diagnosis to teachers.
