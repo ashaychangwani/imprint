@@ -1,5 +1,26 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 15:43 PDT — Launch fresh source-coverage validation
+
+Flights52 started2026-09-14T22:42:57.049442UTC,PID77552,on2d57e13.
+Unused /tmp/imprint-fresh-inputs-VYbJm1/home-52,exclusive flights-teach-52.log
+and manifest. Originalrecording/exactfour-operationguidance,two workers.
+Target23:12:57UTC,assess23:42:57UTC,harddeadline2026-09-15T00:12:57UTC.
+Prior teach/audit/diagnostic/preview ended; clean correctbranch/sourceancestry,
+recordings intact,collector6440HTTP200,9.73GiBfree. Battery56%,estimated2h54m;
+check power at the one-hour assessment. Oldcollector54899 remainsSIGSTOP with
+memory retained; newNodecollector74790 handles traces. Keepcodefixedthroughaudit.
+
+Flights51's independentPASS is preserved, but the subsequent untouched-tool check
+proved missingselectedgridcell,wrongovernightarrivaldate,andzerooffersdespitevisible
+separate-ticketoffer. Do not call51reliable or startanunchangedrepeat. Watch52for
+agent-chosen sourcecoverage/fieldverification andcoherentfreshbookingvalues; private
+records,labels,dates,sourcepaths andpreviousgeneratedtools werenot supplied.
+Accounting unchanged throughaudit51,$1141.3645recordedbaseestimate,active52excluded.
+Prior missingusage and51session-recovery limitations remain. Hotels policyrejection
+unresolved. No push,MR,merge,reset,evidencedeletion,orfullrepeatabilityclaim.
+
+
 ## 2026-09-14 15:30 PDT — Four tools finish; recover usage and launch independent audit
 
 Flights51 completed at22:24:03.651UTC in85.9651504167wallminutes on263ea9d;
