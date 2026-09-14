@@ -1,7 +1,60 @@
 # Teach rebuild handoff — September 7, 2026
 
 
-## Current continuation — 2026-09-14 00:54 PDT: Continue after one-hour assessment of search repair
+## Current continuation — 2026-09-14 01:25 PDT: Complete four tools and start independent audit
+
+Flights43 completed in84.1385448667minutes on implementationa283cd2, within
+the90-minute deadline and beyond the30-minute target. PID35614 ended. Journal
+revision5 is completed with current passed contract/live receipts for all four
+tools and a passing search-to-booking chain. Completion review accepted the MVP.
+Failed research and generated checks remain preserved; no old tools or private
+parent diagnosis were supplied to teaching agents.
+
+Lookup uses fetch. Search, nearby calendar, and booking use CDP API response
+capture, with published backend preferences retained. Search exposes airport
+codes and a one-way departure date; calendar exposes route and two anchor dates,
+including advertised location identifiers not yet independently tested. Booking
+accepts the JSON-encoded bundle returned by a complete search result. Connecting
+support remains unproven. This run does not independently validate rendered-page
+readiness or establish repeatability.
+
+Search research retained10observations. Its eventual fresh October21 response
+used the original POST/XHR matcher. The researcher attributed earlier zero-match
+runs to repeated search keys rendering existing application data without that
+API request; changed locale/currency/query ordering had failed to resolve it.
+Changing the actual departure date produced a fresh response. This contrast does
+not prove repeated calls to an unchanged search input work. Generated search
+then returned24SFO–SEA October22 results in35.205s. Booking baseline F92858
+SFO–LAX October20 returned7offers in33.317s; the fresh generated AS620 SFO–SEA
+October22 chain returned12offers in33.581s. Both semantic reviews were credible.
+Timings include setup and the chain seeds existing per-tool cookies; warm
+same-input behavior is not established by these calls.
+
+Read-only inspection found an unresolved semantic concern: the emitted booking
+output labels values such as28in/28inches as baggage_details. The teach reviewer
+accepted that output, so its approval cannot settle the field meaning. Preserve
+this concern for independent inspection after the live audit; no artifact edits
+or concurrent live diagnostics. Do not claim complete metadata correctness.
+
+Independent audit43 started September14 08:24:13.448513UTC, PID73535, home-43,
+exclusive flights-audit-43.log/manifest, hard09:09:13UTC. Preflight prior teach
+ended, clean branch, unchanged implementation, collector200, AC100%,15.08GiBfree.
+Inspect actual call and parameter grades, exclusions, repeated search behavior,
+fresh booking selection and optional metadata. Keep the report unchanged. Audit
+success must still be followed by fresh unchanged-code repeat validation. Hotels
+policy rejection remains unresolved; no automatic retry, bypass or model switch.
+
+Teach43 accounting was extracted once: trace lmFvnxah2M3QFjkn8IGDVQ==,
+262spans/70usage carriers,16,147,538input,13,102,720cache reads,204,020output,
+zero emitted writes,$21.50076base estimate,zero missing semantic calls. Totals:
+51teaches/39audits,90traces/10,587spans/3,427usage,3931.020773378667minutes,
+774,735,269input,644,026,240cache reads,8,268,253output,zero emitted writes,
+$945.811672base API-equivalent estimate.35prior missing semantic calls and
+interrupted-CLI/pricing caveats remain. Activeaudit43excluded. No push, MR,
+merge, reset or evidence deletion.
+
+
+## Previous continuation — 2026-09-14 00:54 PDT: Continue after one-hour assessment of search repair
 
 At60minutes, continue Flights43 unchanged on a283cd2 to its original08:23:01UTC
 hard deadline. PID35614 remains active; journalrevision3. Lookup and calendar
