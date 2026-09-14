@@ -29,6 +29,11 @@ structure which properties are shared and which describe the group collectively.
 A group's identity, extent, or total need not describe each member individually.
 Report a concrete mismatch or a guard that rejects a contract-compatible group,
 not inheritance alone or an assumed restriction.
+Check whether returned alternatives are complete source records or required
+components of one record. A parent may lack action fields found only on its
+children; omitting it must not turn its components into independent alternatives
+or hide the scope of their totals. Judge the relationship against source evidence,
+without requiring every component to cover the whole group.
 Do not claim evidence for fields beyond a truncated preview. Requested inputs
 repeated in output are not independent proof that the server honored them.
 This includes server-returned echoes: a query string, request summary, URL, or

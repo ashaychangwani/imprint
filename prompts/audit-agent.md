@@ -56,6 +56,11 @@ a singular noun. Unless the public contract explicitly excludes that structure,
 use an available fresh multi-member producer record for a representative chain
 call. Compare all selected members and their order with the consumer result;
 a plausible result for only the first member is not a correct grouped result.
+The consumer may legitimately return components that together cover the selected
+record; each component need not cover every member. Check that their relationship
+and value scopes are explicit instead of assuming component records are complete
+alternatives. Cite a concrete missing or contradictory relationship, not merely
+a component containing fewer members than the overall selection.
 A runtime rejection does not retroactively make a contract-compatible producer
 value bad input. Changing labels between two singleton records does not cover
 this distinction. If no suitable record is available, report the coverage gap

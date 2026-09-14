@@ -13396,3 +13396,44 @@ $1113.3977472baseAPI-equivalent. Prior36missinganalysiscalls/interruptedCLI and
 pricingcaveats remain. Diagnostic hasnoLLMcalls. No fullreliability/repeatability
 claim. Hotels policyrejection unresolved. No codechange,push,MR,merge,reset,
 evidence deletion or private diagnostic input to teachingagents.
+
+
+## 2026-09-14 14:03 PDT — Preserve composite offers instead of flattening their components
+
+The private Flights50 diagnostic completed with unchanged generated tools and
+separate search/booking browser pools. Fresh SFO–BOS October5/12 search returned
+24 options in36.786seconds including setup. Booking consumed the exact UA371 /
+B6413 selection and returned both itinerary legs in32.213seconds including setup;
+the same booking pool repeated in1.476seconds. All pools closed. These successful
+transports do not clear the semantic audit failure. No diagnostic LLM calls.
+
+The actual rendered booking page shows ONE United/BudgetAir option, explicitly
+Separate tickets, two tickets booked individually, lowest totalUSD630. Its captured
+API response has the corresponding parent with both providers, both flights,
+total630 and two child purchase records priced184 and446. The parent has no direct
+link; only its children do. The parser requires a link array for every option, so
+it skips the parent and recursively promotes the two children into booking_options.
+The loss is the source relationship and combined offer, not that each legitimate
+ticket component fails to cover both flights. Preserve the original auditFAIL;
+this diagnosis refines its explanation rather than claiming every seller must
+cover the entire itinerary. Raw response, page, selected inputs and cold/warm
+results remain under flights-50-diagnostic-*; generated files untouched.
+
+Clarified existing compiler and semantic-review guidance to preserve alternatives
+versus required components, including parents without child-only action fields.
+Audit guidance now explicitly permits components that together cover a selection
+and asks for concrete missing relationships or contradictory value scope. Agents
+still choose representation, interpretation and repair; no runtime classifier,
+site-specific mapping, private examples or previous artifacts enter teaching.
+README, architecture and website aligned. Lint214files, typecheck, diffcheck and
+webbuild passed; existing bundle warning remains. Desktop1440/mobile390 visuals
+checked with no page errors or horizontal overflow. Focused mobile crop includes
+sticky navigation; full-page layout intact. Preview stopped; private component-scope-*
+validation artifacts retained. No prompt-mirroring tests added.
+
+Next: NEW Flights51, original recording/exact four-operation guidance, fresh home,
+two workers, target30/assess60/hard90. Never resume50 or reroll its failed audit.
+Accounting unchanged throughaudit50:58teaches47audits,$1113.3977472base estimate,
+36missinganalysiscalls plus interrupted unknown usage and existing pricing caveats.
+Hotels provider policy rejection remains unresolved. No push, MR, merge, reset,
+or evidence deletion. Full repeatability remains unproven.

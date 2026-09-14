@@ -52,6 +52,11 @@ The compiler distinguishes group-level properties from member properties in
 validation, request construction and parsing. The first member does not define
 the entire group, and a group constraint need not hold for each member separately.
 Agents establish those relationships from the structure and declared contract.
+Parsers preserve alternatives and required components as distinct relationships.
+A parent can supply a combined total while only its children supply action links;
+missing child-only fields must not erase the parent. Reviewers check that outputs
+keep this relationship and the scope of each value clear, without requiring every
+component to cover the whole selected record.
 Semantic review also reports concrete rejection guards in supplied parser/request
 source that contradict the declared core input domain, even if the sampled
 baseline passes. This is evidence-based contract review, not an exhaustive

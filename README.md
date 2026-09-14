@@ -240,7 +240,8 @@ and compared with the complete consumer result.
 A passing singleton check does not establish that every selected member survives.
 Validation, request construction, and parsing keep group properties separate
 from member properties; a valid group need not repeat its overall fields on every
-member. Reviewers also report
+member. Parsers preserve the distinction between alternatives and required
+components, including when action links exist only on components. Reviewers also report
 explicit parser or request guards that reject inputs allowed by the public contract;
 a fixture's shape must not silently become a restriction on callers.
 
