@@ -11790,3 +11790,35 @@ Accounting remains complete throughaudit42:50teaches/39audits,89traces,
 API-equivalent estimate.35missingsemanticcalls and prior caveats retained.
 Active43excluded. Original malformed-handoff recovery confirmed in42;
 repeated-invocation feature still unexercised. No push,MR,merge,reset,deletion.
+
+
+## 2026-09-14 00:24 PDT — Thirty-minute target missed during booking research
+
+Flights43 remains active on a283cd2, PID35614, run
+c9c450fe-56fd-4469-83c4-1145cdecca7b. At30minutes no tools are published and no
+implementation journal exists. Lookup, search and calendar have proven research
+and completed drafts; these are not generated live-validated public tools.
+
+Lookup research returned London and nearby airports through fetch. Search used
+CDP API capture for changed SFO–LAX October20 inputs. Calendar captured nearby
+fare cells plus a separate rendered observation of the matching route and date
+controls; this is supporting research, not a generated parameter audit. Both
+structured captures followed failed direct constructions. The teacher retains
+those observations rather than treating transport success as semantic proof.
+
+Booking called current search for fresh upstream values in33.861s including
+setup. Two later CDP attempts failed in91.716s and91.579s. Retained researcher
+feedback says the navigation reached generic Flights before booking capture;
+it is now correcting the placement of search preferences in the navigation
+representation while retaining the same coherent Frontier selection. This is
+an agent repair hypothesis awaiting its next real test, not a confirmed fix.
+The current candidate waits for the recorded booking API response, not rendered
+HTML. The latest navigation-readiness guidance has not yet been tested by a
+published rendered tool. No code changes or private diagnosis supplied.
+
+Continue unchanged to07:53:01UTC assessment and08:23:01UTC hard deadline.
+Disk15.34GiB. No parallel live work. Accounting remains throughaudit42 at
+$924.310912baseAPI-equivalent estimate,50teaches/39audits,35missingsemantic
+calls and previous caveats; active43excluded. Hotels provider-policy rejection
+remains unresolved with no automatic retry/bypass/model switch. No push, MR,
+merge, reset or evidence deletion.
