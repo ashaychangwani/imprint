@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 20:01 PDT
+## Current continuation — 2026-09-13 20:02 PDT
+
+Flights41 started September14 03:02:07 UTC on b88d107, PID56274, unused home-41,
+original recording and exact four-operation scope. Target03:32:07, assessment
+04:02:07, hard deadline04:32:07 UTC. Exclusive flights-teach-41-manifest.json and
+flights-teach-41.log preserve launch facts. Configured two-worker concurrency
+unchanged. Preflight verified clean source-descended branch, prior teach/audit/
+preview ended, collector200, hostAC100%,16.79GiB free and both recording sizes.
+
+The change retains the exact semantically reviewed successful API backend at
+publication using existing backends.json mechanics. Watch published preferences
+against current live receipts and fresh ordinary audit execution, fresh search
+inputs to booking, complete grouped selections and truthful scope. Do not modify
+code during this run or run concurrent live diagnostics. Audit after completion,
+then a fresh unchanged-code repeat is still required. No old tools or private
+parent diagnosis supplied to teachers; never resume40.
+
+Audit40 remains failed20/23 graded, with two booking state failures using fresh
+selections. Its accounting is complete; totals48teaches/37audits,85traces9754spans,
+3177usage,3668.249458698817minutes,716936939input,596563968reads,7613281output,
+zero writes,$872.3830912baseestimate. Active41 excluded;31missingsemanticcalls
+and prior caveats remain. Original malformed researcher catch, repeated-call
+feature and capture-timeout facts still unexercised live. Hotels policy rejection
+remains unresolved. No push, MR, merge, reset or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 20:01 PDT
 
 Audit 40 ended after 4.8547 minutes, FAIL 20/23 graded units (86.96%). Fifteen
 actual calls include 12 correct, two broken booking calls and one excluded bad
