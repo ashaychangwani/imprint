@@ -13398,7 +13398,7 @@ claim. Hotels policyrejection unresolved. No codechange,push,MR,merge,reset,
 evidence deletion or private diagnostic input to teachingagents.
 
 
-## 2026-09-14 14:03 PDT — Preserve composite offers instead of flattening their components
+## 2026-09-14 13:57 PDT — Preserve composite offers instead of flattening their components
 
 The private Flights50 diagnostic completed with unchanged generated tools and
 separate search/booking browser pools. Fresh SFO–BOS October5/12 search returned
@@ -13437,3 +13437,26 @@ Accounting unchanged throughaudit50:58teaches47audits,$1113.3977472base estimate
 36missinganalysiscalls plus interrupted unknown usage and existing pricing caveats.
 Hotels provider policy rejection remains unresolved. No push, MR, merge, reset,
 or evidence deletion. Full repeatability remains unproven.
+
+
+## 2026-09-14 13:58 PDT — Start fresh composite-output validation
+
+Flights51 started2026-09-14T20:58:05.741975UTC, PID34549, on263ea9d.
+Unused /tmp/imprint-fresh-inputs-VYbJm1/home-51, exclusive flights-teach-51.log
+and flights-teach-51-manifest.json. Original recording and exact four-operation
+scope. Target21:28:05UTC, assess21:58:05UTC, harddeadline22:28:05UTC. Prior live
+teach/audit/diagnostic/preview processes ended; collectorHTTP200, source34a6235
+ancestry verified, recordings intact,10.52GiBfree. Machine now uses battery97%
+with13h11mestimated remaining. No evidence deletion. The only prelaunch doc edit
+corrected the previous entry's timestamp from14:03 to actual13:57PDT; no further
+implementation change. Keep263ea9d fixed through the teach and independent audit.
+
+Watch that fresh producer selections stay coherent and generated output preserves
+proven alternatives versus required components, without demanding every component
+cover the entire selection. No private records, source paths, mapping, or previous
+generated artifacts supplied to teachers. Keep configured two workers; sequential
+teach/audit/diagnostics. Judge actual live evidence, not prompt-change causality.
+Accounting unchanged throughaudit50; active51excluded. All failed evidence remains.
+Hotels providerpolicyrejection unresolved; no automaticretry or bypass. No push,
+MR, merge, reset, or full-reliability claim. Continue with independent audit after
+completion; use a new teach following any further code/prompt correction.
