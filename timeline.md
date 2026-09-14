@@ -11601,3 +11601,30 @@ Continue unchanged on7df97c3, PID98981, original06:34:26UTC deadline and
 remains throughaudit41 at$897.1119624base estimate, active42excluded. Repeated
 invocation feature remains unexercised. Hotels policy rejection unresolved.
 No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 22:50 PDT — Retained research recovers with its failed test history
+
+After the malformed-report recovery, retained booking research resumed real
+calls: two further CDP failures91.547s/90.970s, then a33.582s successful rendered
+booking document. The valid handoff identifies F9 3292 LAX–LAS October20 with
+matching schedule and concrete provider/price offers. The master is reviewing
+it before planning. No generated tool is yet published or independently audited.
+
+The recovered artifact contains eight actual observations, including the earlier
+producer call, direct transports and failed CDP attempts. This confirms those
+tests survived the malformed-report repair cycle; the prior truncated master
+input traces alone could not show it. Private
+flights-42-recovered-booking-research.json preserves this exact valid handoff and
+history, alongside the earlier invalid-reply/master-decision snapshot.
+
+The candidate uses rendered CDP HTML, not API response capture, and waits for
+load/body. A successful observed page does not establish that this condition is
+sufficient for other layouts or fresh calls. Its same-itinerary package and
+current-result evidence still need generated baseline/chain validation and an
+independent audit. Do not claim that a changed wait repaired every booking case.
+
+Flights42 remains active on7df97c3, PID98981, original06:34:26UTC hard deadline.
+No code change, private diagnosis sent to teachers, concurrent live work, push,
+MR, merge, reset or evidence deletion. Accounting unchanged throughaudit41;
+active42excluded. Hotels policy rejection remains unresolved.
