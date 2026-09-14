@@ -12927,3 +12927,38 @@ remain unproven. Orderedmulti-response evidence is still unexercisedlive because
 selectedworkflows hadone response. Hotels provider policyrejection remains
 unresolved; no automaticretry/bypass/modelswitch. No push,MR,merge,reset,evidence
 deletion or old generated artifacts/private diagnosis supplied to teachers.
+
+
+## 2026-09-14 10:35 PDT — Preserve partial audit pass and inspect the failed search action
+
+Audit48 ended in5.75836223125minutes, PID65167exited. PartialPASS12/12graded:
+9actual calls,7correct and2calendar timeouts excluded as infrastructure,plus
+5working parameters. LookupSeattle/Tokyo passed. Calendar passed route and
+both date contrasts with49cells, but the initialSEA–LAXcall exceeded120seconds,
+and the changed return-date call timed out waiting forGetCalendarGrid despite
+visible search results. Both later paced retries passed. Preserve those exclusions
+as auditor judgments; they do not independently establish an external outage.
+Search and booking were absent, so this is not fullscope success or repeatability.
+The report and transcript remain unchanged inhome-48/google-flights.
+
+Read-only inspection found that the final generated search still selects a
+structural result-card overlay followed by Select flight. A sequential CDP-only
+diagnostic uses exactly that revision6workflow, original failedSFO–SEANov4/11
+inputs, a dedicated same-tool/rung pool and no generated-file edits. Its first
+call reproduced missing-click-target failure in92.731seconds including setup;
+226target evaluations returnednull, while the finalDOM contained matching result
+markup and current flight records. A paced same-pool repeat is in progress.
+The private selector-extraction instrumentation was over-escaped, so its per-poll
+match facts are unusable; actual target return values, original execution and
+full first/final pages remain valid. Preserve this failed diagnostic and correct
+only the private instrumentation for a subsequent sequential observation before
+choosing any runtime or prompt change. Do not feed it to teaching agents.
+
+Audit48traceWvJ85g+7aQYllmsylAxn8A==:3spans/1usage,647,582input,
+590,336cache reads,3,203output,zeroemittedwrites,$0.5291784baseestimate.
+Campaign56teaches/45audits,101traces/12,002spans/3,857usage,
+4395.6034528175summedminutes,886,714,803input,740,219,392cache reads,
+9,358,217output,zeroemittedwrites,$1069.2337408baseAPI-equivalent.
+Prior35missingsemanticcalls/interruptedCLI and pricing caveats remain. No new
+teach started. Hotels policy rejection unresolved. No codechange,push,MR,merge,
+reset or evidence deletion. Runtime strategy remains agent-owned.
