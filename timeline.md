@@ -13141,7 +13141,7 @@ All failures and generated revisions retained. No codechange,push,MR,merge,reset
 evidence deletion or old artifacts/private strategies supplied to teachers.
 
 
-## 2026-09-14 12:16 PDT — Independent four-tool audit passes; check connecting booking
+## 2026-09-14 12:14 PDT — Independent four-tool audit passes; check connecting booking
 
 Audit49 completed in6.0406856972minutes; PID97473exited. PASS22/22graded:
 structured invocation arrays contain15calls,14correct and1invalid auditor input,
@@ -13173,3 +13173,33 @@ semanticcalls/interruptedCLI and pricingcaveats remain. Private diagnostic has
 noLLMcalls. Search's renderedHTML distinction remains disclosed. No push,MR,
 merge,reset,evidence deletion or implementationchange. Hotels policyrejection
 unresolved; no automaticretry/bypass/modelswitch.
+
+
+## 2026-09-14 12:17 PDT — Connecting producer record exposes an unadvertised booking guard
+
+The private connecting check ended; all dedicated pools closed. Fresh untouched
+search returned15ORD–MIA November19itineraries in36.348seconds including setup.
+The selected Frontier journey has F94064 ORD–BWI and F91665 BWI–MIA, USD139,
+with both ordered segments in its own selected_flights and its matching token.
+Booking rejected this exact pair before sending the request: selection_token
+and exactly one selected flight are required. It failed in30.966seconds including
+setup and again in0.108seconds with actual same-tool/rung browser reuse. These
+are request-transform failures, not provider or API failures. All results, the
+selected record and available raw responses remain in flights-49-connecting-*.
+
+The same length!==1 guard exists in the accepted booking research candidate and
+published request-transform.ts. The public contract promises a selected one-way
+itinerary without a nonstop/single-segment limitation; search now correctly
+returns connecting journeys. Both independent audit booking cases and the teach
+chain used singleton selections, so they missed this incompatible producer value.
+Preserve the original audit PASS and its actual15call counts, but overall49does
+NOT establish the requested producer-consumer reliability. Do not start an
+unchanged-code repeat until this concrete gap is addressed.
+
+Inspect existing compiler/audit/review guidance before choosing a small general
+correction. Current grouped-selection guidance is conditional on declared group
+scope, while this contract uses one itinerary whose structure contains multiple
+members. Keep interpretation and representative record selection with agents;
+no site-specific rule or runtime cardinality classifier. No generated edits,
+newteach,concurrentlivework,push,MR,merge,reset,evidence deletion. Accounting
+unchanged throughaudit49; private diagnostic used noLLMcalls.
