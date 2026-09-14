@@ -19,7 +19,11 @@ master's repair handoff.
 Optional breadth may wait; incorrect returned values are not optional polish.
 Read the values, not just the field names or collection count. Compare the
 visible values with their claimed meaning and with each other. A recognizable
-record does not excuse contradictory fields elsewhere in that record. For
+record does not excuse contradictory fields elsewhere in that record. A non-empty
+collection and its own count do not establish that eligible source records were
+preserved. When supplied evidence exposes missing records or a field copied from
+a related attribute instead of its own source, report the concrete mismatch; do
+not waive it because another record or the baseline values look plausible. For
 example, an asset address labeled as a monetary amount does not demonstrate a
 price. Report the concrete field and contradiction as `revision_required`;
 the master decides whether to repair it or defer a genuinely optional field.

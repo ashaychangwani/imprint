@@ -13618,3 +13618,50 @@ Prior36missinganalysiscalls/interruptedCLI andteach51trace-gap caveats remain.
 Teach51 recovered105providerturns remain separate from tracedcounts; do notdoubleadd.
 No freshteach launched yet. No fullrepeatabilityclaim,push,MR,merge,reset or evidence
 deletion. Hotels providerpolicyrejection unresolved; no automaticretry/bypass.
+
+
+## 2026-09-14 15:42 PDT — Source comparison exposes three defects after the audit pass
+
+The sequential private diagnostic ended and all pools closed. Untouched calendar
+returned8cells in36.320seconds including setup, while its actual source contains
+all9requested date pairs. The missing December2/9USD67cell has a trailing selected
+annotation; the parser's anchored label regex rejects it. This is extraction loss,
+not a missing upstream fare. Original auditPASS remains unchanged, but overall51
+is not a reliable success and must not start an unchanged-code repeat.
+
+Fresh SFO–BOSOct5/12search returned21outbound choices in33.569seconds including
+setup. Continuing the returned UA371row in the same search/tool/rung pool took
+5.499seconds and returned17choices. Its chosen JetBlueB6413record states arrival
+2026-10-12, but the same source row explicitly says TuesdayOctober13 at00:59.
+The parser copies departure date into arrival_date. The fresh completedselection
+still preserves both flights; booking correctly recognizes the overnight arrival.
+
+Booking that exact producer selection returned both itinerary legs andUSD630lowest
+total but ZEROoffers, both32.805seconds including setup and2.070seconds actualwarm
+reuse. Its actual populated page contains one United/BudgetAirUSD630option with
+Separate tickets and two tickets booked individually. The familiar per-provider
+Continue-label template does not match this complete offer. Thus263ea9d did not
+yet make this fresh teach preserve composite offers. Search and booking browser
+state remained separate. All rawresponses, pages, choices, results and timings are
+preserved in flights-51-diagnostic-* andflights-51-coverage-diagnostic.ts/log.
+No generatedfiles changed or private data supplied to teachingagents.
+
+The general correction tightens existing source-to-output verification: compare
+eligible source records with the parsed collection, including presentation-state
+variants; a non-empty subset and its own count are insufficient. Check each field
+against its own source rather than copying a related attribute that happens to
+match the baseline; choose an available distinguishing record or omit an unproven
+optional field. Audit/review guidance asks for concrete extraction loss and states
+coverage limits when evidence is unavailable, without assuming every sparse result
+is broken. No runtimecode, site-specific selector/date rule, or teacherfixture added.
+README,architecture andwebsite aligned. Lint214files,typecheck,diffcheck andwebbuild
+passed(existingbundlewarning); desktop/mobile screenshots inspected with no page
+errors or horizontaloverflow. Focusedmobilecrop includesstickyheader; fullpage
+artifacts retained. Preview77336stopped. Private source-coverage-* checks preserved.
+
+Next NEWFlights52 with originalrecording/exactfouroperations, two workers,
+unusedhome,target30/assess60/hard90,collector6440. Preserve original51auditpass
+and subsequent realfailures. Accounting unchanged throughaudit51,$1141.3645recorded
+baseestimate; diagnostics use noLLMcalls. Prior missingusage and51trace-recovery
+limits remain. No push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
+Hotels providerpolicyrejection remains unresolved.

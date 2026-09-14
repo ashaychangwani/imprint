@@ -56,7 +56,12 @@ Parsers preserve alternatives and required components as distinct relationships.
 A parent can supply a combined total while only its children supply action links;
 missing child-only fields must not erase the parent. Reviewers check that outputs
 keep this relationship and the scope of each value clear, without requiring every
-component to cover the whole selected record.
+component to cover the whole selected record. Compiler verification compares
+eligible source records with the parsed collection, including differently marked
+records. It checks each attribute against its own evidence, using a contrasting
+record when related attributes coincide in the baseline. Reviewers report concrete
+extraction loss or contradictions; unavailable source coverage remains a stated
+limit, not an invented failure or an assumed complete result.
 Semantic review also reports concrete rejection guards in supplied parser/request
 source that contradict the declared core input domain, even if the sampled
 baseline passes. This is evidence-based contract review, not an exhaustive
