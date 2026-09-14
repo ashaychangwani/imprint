@@ -13036,3 +13036,32 @@ Accounting throughaudit48 remains56teaches/45audits,$1069.2337408base
 API-equivalent estimate, with prior missing usage/pricing caveats. Active49excluded.
 Hotels policy rejection remains unresolved. No push, MR, merge, reset or evidence
 deletion. Reviewable local checkpoints and all failed evidence retained.
+
+
+## 2026-09-14 11:19 PDT — Target missed; master requires fresh booking evidence
+
+Flights49 remains active after its30-minute target on unchanged90db75e.
+At32minutes, lookup and calendar research were proven; no generated tools were
+published and focused planning had not begun. Lookup fetched in0.491seconds.
+Calendar retained8observations, called fresh lookup for upstream values and
+captured49date pairs in34.243seconds including browser setup. Its same-date
+route contrast changed LHR–SanFrancisco fares around504–543 to SJC–LosAngeles
+around127–137, with shifted departure/return windows. This remains research
+proof pending generated-tool verification and independent audit.
+
+Search retained4observations and successful airport-code captures, but its
+advertised canonical-identifier input form was unsupported. The master narrowed
+the public contract to airport codes and returned the partial handoff to the
+retained researcher for a fresh proof and exact same-itinerary continuation
+sources. Booking had used stale recorded selection state and received only an
+error envelope. The master explicitly requires call_producer with fresh search,
+then both selection_token and selected_flights from the same returned itinerary,
+before positive provider-specific booking proof. This gap is unresolved; it is
+not API exhaustion or a booking pass. Both follow-ups preserve the existing run.
+
+Continue to the original18:46:29UTC assessment and19:16:29UTC hard deadline.
+No code/prompt changes, private strategy injection or concurrent live audit.
+Latest click-target diagnostic recovery remains unproven in this fresh run.
+Free space12.10GiB; accounting unchanged throughaudit48, active49excluded.
+Hotels provider policy rejection remains unresolved. No push,MR,merge,reset
+or evidence deletion; original recordings and failed attempts retained.
