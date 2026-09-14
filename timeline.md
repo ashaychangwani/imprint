@@ -10955,3 +10955,39 @@ audit38 is complete at $821.8669232 base API-equivalent estimate, input671498900
 reads557762688, output7190850, writes0; thirty missing semantic calls and prior
 caveats remain. Active39 is excluded. Hotels provider rejection remains unresolved.
 No push, MR, merge, reset, model switch or evidence deletion.
+
+
+## 2026-09-13 17:00 PDT — Verify repaired booking research against retained source
+
+Flights39 is still active on69be77e, with no published tool yet. First-pass
+lookup, one-way search and nearby date-grid research were proven. Booking's
+token-only test returned an ErrorResponse; retaining recorded request context
+returned fares for the wrong SJC–SAN WN367 itinerary. The researcher correctly
+reported the mismatch as blocked despite transport success. The master retained
+that history and revised search/booking together to carry two same-record values.
+This is ordinary blocked-handoff repair, not the original malformed-output catch.
+
+The revised booking test returned Frontier/FlightHub offers for LAX–LAS F91184
+on October20, with prices81/116/86USD-linked options and fare/condition data.
+Its last two producer retries failed after61.117s and30.298s; the successful
+consumer reused an earlier successful search observation from this same run.
+Private flights-39-research-provenance-v3.json confirms the selection token is
+exactly at that record's [1,1], and selected_flights decodes to the same array
+as the record's JSON-string field[8]. Its string representation changed from
+an escaped equals sign to a literal equals sign (185 to180characters). Preserve
+that distinction: decoded equality, not raw equality or new generated-chain proof.
+The smallest checked record is payload[1][2][0][0], identifying LAX/LAS/F9/1184
+and October20. Consumer2cd4845b-0c8a-423b-9172-a9905ada0d15 used source631baadc-5397-4547-bd69-97ef6df171da.
+
+Two initial private provenance diagnostics missed this extra JSON-string layer;
+the first file's static co-occurrence claim was wrong. Both are preserved and
+explicitly superseded by v3, which reports the successful decoded comparison.
+No private diagnosis or old tools was supplied to teachers; generated artifacts
+were not edited. Research currently narrows search to one-way airport-code inputs,
+with round-trip/multi-city deferred. No repeated-call plan has yet been observed.
+The master is reviewing the repaired handoffs before planning. This is not a
+published-tool or independent-audit pass, and narrowing does not repair prior scope.
+PID83965,run91086204-b441-422e-b440-fc70a9660fbd,home-39. Target00:03:32,
+assessment00:33:32,hard01:03:32 UTC September14 unchanged. Accounting throughaudit38
+remains$821.8669232 base estimate; active39 excluded. No concurrent live work,
+implementation change, push, MR, merge, model switch or evidence deletion.
