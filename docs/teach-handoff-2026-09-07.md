@@ -1,5 +1,63 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 08:50 PDT — Preserve calendar audit failure and wait for selected click targets
+
+Audit47 ended in9.84484589305minutes, PID28706exited. FAIL18/21graded (85.71%).
+Actual16calls:11correct,2broken calendar return-window calls,2excluded as
+infrastructure,1badinput. Seven parameters worked,return_window failed,and
+search trip_type was untestable: equivalent first-stage choices did not prove
+multi-city or complete round-trip behavior. Booking was unpublished and untested.
+Lookup passed; search adult-count and route contrasts passed. Calendar returned
+49cells for baseline and successful route/adult/departure contrasts. The changed
+return window failed twice because the navigation click target was missing.
+The non-JSON calendar response and120ssearch timeout remain as the auditor's
+exclusions, not independent proof of an external outage. Report/transcript retained.
+
+A sequential CDP-only diagnostic used the exact generated calendar workflow.
+Baseline and return-window contrast failed because the chosen button was absent;
+it appeared in both page snapshots one second later. An identical changed-window
+repeat passed. First call34.298s including setup; warm calls2.323sfailed/3.726spassed.
+Private flights-47-grid-* files preserve results, click observations and pages.
+No generated artifacts were edited or supplied to teachers.
+
+The runtime now polls the exact agent-selected click target within the existing
+navigation deadline and interval, then dispatches once. It does not replace the
+selector, choose another action or extend the deadline. Action-scoped network
+capture starts at dispatch, excluding requests while the target is awaited.
+Invalid selector evaluation, CDP failures and closure are surfaced directly.
+This is generic execution mechanics, with no site-specific runtime or prompt rule.
+
+Post-change diagnostic: baseline36.129s including setup, return-window contrast
+3.541s and identical repeat4.341s in the same tool/rung browser, all49expected
+date pairs. Existing per-tool cookies were reused. No target was absent on these
+three initial checks, so this rerun does NOT establish live exercise of the new
+wait or causal repair of the race. Delayed targets, bounded missing-target failure,
+invalid selector, disconnected/closed browser, single dispatch and capture boundary
+are covered by the synthetic regression. No fresh-teach repeatability claimed.
+Private flights-47-grid-wait-* files preserve this diagnostic; pools closed.
+
+Validation:13capture tests and155runtime/backend tests passed; lint214files and
+typecheck passed. Initial formatter error and two test-only non-null warnings were
+corrected. README,architecture,researcher/compiler prompts and website aligned;
+webbuild passed with existingbundlewarning. Desktop/mobile pages and changed
+paragraph inspected, no page errors or horizontal overflow. Prior full-CDP-file
+synthetic-form timing failure remains unresolved; no claim of whole-suite success.
+Private click-wait-* logs/screenshots retained. Diagnostics used no LLM calls.
+
+Audit47 trace S76MTkcvZbRDeRh+IMoTkw==:3spans/1usage,1,010,266input,
+967,936cache reads,6,846output,zeroemittedwrites,$0.6934144baseestimate.
+Totals55teaches/44audits,99traces/11,687spans/3,772usage,
+4299.94717951545summedminutes,861,772,582input,718,657,408cache reads,
+9,124,166output,zeroemittedwrites,$1042.4069792baseAPI-equivalent estimate.
+Prior35missingsemanticcalls/interruptedCLI and pricing caveats remain.
+
+Next:NEWFlights48 on this correction, original recording/exactfour-operation
+scope, unused home/log/manifest, two workers, target30/assess60/hard90. Preserve
+fresh coherent search-to-booking records and failed handoffs. Do not resume47,
+reroll its audit or supply private diagnostic details to teachers. Hotels policy
+rejection remains unresolved. No push,MR,merge,reset or evidence deletion.
+
+
 ## Current continuation — 2026-09-14 08:20 PDT
 
 Flights 47 ended at its original hard deadline on unchanged 0a02ab7. PID 90900

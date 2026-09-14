@@ -295,6 +295,11 @@ before the specified zero-based navigation click. Earlier requests cannot satisf
 that capture even if their responses arrive after the click. The agent chooses
 this boundary when the action triggers its result; omission preserves matching
 from navigation start. It does not silently replace a failed selected response.
+Each navigation click polls its exact selector at `pollIntervalMs` until the
+target is visible and hit-testable, using the remaining navigation deadline.
+The click is dispatched once; its capture boundary begins only at dispatch,
+not while waiting for the target. Invalid selector evaluation, CDP errors and
+browser closure fail rather than polling indefinitely.
 The workflow keeps two exact recording origins: the outer
 `recordingRequestSeq` identifies the document navigation being sent, while
 `networkResponse.recordingResponseRequestSeq` identifies the background

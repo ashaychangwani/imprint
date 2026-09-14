@@ -1201,6 +1201,11 @@ identities and order. A successful singleton does not exercise preservation of
 multiple members. If the plan's fixed example cannot distinguish these behaviors,
 report that coverage gap to the master instead of extrapolating the singleton.
 
+Navigation clicks poll the exact agent-selected selector until it is clickable,
+using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches
+once; an action-scoped response capture starts at dispatch, not during that wait.
+Invalid selector evaluations and CDP errors still fail.
+
 ## WorkflowSchema Reference
 
 The complete schema your `workflow.json` must conform to (Zod definitions from `src/imprint/types.ts`):

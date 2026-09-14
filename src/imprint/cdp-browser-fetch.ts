@@ -2091,18 +2091,39 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     for (const [actionIndex, interaction] of (options.actions ?? []).entries()) {
       if (interaction.action !== 'click') continue;
-      const target = await withTimeout(
-        c.Runtime.evaluate({
-          expression: buildNavigationClickTargetExpression(interaction.selector),
-          returnByValue: true,
-        }),
-        `CDP Runtime.evaluate(navigation click target ${JSON.stringify(interaction.selector)})`,
-        Math.max(1, deadline - Date.now()),
-      ).catch(() => null);
-      const point = target?.result.value as { x?: unknown; y?: unknown } | null | undefined;
-      if (typeof point?.x !== 'number' || typeof point.y !== 'number') {
+      let point: { x: number; y: number } | undefined;
+      while (Date.now() < deadline) {
+        if (client !== c)
+          throw new Error('browser closed while waiting for navigation click target');
+        const target = await withTimeout(
+          c.Runtime.evaluate({
+            expression: buildNavigationClickTargetExpression(interaction.selector),
+            returnByValue: true,
+          }),
+          `CDP Runtime.evaluate(navigation click target ${JSON.stringify(interaction.selector)})`,
+          Math.max(1, deadline - Date.now()),
+        );
+        if (target.exceptionDetails) {
+          const detail =
+            target.exceptionDetails.exception?.description ?? target.exceptionDetails.text;
+          throw new Error(`browser navigation click target evaluation failed: ${detail}`);
+        }
+        const value = target.result.value as { x?: unknown; y?: unknown } | null | undefined;
+        if (
+          typeof value?.x === 'number' &&
+          typeof value.y === 'number' &&
+          Number.isFinite(value.x) &&
+          Number.isFinite(value.y)
+        ) {
+          point = { x: value.x, y: value.y };
+          break;
+        }
+        await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+      }
+      if (client !== c) throw new Error('browser closed while waiting for navigation click target');
+      if (!point || Date.now() >= deadline) {
         throw new Error(
-          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)}`,
+          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} within ${timeoutMs}ms`,
         );
       }
       if (networkCapture?.matcher.actionIndex === actionIndex) {

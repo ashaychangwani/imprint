@@ -1116,6 +1116,8 @@ describe('navigation network-response capture', () => {
     let currentUrl = 'about:blank';
     let clicked = 0;
     let serial = 0;
+    let targetAttempts = 0;
+    let targetState = 'delayed';
     const reads: string[] = [];
     const listeners: Record<string, (event: unknown) => void> = {};
     const emit = (id: string, phase: 'start' | 'response' | 'finish' | 'fail') => {
@@ -1146,16 +1148,34 @@ describe('navigation network-response capture', () => {
         ({
           Runtime: {
             enable: async () => ({}),
-            evaluate: async ({ expression }: { expression: string }) => ({
-              result: {
-                value:
-                  expression === 'navigator.userAgent'
-                    ? 'Mozilla/5.0 Chrome/148.0.0.0'
-                    : expression === 'location.href'
-                      ? currentUrl
-                      : { x: 10, y: 20 },
-              },
-            }),
+            evaluate: async ({ expression }: { expression: string }) => {
+              if (expression.includes('const target = document.querySelector')) {
+                targetAttempts++;
+                if (targetState === 'invalid') {
+                  return { result: {}, exceptionDetails: { text: 'Invalid CSS selector' } };
+                }
+                if (targetState === 'transport-error') throw new Error('CDP disconnected');
+                if (targetState === 'closed') await browser.close();
+                if (targetState !== 'delayed' || targetAttempts <= 2) {
+                  // Even completed matching requests while waiting precede the click boundary.
+                  emit(`waiting-${serial}-${targetAttempts}`, 'start');
+                  emit(`waiting-${serial}-${targetAttempts}`, 'response');
+                  emit(`waiting-${serial}-${targetAttempts}`, 'finish');
+                  return { result: { value: null } };
+                }
+                return { result: { value: { x: 10, y: 20 } } };
+              }
+              return {
+                result: {
+                  value:
+                    expression === 'navigator.userAgent'
+                      ? 'Mozilla/5.0 Chrome/148.0.0.0'
+                      : expression === 'location.href'
+                        ? currentUrl
+                        : true,
+                },
+              };
+            },
           },
           Network: {
             enable: async () => ({}),
@@ -1187,6 +1207,7 @@ describe('navigation network-response capture', () => {
             navigate: async ({ url }: { url: string }) => {
               currentUrl = url;
               clicked = 0;
+              targetAttempts = 0;
               serial++;
               emit(`initial-${serial}`, 'start');
               emit(`initial-${serial}`, 'response');
@@ -1243,19 +1264,49 @@ describe('navigation network-response capture', () => {
         const response = await browser.navigate?.('https://fixture.test/page', {
           waitUntil: 'domcontentloaded',
           timeoutMs: 1500,
+          pollIntervalMs: 10,
           actions,
           networkResponse,
         });
         expect(await response?.text()).toBe(`chosen-${serial}`);
+        expect(targetAttempts).toBe(4);
+        expect(clicked).toBe(2);
       }
       expect(reads).toEqual(['chosen-2', 'chosen-3']);
       const firstAction = await browser.navigate?.('https://fixture.test/page', {
         waitUntil: 'domcontentloaded',
         timeoutMs: 1500,
+        pollIntervalMs: 10,
         actions,
         networkResponse: { ...networkResponse, actionIndex: 0 },
       });
       expect(await firstAction?.text()).toBe('menu-4');
+      expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
+      for (const [state, message] of [
+        ['missing', 'within 120ms'],
+        ['invalid', 'Invalid CSS selector'],
+        ['transport-error', 'CDP disconnected'],
+        ['closed', 'browser closed'],
+      ] as const) {
+        targetState = state;
+        const started = Date.now();
+        await expect(
+          browser.navigate?.('https://fixture.test/page', {
+            waitUntil: 'domcontentloaded',
+            timeoutMs: 120,
+            pollIntervalMs: 10,
+            actions,
+            networkResponse,
+          }),
+        ).rejects.toThrow(message);
+        expect(clicked).toBe(0);
+        if (state === 'missing') {
+          expect(targetAttempts).toBeGreaterThan(1);
+          expect(Date.now() - started).toBeLessThan(1000);
+        } else {
+          expect(targetAttempts).toBe(1);
+        }
+      }
       expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
     } finally {
       await browser.close();
