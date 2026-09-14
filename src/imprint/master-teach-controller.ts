@@ -29,6 +29,7 @@ import {
   type BackendAttemptFact,
   type BackendPreparedRequestObservation,
   type BackendResponseObservation,
+  resolveWorkflowTool,
   runWorkflowWithLadder,
 } from './backend-ladder.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
@@ -125,6 +126,7 @@ import {
 } from './master-teach-store.ts';
 import { localSiteDir, localToolDir } from './paths.ts';
 import { DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS, runPlaybook } from './playbook-runner.ts';
+import { persistRuntimeBackendsCache } from './probe-backends.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import {
   ProviderUnavailableError,
@@ -420,6 +422,8 @@ interface CompiledFocusedTool {
   strategyKind?: CompileStrategyKind;
   /** Final summary from this retained compiler turn. */
   compilerSummary?: string;
+  /** Exact successful backend retained only after this build's MVP review. */
+  reviewedBackendAttempt?: BackendAttemptFact;
 }
 
 interface LiveCheckResult {
@@ -4022,6 +4026,9 @@ async function compileAndCheckCurrentPlan(input: {
       );
       return false;
     }
+    focused.reviewedBackendAttempt = live.backendAttempts?.find(
+      (attempt) => attempt.backend === live.executionMechanism && attempt.outcome === 'ok',
+    );
     await input.publishMvp?.(tool, focused);
     // A repair seed is promoted only after this exact build passes contract,
     // live execution, semantic review, and publication. A merely parseable but
@@ -5653,6 +5660,14 @@ async function promoteCompletedTools(input: {
     if (!existsSync(workflowPath))
       throw new Error(`promotion is missing ${toolName}/workflow.json`);
     emit({ workflowPath, outDir: source, force: true });
+    if (compiled.reviewedBackendAttempt) {
+      persistRuntimeBackendsCache({
+        tool: resolveWorkflowTool(workflowPath),
+        assetRoot: promotionRoot,
+        usedBackend: compiled.reviewedBackendAttempt.backend,
+        attempts: [compiled.reviewedBackendAttempt],
+      });
+    }
     prepared.push({
       toolName,
       source,

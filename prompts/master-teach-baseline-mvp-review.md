@@ -178,3 +178,7 @@ Exact output schema (all objects reject extra fields):
   }]
 }
 <!-- END IMPRINT CANONICAL OUTPUT EXAMPLE -->
+
+The backend that produced this exact accepted live result is retained when the
+tool is published. Judge this observed result and its supported scope; backend
+persistence does not establish fresh-session success or repeatability.

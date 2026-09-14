@@ -493,6 +493,11 @@ The public teaching path is one fresh foreground controller:
    consumer. This works before normalized tools exist. Producer observations are
    labeled separately and cannot certify consumer success. Only current proven
    siblings are offered; browser state remains separated by tool and rung.
+   Publication writes the exact reviewed successful backend to the existing
+   workflow-bound `backends.json` cache. A new MCP process therefore retains the
+   tested execution choice instead of losing the forced research backend when
+   staging ends. Failed or rejected results do not supply a preference. The
+   observed duration includes the call setup; it is not a separate warm benchmark.
    MVP review includes the checked workflow and request transform, parser source,
    the prior research explanation (labeled as such), and up to 32 KB of actual
    result text. Truncation is explicit; request encoding alone is not evidence

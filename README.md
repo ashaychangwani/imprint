@@ -117,6 +117,9 @@ exactly matching draft is reused. Declared consumers retain producer-first order
 Researchers can call proven sibling requests with fresh inputs before testing a
 consumer; recorded continuation values are not a substitute for fresh output.
 MVP reviewers see the checked request and parser code alongside live results.
+Publication retains the backend from that exact reviewed passing call in
+`backends.json`, so a fresh MCP process starts on the tested path. This records
+one execution choice, not a cold/warm benchmark or proof of repeatability.
 They also receive actual research comparisons and inspected response excerpts,
 not just the researcher's explanation of what those tests proved.
 Agents are instructed to distinguish competing meanings of ambiguous fields

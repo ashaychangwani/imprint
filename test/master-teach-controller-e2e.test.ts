@@ -10,6 +10,8 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { loadBackendsCacheStatus } from '../src/imprint/backend-cache.ts';
+import { resolveLadder } from '../src/imprint/backend-ladder.ts';
 import type { TriageResult } from '../src/imprint/compile.ts';
 import {
   type ApiResearchInput,
@@ -772,6 +774,72 @@ function lifecycleFailureFixture(input: {
 }
 
 describe('fresh foreground master controller end to end', () => {
+  for (const credible of [true, false]) {
+    it(`publishes only the reviewed build's observed backend: ${credible}`, async () => {
+      await withTemporaryImprintHome(async (root, home) => {
+        const base = lifecycleFailureFixture({
+          runId: 'run-e2e-published-backend',
+          events: [],
+          promotionBatches: [],
+          failCompileToolId: CONSUMER_ID,
+          requestBaselineMvpReview: (input) =>
+            baselineMvpReview(input, credible ? 'credible' : 'revision_required'),
+        });
+        const { promote: _fixturePromotion, ...deps } = base;
+        await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: syntheticSessionPath(root),
+            noInteractive: true,
+            provider: 'codex-cli',
+          },
+          {
+            ...deps,
+            runApiTool: async (input) => {
+              if (!base.runApiTool) throw new Error('Expected fixture API runner');
+              const result = await base.runApiTool(input);
+              return {
+                ...result,
+                executionMechanism: 'fetch-bootstrap',
+                backendAttempts: [
+                  {
+                    backend: 'fetch-bootstrap' as const,
+                    outcome: 'ok' as const,
+                    durationMs: 34000,
+                    detail: 'Synthetic bootstrap transport completed',
+                  },
+                ],
+              };
+            },
+          },
+        );
+        const toolDir = join(home, SITE, PRODUCER_NAME);
+        const status = loadBackendsCacheStatus(SITE, home, toolDir, { warn: false });
+        if (!credible) {
+          expect(status.status).toBe('missing');
+          expect(existsSync(join(toolDir, 'index.ts'))).toBe(false);
+          return;
+        }
+        expect(existsSync(join(toolDir, 'index.ts'))).toBe(true);
+        if (status.status !== 'ok')
+          throw new Error(`Expected published backend, got ${status.status}`);
+        expect(resolveLadder('auto', status.cache.preferredOrder)[0]).toBe('fetch-bootstrap');
+        expect(status.cache.results['fetch-bootstrap']).toMatchObject({
+          outcome: 'ok',
+          durationMs: 34000,
+        });
+        expect(Object.keys(status.cache.results)).toEqual(['fetch-bootstrap']);
+        const workflowPath = join(toolDir, 'workflow.json');
+        const workflow = readJson(workflowPath) as Record<string, unknown>;
+        writeFileSync(
+          workflowPath,
+          JSON.stringify({ ...workflow, intent: { description: 'Changed fixture build' } }),
+        );
+        expect(loadBackendsCacheStatus(SITE, home, toolDir, { warn: false }).status).toBe('stale');
+      });
+    });
+  }
+
   for (const rejectContinuation of [false, true]) {
     it(`executes repeated calls with exact receipts and blocks rejected sources: ${rejectContinuation}`, async () => {
       await withTemporaryImprintHome(async (root) => {

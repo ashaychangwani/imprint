@@ -507,7 +507,7 @@ export default function App() {
                 <div className="check"><i>✓</i><div><b>Login credentials only</b><span>Known user-supplied login values become credential placeholders. Cookies, tokens, API responses, and personal data remain available to the agents; even files named “redacted” are not safe to share publicly.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Credentials stay local</b><span>Generated tools initialize per-run cookie/state jars from the local credential backend instead of committing plaintext secrets.</span></div></div>
                 <div className="check"><i>✓</i><div><b>Traceable compiles</b><span><code>IMPRINT_TRACE=1</code> streams OpenInference spans, token estimates, and optional LLM/tool I/O into local Phoenix.</span></div></div>
-                <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version.</span></div></div>
+                <div className="check"><i>✓</i><div><b>Auditable artifacts</b><span>Workflow, playbook, cron config, backend order, and generated module are files you can inspect, test, and version. Published tools retain the backend from their reviewed passing call so a new session starts on the tested path.</span></div></div>
               </div>
             </div>
           </section>

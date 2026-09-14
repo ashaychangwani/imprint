@@ -11290,3 +11290,51 @@ writes,$22.2388336 base estimate, no missing semantic usage. Totals throughteach
 minutes,716397337 input,596067072 reads,7608774 output,zero writes,$871.9233688
 base estimate. Activeaudit40 excluded;31 prior missing semantic calls and pricing/
 interruption caveats retained. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 20:01 PDT — Preserve failed booking audit and retain reviewed execution at publication
+
+Audit 40 ended after 4.8547 minutes, FAIL 20/23 graded units (86.96%). Fifteen
+actual calls include 12 correct, two broken booking calls and one excluded bad
+calendar input; no infrastructure exclusions. Eight parameters worked and the
+booking selection parameter failed. Lookup passed two calls, grid five valid
+calls and search five calls. Both booking failures used fresh producer selections
+and reported missing internal state before the API request. Connecting booking
+and slash-prefixed grid location IDs remain unproven; the graded parameter scores
+do not establish every advertised representation. No reroll or artifact changes.
+
+A private synthetic-input diagnostic of the unchanged published booking workflow
+reproduced STATE_MISSING in 6.068ms with zero prepared HTTP requests. Ordinary
+execution starts at fetch; its ordinary_http state declaration routes past
+browser backends to the absent playbook. Teaching forced fetch-bootstrap, whose
+passing result supplied bootstrap captures, but promotion did not retain that
+backend choice. This is a concrete execution mismatch, not stale-selection proof.
+The synthetic diagnostic establishes no booking correctness. Private
+flights-40-default-ladder-diagnostic.ts/.json preserve it; no live browser or LLM.
+
+Publication now carries the successful backend attempt from the exact accepted
+MVP result into the existing workflow-bound backends.json format. Only after
+semantic approval can that build supply a preference. Fresh MCP execution can
+start on the reviewed path. Runtime selection/fallback rules, capture capability
+labels and generated business logic are unchanged. Agents still choose the
+execution strategy. This fixes lost execution configuration, not every booking
+or search semantic failure, and does not establish repeatability.
+
+Two synthetic controller tests exercise real publication, accepted versus rejected
+review, persisted startup preference and workflow-change invalidation. All 221
+controller/backend/probe tests and 1,035 assertions pass in 23.62s. Lint214files,
+types, website build and desktop/mobile full-page plus changed-card visual checks
+pass, with no page errors/overflow. Existing bundle warning remains. Initial
+non-null fixture warning and a misplaced interface field caught by type checking
+were corrected; private published-backend-* logs retain all attempts. Preview
+PID55878 stopped. README, architecture, reviewer guidance and website updated.
+Next launch fresh Flights41 using the original recording/scope; do not resume40.
+
+Audit40 accounting adds539602 input,496896 reads,4507 output,zero emitted writes,
+$0.4597224 base estimate, no missing semantic usage. Totals:48 teaches/37 audits,
+85 traces/9754 spans/3177 usage carriers,3668.249458698817 minutes,716936939 input,
+596563968 reads,7613281 output,zero writes,$872.3830912 base API-equivalent estimate.
+Thirty-one prior missing semantic calls and all pricing/interruption caveats remain.
+The latest capture diagnostic path, repeated-call support and original malformed
+researcher catch remain unexercised live. Hotels prior policy rejection remains
+unresolved with no automatic retry or bypass. No push, MR, merge or evidence deletion.
