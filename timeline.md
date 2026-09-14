@@ -11104,3 +11104,38 @@ missing interrupted master planning call. Totals through teach 39: 47 teaches / 
 581,184,512 reads,7,428,544 output,zero writes, $848.9740688 base estimate; 31 missing
 semantic calls and previous caveats remain. Active audit 39 excluded. Hotels
 provider rejection remains unresolved. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 18:22 PDT — Preserve audit defects and inspect capture events
+
+Audit 39 failed after 8.12 minutes: 19/21 graded units (90.48%). Fifteen actual
+calls include nine correct, two broken search results, and four search capture
+timeouts excluded as infrastructure by the auditor. All ten inputs were graded
+working, but origin/date search effects came from rendered-page evidence after
+structured capture failed. Lookup passed both calls; grid passed seven calls,
+including independent date bounds producing 6, 9 and 12 cells. Booking was absent
+and therefore outside the auditor's detected-tool inventory. No full pass.
+
+Search returned incorrect stop counts and missing arrival times. The parser
+reads an unlabeled scalar as stops with a zero fallback and accepts only numeric
+one/two-element time arrays. Its baseline review had accepted the first record;
+that does not establish the entire collection. Preserve these failures and the
+four excluded capture timeouts without rerolling the audit.
+
+An isolated, unchanged-tool SJC–LAX October10 diagnostic failed after 92.154s
+including setup. Raw CDP event observations contain no shopping-service request;
+they do not support the possible request-versus-response resource-type hypothesis.
+The private flights-39-network-event-diagnostic.ts/.json/.log files preserve all
+294 observed events. The diagnostic and its browser pool ended. No LLM usage.
+It reveals an evidence gap: a capture timeout reports the requested matcher but
+not the actual observed response metadata. Next add a bounded factual response
+summary, leaving all selection and strategy with agents, then test and validate
+with fresh teach40. Do not change site-specific matching or copy generated tools.
+
+Audit accounting adds 918186 input, 847616 cache reads, 4457 output, zero emitted
+writes and $0.7104664 base estimate, no missing usage. Totals: 47 teaches/36 audits,
+83 traces/9479 spans/3100 usage carriers, 3608.552111266867 minutes, 699085044 input,
+582032128 reads, 7433001 output, zero writes, $849.6845352 base estimate. Thirty-one
+missing semantic calls and previous pricing/interruption caveats remain. PID19903
+ended. No active teach, audit or diagnostic. Hotels rejection remains unresolved.
+No push, MR, merge or evidence deletion.
