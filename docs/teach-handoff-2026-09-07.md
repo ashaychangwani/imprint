@@ -1,7 +1,32 @@
 # Teach rebuild handoff — September 7, 2026
 
 
-## Current continuation — 2026-09-13 23:52 PDT: Preserve failed audit and diagnose capture before core results
+## Current continuation — 2026-09-13 23:53 PDT: Launch fresh navigation-readiness validation
+
+Flights43 started September14 06:53:01UTC on a283cd2, PID35614, unused home-43
+and exclusive flights-teach-43.log/manifest under the existing evidence root.
+Target07:23:01, assessment07:53:01, hard deadline08:23:01UTC. Original recording,
+exact four-operation scope and configured two workers. Clean branch descended
+from34a6235; prior teaches, audit, diagnostics and preview ended. Collector200,
+AC100%,15.46GiB free and both recording sizes verified. No prior generated tools
+or private diagnosis supplied to teaching agents.
+
+Monitor research and generated completion evidence after navigation, fresh
+coherent search-to-booking outputs, public input scope, preserved backend
+choices, and retained repair history. No code changes or concurrent live
+experiments during the run. Audit independently afterward. This prompt change
+has not yet been live-validated; repeatability remains unmet. Hotels policy
+rejection is unresolved with no automatic retry, bypass or model switch.
+
+Accounting remains complete throughaudit42:50teaches/39audits,89traces,
+10325spans/3357usage,3846.882228512summedminutes,758587731input,
+630923520cache reads,8064233output,zero emittedwrites,$924.310912base
+API-equivalent estimate.35missingsemanticcalls and prior caveats retained.
+Active43excluded. Original malformed-handoff recovery confirmed in42;
+repeated-invocation feature still unexercised. No push,MR,merge,reset,deletion.
+
+
+## Previous continuation — 2026-09-13 23:52 PDT: Preserve failed audit and diagnose capture before core results
 
 Audit 42 ended after 5.7664 minutes and failed: 20/24 graded units, 83.33%.
 Its 16 actual calls were 12 correct, three broken booking results, and one
