@@ -12073,3 +12073,50 @@ Accounting stays through audit 43 at $946.7107432 base estimate with 35 missing
 semantic calls and prior caveats; active 44 excluded. Hotels policy rejection
 remains unresolved, with no automatic retry, bypass or model switch. Evidence
 preserved; no push, MR, merge, reset or deletion.
+
+
+## 2026-09-14 03:04 PDT — Complete four tools and launch independent audit
+
+Flights 44 completed in 73.9045236173 minutes on implementation 9c45f99.
+PID 77415 ended; final journal revision 4 is completed. All four tools have
+current passed contract/live receipts; the generated search-to-booking chain
+and completion review passed. Target 30 minutes was missed, the one-hour
+assessment justified focused repair, and completion stayed within 90 minutes.
+
+Lookup uses fetch; search, calendar and booking use CDP API response capture.
+All published backends.json files retain those choices. Lookup returned two
+matches; one-way airport-code search returned 22 itineraries. Calendar's final
+49-cell validation took 33.680 seconds and its semantic review accepted the
+retained same-date route comparison. Seven-day departure and return windows
+remain required; arbitrary ranges and location identifiers are not proven.
+
+Booking's retained compiler replaced the unconditional USD assignment with
+currency extraction from response-owned option handoff data. The final baseline
+returned 18 F9 2858 SFO–LAX offers in 34.472 seconds; its fresh generated-chain
+selection returned 17 F9 1178 SEA–LAX offers in 32.278 seconds. Both semantic
+reviews accepted the response-derived currency. Old failed reviews remain
+preserved. The parser skips options without a decoded currency; broader currency
+coverage and metadata correctness still require audit. The public six-field
+selection package contains one flight identity; connecting support is unproven.
+Timings include setup, and the chain reuses per-tool bootstrap cookies rather
+than a shared cross-tool browser. These calls do not establish warm repeatability.
+The new missing-background-request guidance was not exercised by a repaired
+emitted capture in this teach; successful baselines do not settle audit 43's issue.
+
+Independent audit 44 started September 14 at 10:02:16.040441 UTC, PID 13349,
+home-44, exclusive flights-audit-44.log and manifest. Hard deadline 10:47:16 UTC.
+Preflight confirmed teach ended, clean branch, collector HTTP 200, AC100%, and
+13.98 GiB free. Inspect actual calls, parameter coverage, valid fresh selection
+packages and exclusions. Preserve the audit as written; no concurrent diagnostics
+or code changes. A passing audit still requires fresh unchanged-code repetition.
+Hotels policy rejection remains unresolved; no automatic retry, bypass or model
+switch. No push, MR, merge, reset or evidence deletion.
+
+Teach accounting extracted once: trace up3kpEfxidBd/BiE79aeCw==, 246 spans,
+69 usage carriers, 14,601,208 input, 11,523,328 cache reads, 199,357 output,
+zero emitted writes, $20.9079912 base estimate, zero missing semantic calls.
+Totals: 52 teaches, 40 audits, 92 traces, 10,836 spans, 3,497 usage carriers,
+4015.7077415412 summed minutes, 790,714,269 input, 656,857,856 cache
+reads, 8,472,497 output, zero emitted writes, $967.6187344 base
+API-equivalent estimate. The 35 earlier missing semantic calls and interrupted
+CLI/pricing caveats remain. Active audit 44 is excluded.
