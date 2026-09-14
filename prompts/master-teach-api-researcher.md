@@ -512,6 +512,15 @@ must contain the promised core data before you mark the candidate proven. The
 runtime does not decide which background response is meaningful. If the page is
 used only to mint cookies or capture state for a later direct API call, keep it
 in `workflow.bootstrap` instead.
+One successful background capture does not establish a reusable source: the
+page may deliver later results without issuing that request. Before marking
+this capture strategy proven, repeat the current valid input and try a small
+contrast of one core input with the same candidate. Keep constrained input
+groups coherent and choose the contrast from the evidence, not an exhaustive
+parameter matrix. Reuse the same tool's session when available; distinguish
+actual pool reuse from fresh setup in the observed timings. Reuse decisive
+same-candidate observations already in this conversation instead of repeating
+them. If either follow-up fails, retain the exact valid input during repair.
 When a selected background request is absent but current results are visible,
 inspect their actual delivery source, including structured data in the document.
 A different input that triggers a request does not repair the original valid

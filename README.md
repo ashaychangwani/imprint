@@ -152,6 +152,9 @@ shapes. Extra responses used to corroborate research stay in the evidence;
 required execution requests must contribute necessary state or core output.
 Agents ground rendered-result completion checks in core content and inspect
 observed layout variations before treating an incidental element as required.
+Before accepting a navigation capture as reusable, researchers repeat a valid
+input and compare a small core-input variation with the same candidate. They
+reuse existing decisive observations and distinguish session reuse from setup.
 When a background capture fails despite current page results, agents inspect
 their delivery source, including structured document data. Changing the baseline
 input does not repair the failed valid case. Reviewers trace ambiguous metadata

@@ -527,6 +527,12 @@ The public teaching path is one fresh foreground controller:
    small contrasting case when observed layout variation makes the condition
    uncertain. Optional presentation must not silently restrict the contract;
    current-result freshness remains necessary.
+   One background response does not establish that later calls issue the same
+   request. Before accepting navigation capture, researchers repeat a valid
+   input and contrast one core input using the same candidate, preserving
+   constrained groups. They reuse decisive observations and distinguish actual
+   session reuse from setup. Compilers return missing or contradicted source
+   evidence to retained research; no runtime strategy or extra gate is added.
    If a background capture is absent despite current results, agents inspect
    their actual delivery source, including structured document data. A different
    input that produces the request does not resolve the failed valid input;

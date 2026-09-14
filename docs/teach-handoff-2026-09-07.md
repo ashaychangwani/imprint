@@ -1,6 +1,58 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 03:04 PDT: Complete four tools and launch independent audit
+## Current continuation — 2026-09-14 03:21 PDT: Preserve failed audit and test capture reuse before planning
+
+Audit 44 ended after 9.6940154049 minutes and failed 18/22 graded units
+(81.82 percent). The 15 actual calls were 12 correct and 3 broken, with no
+infrastructure or bad-input exclusions. Six parameters worked, search origin
+failed, and four constrained calendar bounds were individually untestable.
+The valid paired calendar window shifts were exercised, including a successful
+retry; individual untestability is not evidence those pairs failed.
+
+Search baseline SFO–LAX October 20 returned 33 flights. OAK–LAX on the same date
+rendered eight relevant results but failed structured capture twice, including
+a paced retry. Changed destination SFO–SAN and October 21 departure succeeded.
+Calendar returned valid baseline and route contrasts; a shifted departure window
+failed capture once, then passed unchanged on retry. The shifted return window
+passed. Booking consumed two genuine search selections: F9 2858 SFO–LAX returned
+19 options from USD 42–75, and F9 3382 SFO–SAN returned nine from USD 19–51.
+Connecting selections and broader currency/metadata coverage remain unproven.
+The audit report and transcript are preserved unchanged in home-44/google-flights.
+
+Read-only inspection found a gap before planning: search research accepted the
+navigation capture after one successful captured response. Its other observations
+were different request constructions; they did not establish reuse of the final
+source across subsequent valid calls. The prior general delivery guidance only
+addressed a failure once observed, so it was not exercised before publication.
+Audit 43's separate CDP-event diagnostic proved a missing background request for
+its failed case; audit 44's page/capture contrast is consistent with that risk,
+but no new event diagnostic establishes an identical cause for every 44 failure.
+
+The existing navigation-capture researcher guidance now asks for a repeat of
+the valid input and a small core-input contrast using the same candidate before
+accepting that source. Agents choose the valid contrast, preserve constrained
+groups, reuse decisive observations, distinguish actual pooled reuse from setup,
+and retain failed inputs during repair. Compilers return missing or contradicted
+source evidence to retained research. This is prompt guidance, not a runtime
+strategy, site-specific rule, added gate or exhaustive parameter matrix.
+README, architecture and website match. Lint214files, typecheck and webbuild
+passed; initial webbuild lacked Bun on PATH and passed after correcting that
+environment. Desktop/mobile visual checks passed with no page errors or horizontal
+overflow; the existing bundle-size warning remains. No prompt-mirroring tests.
+Preview ended. Validate with a NEW Flights45 teach, never resume44 or reroll audit.
+
+Audit accounting extracted once: trace +QCJAXOyKQD9fZUnCruMnA==, 3spans/1usage,
+1,042,548 input, 981,632 cache reads, 5,378 output, zero emitted writes,
+$0.7438768 base estimate, zero missing semantic calls. Totals52teaches/41audits,
+93traces/10,839spans/3,498usage, 4025.4017569460 summed minutes,
+791,756,817 input, 657,839,488 cache reads, 8,477,875 output,
+zero emitted writes, $968.3626112 base API-equivalent estimate.35 earlier
+missing semantic calls and interrupted-CLI/pricing caveats remain. Hotels policy
+rejection unresolved; no automatic retry, bypass or model switch. Repeatability
+unmet. No push, MR, merge, reset or evidence deletion.
+
+
+## Previous continuation — 2026-09-14 03:04 PDT: Complete four tools and launch independent audit
 
 Flights 44 completed in 73.9045236173 minutes on implementation 9c45f99.
 PID 77415 ended; final journal revision 4 is completed. All four tools have

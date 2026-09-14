@@ -303,6 +303,11 @@ Follow these steps to compile the session:
      If that response is the only completion requirement, omit `waitUntil`;
      add lifecycle, selector, or action waits only when the workflow actually
      needs them after navigation.
+     A single captured response does not establish that later calls emit the
+     same request. Reuse the researcher's repeat and core-input contrast for
+     this exact candidate; if that source evidence is missing or contradicted,
+     return the gap to research rather than treating one baseline as reusable
+     capture proof. Keep valid failing inputs intact during source repair.
      If current results arrive without that background request, inspect their
      actual source, including structured data embedded in the document. A
      changed input that triggers the request does not resolve the failed valid

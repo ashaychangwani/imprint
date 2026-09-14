@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are fifty-two teaches and forty independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fifty-two teaches and forty-one independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 and teaches 18 and 29 are exceptions: host sleep interrupted their monotonic trace clocks. They use launch time to final report/terminal modification time: 52.37, 103.43 and 93.40 wall minutes, versus 0.54, 71.79 and 60.98 trace minutes respectively. Input includes cache reads and writes; do not add the cache columns again. All 3,497 usage spans identify `gpt-5.6-sol`.
+Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 and teaches 18 and 29 are exceptions: host sleep interrupted their monotonic trace clocks. They use launch time to final report/terminal modification time: 52.37, 103.43 and 93.40 wall minutes, versus 0.54, 71.79 and 60.98 trace minutes respectively. Input includes cache reads and writes; do not add the cache columns again. All 3,498 usage spans identify `gpt-5.6-sol`.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -99,8 +99,9 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights audit 42 | FAIL 20/24 graded; 12 correct calls, 3 empty booking failures, 1 bad input; 8 working and 1 broken input | 5.77 | 1,209,852 | 1,125,120 | 0 | 5,253 | $0.89 |
 | Flights teach 43 | 4 ready; fresh booking chain and completion review passed; independent audit failed | 84.14 | 16,147,538 | 13,102,720 | 0 | 204,020 | $21.50 |
 | Flights audit 43 | FAIL 19/22 graded; 10 correct calls, 3 search capture failures, 1 excluded calendar timeout; 9 working inputs | 10.78 | 1,377,792 | 1,308,288 | 0 | 4,887 | $0.90 |
-| Flights teach 44 | 4 ready; route/currency repairs and fresh booking chain passed; independent audit pending | 73.90 | 14,601,208 | 11,523,328 | 0 | 199,357 | $20.91 |
-| **Total** | **Includes failures/cancellations** | **4,015.71** | **790,714,269** | **656,857,856** | **0** | **8,472,497** | **$967.62** |
+| Flights teach 44 | 4 ready; route/currency repairs and fresh booking chain passed; independent audit failed | 73.90 | 14,601,208 | 11,523,328 | 0 | 199,357 | $20.91 |
+| Flights audit 44 | FAIL 18/22 graded; 12 correct calls, 3 capture failures; 6 working, 1 broken and 4 untestable parameters; no exclusions | 9.69 | 1,042,548 | 981,632 | 0 | 5,378 | $0.74 |
+| **Total** | **Includes failures/cancellations** | **4,025.40** | **791,756,817** | **657,839,488** | **0** | **8,477,875** | **$968.36** |
 
 ## Cost assumptions and completeness
 
@@ -116,7 +117,7 @@ The earlier successful Flights teach took 69.40 minutes; attempt 8 took 82.29 mi
 
 ## Evidence and remaining work
 
-Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3/attempt-4 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, `flights-audit-17b-accounting.json`, `hotels-teach-4-accounting.json`, `hotels-audit-4-accounting.json`, `flights-teach-18-accounting.json`, `flights-teach-19-accounting.json`, `flights-audit-19-accounting.json`, `flights-teach-20-accounting.json`, `flights-audit-20-accounting.json`, `hotels-teach-5-accounting.json`, `hotels-audit-5-accounting.json`, and `flights-teach-21-accounting.json` and `flights-audit-21-accounting.json` and `flights-teach-22-accounting.json` and `flights-audit-22-accounting.json` and `hotels-teach-6-accounting.json` and `hotels-audit-6-accounting.json` and `flights-teach-23-accounting.json` and `flights-audit-23-accounting.json` and `flights-teach-24-accounting.json` and `flights-audit-24-accounting.json` and `flights-teach-25-accounting.json` and `flights-audit-25-accounting.json` and `flights-teach-26-accounting.json` and `flights-audit-26-accounting.json` and `flights-teach-27-accounting.json` and `flights-audit-27-accounting.json` and `hotels-teach-7-accounting.json` and `hotels-audit-7-accounting.json` and `flights-teach-28-accounting.json` and `flights-audit-28-accounting.json` and `flights-teach-29-accounting.json` and `flights-teach-30-accounting.json` and `flights-audit-30-accounting.json` and `flights-teach-31-accounting.json` and `flights-audit-31-accounting.json` and `flights-teach-32-accounting.json` and `flights-audit-32-accounting.json` and `hotels-teach-8-accounting.json` and `flights-teach-33-accounting.json` and `flights-audit-33-accounting.json` and `flights-teach-34-accounting.json` and `flights-teach-35-accounting.json` and `flights-audit-35-accounting.json` and `flights-teach-36-accounting.json` and `flights-teach-37-accounting.json` and `flights-audit-37-accounting.json` and `flights-teach-38-accounting.json` and `flights-audit-38-accounting.json` and `flights-teach-39-accounting.json` and `flights-audit-39-accounting.json` and `flights-teach-40-accounting.json` and `flights-audit-40-accounting.json` and `flights-teach-41-accounting.json` and `flights-audit-41-accounting.json` and `flights-teach-42-accounting.json` and `flights-audit-42-accounting.json` and `flights-teach-43-accounting.json` and `flights-audit-43-accounting.json` and `flights-teach-44-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The ninety-two accounted traces contain 10,836 spans and ninety-two completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
+Sources: `/tmp/imprint-fresh-inputs-VYbJm1/spans.jsonl` and the completed Flights attempt-5 through attempt-17 and Hotels attempt-3/attempt-4 traces in `spans-validation.jsonl`; extracted local aggregates: `historical-accounting.json` plus `flights-teach-5-accounting.json` and `flights-teach-6-accounting.json`, plus `flights-audit-6-accounting.json` and `flights-teach-7-accounting.json`, plus `flights-teach-8-accounting.json` and `flights-audit-8-accounting.json`, plus `hotels-teach-3-accounting.json` and `flights-teach-9-accounting.json`, plus `flights-audit-9-accounting.json` and `flights-teach-10-accounting.json` and `flights-audit-10-accounting.json` and `flights-teach-11-accounting.json` and `flights-audit-11-accounting.json` and `flights-teach-12-accounting.json`, `flights-teach-13-accounting.json`, `flights-audit-13-accounting.json`, `flights-teach-14-accounting.json`, `flights-audit-14-accounting.json`, `flights-teach-15-accounting.json`, `flights-audit-15-accounting.json`, `flights-teach-16-accounting.json`, `flights-audit-16-accounting.json`, `flights-teach-17-accounting.json`, `flights-audit-17-accounting.json`, `flights-audit-17b-accounting.json`, `hotels-teach-4-accounting.json`, `hotels-audit-4-accounting.json`, `flights-teach-18-accounting.json`, `flights-teach-19-accounting.json`, `flights-audit-19-accounting.json`, `flights-teach-20-accounting.json`, `flights-audit-20-accounting.json`, `hotels-teach-5-accounting.json`, `hotels-audit-5-accounting.json`, and `flights-teach-21-accounting.json` and `flights-audit-21-accounting.json` and `flights-teach-22-accounting.json` and `flights-audit-22-accounting.json` and `hotels-teach-6-accounting.json` and `hotels-audit-6-accounting.json` and `flights-teach-23-accounting.json` and `flights-audit-23-accounting.json` and `flights-teach-24-accounting.json` and `flights-audit-24-accounting.json` and `flights-teach-25-accounting.json` and `flights-audit-25-accounting.json` and `flights-teach-26-accounting.json` and `flights-audit-26-accounting.json` and `flights-teach-27-accounting.json` and `flights-audit-27-accounting.json` and `hotels-teach-7-accounting.json` and `hotels-audit-7-accounting.json` and `flights-teach-28-accounting.json` and `flights-audit-28-accounting.json` and `flights-teach-29-accounting.json` and `flights-teach-30-accounting.json` and `flights-audit-30-accounting.json` and `flights-teach-31-accounting.json` and `flights-audit-31-accounting.json` and `flights-teach-32-accounting.json` and `flights-audit-32-accounting.json` and `hotels-teach-8-accounting.json` and `flights-teach-33-accounting.json` and `flights-audit-33-accounting.json` and `flights-teach-34-accounting.json` and `flights-teach-35-accounting.json` and `flights-audit-35-accounting.json` and `flights-teach-36-accounting.json` and `flights-teach-37-accounting.json` and `flights-audit-37-accounting.json` and `flights-teach-38-accounting.json` and `flights-audit-38-accounting.json` and `flights-teach-39-accounting.json` and `flights-audit-39-accounting.json` and `flights-teach-40-accounting.json` and `flights-audit-40-accounting.json` and `flights-teach-41-accounting.json` and `flights-audit-41-accounting.json` and `flights-teach-42-accounting.json` and `flights-audit-42-accounting.json` and `flights-teach-43-accounting.json` and `flights-audit-43-accounting.json` and `flights-teach-44-accounting.json` and `flights-audit-44-accounting.json` in the same directory. Teach/audit outcomes are detailed in [the handoff](teach-handoff-2026-09-07.md). The ninety-three accounted traces contain 10,839 spans and ninety-three completed root spans. Later attempts appended to the validation trace file are excluded until accounted separately.
 
 Attempt 6 ran on `cdf57eb`. All five selected operations had research proof, but final grid verification returned zero items and booking compilation began only shortly before the deadline. The CLI reported `provider_unavailable`; the observed cause was exhaustion of the run deadline, not a recorded provider-capacity failure. The independent audit of its three published tools passed all ten invocations and six advertised parameters (16/16 units). It cannot establish success of the missing grid and booking tools.
 
@@ -2052,3 +2053,55 @@ Totals: 52 teaches, 40 audits, 92 traces, 10,836 spans, 3,497 usage carriers,
 reads, 8,472,497 output, zero emitted writes, $967.6187344 base
 API-equivalent estimate. The 35 earlier missing semantic calls and interrupted
 CLI/pricing caveats remain. Active audit 44 is excluded.
+
+
+## 2026-09-14 03:21 PDT — Preserve failed audit and test capture reuse before planning
+
+Audit 44 ended after 9.6940154049 minutes and failed 18/22 graded units
+(81.82 percent). The 15 actual calls were 12 correct and 3 broken, with no
+infrastructure or bad-input exclusions. Six parameters worked, search origin
+failed, and four constrained calendar bounds were individually untestable.
+The valid paired calendar window shifts were exercised, including a successful
+retry; individual untestability is not evidence those pairs failed.
+
+Search baseline SFO–LAX October 20 returned 33 flights. OAK–LAX on the same date
+rendered eight relevant results but failed structured capture twice, including
+a paced retry. Changed destination SFO–SAN and October 21 departure succeeded.
+Calendar returned valid baseline and route contrasts; a shifted departure window
+failed capture once, then passed unchanged on retry. The shifted return window
+passed. Booking consumed two genuine search selections: F9 2858 SFO–LAX returned
+19 options from USD 42–75, and F9 3382 SFO–SAN returned nine from USD 19–51.
+Connecting selections and broader currency/metadata coverage remain unproven.
+The audit report and transcript are preserved unchanged in home-44/google-flights.
+
+Read-only inspection found a gap before planning: search research accepted the
+navigation capture after one successful captured response. Its other observations
+were different request constructions; they did not establish reuse of the final
+source across subsequent valid calls. The prior general delivery guidance only
+addressed a failure once observed, so it was not exercised before publication.
+Audit 43's separate CDP-event diagnostic proved a missing background request for
+its failed case; audit 44's page/capture contrast is consistent with that risk,
+but no new event diagnostic establishes an identical cause for every 44 failure.
+
+The existing navigation-capture researcher guidance now asks for a repeat of
+the valid input and a small core-input contrast using the same candidate before
+accepting that source. Agents choose the valid contrast, preserve constrained
+groups, reuse decisive observations, distinguish actual pooled reuse from setup,
+and retain failed inputs during repair. Compilers return missing or contradicted
+source evidence to retained research. This is prompt guidance, not a runtime
+strategy, site-specific rule, added gate or exhaustive parameter matrix.
+README, architecture and website match. Lint214files, typecheck and webbuild
+passed; initial webbuild lacked Bun on PATH and passed after correcting that
+environment. Desktop/mobile visual checks passed with no page errors or horizontal
+overflow; the existing bundle-size warning remains. No prompt-mirroring tests.
+Preview ended. Validate with a NEW Flights45 teach, never resume44 or reroll audit.
+
+Audit accounting extracted once: trace +QCJAXOyKQD9fZUnCruMnA==, 3spans/1usage,
+1,042,548 input, 981,632 cache reads, 5,378 output, zero emitted writes,
+$0.7438768 base estimate, zero missing semantic calls. Totals52teaches/41audits,
+93traces/10,839spans/3,498usage, 4025.4017569460 summed minutes,
+791,756,817 input, 657,839,488 cache reads, 8,477,875 output,
+zero emitted writes, $968.3626112 base API-equivalent estimate.35 earlier
+missing semantic calls and interrupted-CLI/pricing caveats remain. Hotels policy
+rejection unresolved; no automatic retry, bypass or model switch. Repeatability
+unmet. No push, MR, merge, reset or evidence deletion.
