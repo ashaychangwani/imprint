@@ -13289,7 +13289,7 @@ strategy injection,concurrentlivework,push,MR,merge,reset. Hotels policyrejectio
 unresolved.
 
 
-## 2026-09-14 13:29 PDT — Continue after complete round-trip tools reach live review
+## 2026-09-14 13:28 PDT — Continue after complete round-trip tools reach live review
 
 Flights50 is active on unchangede30d431 after one hour, journalrevision1.
 Search, calendar and booking have been published following semantic review;
@@ -13321,3 +13321,43 @@ Free10.87GiB; no concurrent live audit/diagnosis. Fullscopeaudit, freshrepeatabi
 new click-diagnostic recovery and multi-responseselectedevidence remain unproven.
 Accounting unchanged throughaudit49, active50excluded. Hotels policyrejection
 unresolved. No push,MR,merge,reset,evidence deletion or private teacherinput.
+
+
+## 2026-09-14 13:36 PDT — Four tools complete after return-leg repair; independent audit starts
+
+Flights50 completed in68.7836977854minutes on unchangede30d431. PID710exited;
+journalcompleted20:34:39UTC. All4tools published and completionreview accepted.
+Lookup repaired its mislabeled non-airport code; finalfetch0.286seconds. Search
+returned41round-trip options for its explicitly stated first-outbound MVP in
+41.049seconds. Calendar49date pairs in33.759seconds. Search uses selected
+GetShoppingResults capture afteractionIndex2; calendarGetCalendarGrid after
+index0; bookingGetBookingResults. These are CDP API captures, not playbooks or
+renderedHTML extraction. Timingsinclude browser setup and disclosed seededcookies;
+no actual warm-call measurement is inferred from them.
+
+Initial booking standalone passed two different-carrier legs, but the generated
+same-carrier chain returned only outboundDL934 in itinerary.legs and omitted
+returnDL752, despite listing both in option flight numbers. Semanticreview
+rejected that incomplete itinerary. The retained compiler repaired it; final
+standalone40.328seconds and finalfreshgeneratedchain32.944seconds passed with
+both matching legs. Chain returnedfivebookingoptions. Retainoriginalfailure and
+do not infer connecting-segment breadth or prompt-change causality from this
+repair. Two-leg publiccontext/firstoutboundscope still require independentaudit.
+
+Audit50 launched2026-09-14T20:35:08.586770UTC,PID31462,home-50,exclusive
+flights-audit-50.log/manifest,deadline21:20:08UTC. Clean correct branch/source
+ancestry, prior teachstopped,collectorHTTP200,10.75GiBfree. Implementationfixed;
+no concurrentlivework. Audit all4tools, completeproducerrecords andactualinput
+contrasts. Fullscopeaudit and freshrepeatability still unproven.
+
+Teach50trace9rCe8DvdGbDLmoiRFm3Hbg==:275spans/78usage,19,245,082input,
+15,599,104cache reads,193,917output,zeroemittedwrites,$24.7018936baseestimate.
+Oneoptional-finesse analysis was deferred atpromotion with missingusage; total
+missinganalysiscalls now36, pluspriorinterruptedCLIunknown. Campaign58teaches/
+46audits,104traces/12,554spans/4,008usage,4543.5825647759summedminutes,
+923,510,612input,771,130,112reads,9,742,909output,zeroemittedwrites,
+$1112.8322248baseAPI-equivalent. Activeaudit50excluded; pricingcaveatsremain.
+
+No runtime/promptchangesduringteach,push,MR,merge,reset,evidencedeletion.
+Hotels providerpolicyrejection unresolved. All failed generated revisions and
+research remain preserved; no oldartifacts/private strategies fedto teachers.
