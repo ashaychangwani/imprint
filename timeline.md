@@ -13100,3 +13100,42 @@ remain at assessment; full four-tool success and independent audit are unproven.
 Free11.94GiB. Accounting unchanged throughaudit48, active49excluded. No code or
 prompt changes, private strategy injection, push,MR,merge,reset,evidence deletion.
 Hotels policy rejection remains unresolved.
+
+
+## 2026-09-14 12:06 PDT — Four tools complete; independent audit starts
+
+Flights49 completed in73.1547284757minutes on unchanged90db75e, journalcompleted
+at18:59:39UTC. PID68324exited. Fourtools published after retained semantic repairs.
+Lookup corrected city/child identifiers and location types; finalfetch0.306seconds.
+Search preserved complete connecting journeys and coupled booking values:
+15ORD–MIA November19results in38.370seconds including setup. Calendar retained
+49date pairs in33.377seconds including setup. Search uses rendered HTML after
+resultSelector, not network API capture; do not call all four tools directAPI.
+
+Booking initially returned credible options but misread an emissions marker as
+emissions_grams=1. Semantic review rejected both its standalone and chain results;
+the retained compiler repaired the artifact. Final standalone returned3Southwest
+options for fresh-researched WN1874 LAX–LAS October27 in35.294seconds. The final
+fresh generated-search chain consumed both continuation values from itinerary4
+and returned4American options for AA884 ORD–MIA November19 in34.776seconds.
+These timings include separate browser setup, not measured warm calls. Cookies
+were seeded where logged. Independent completion review accepted the final build;
+this does not replace a separate audit or establish fresh-teach repeatability.
+
+Independent audit49 launched19:05:36.329821UTC, PID97473,home-49, exclusive
+flights-audit-49.log/manifest, deadline19:50:36UTC. Preflight confirmed teachended,
+clean correct branch/sourceancestry, collectorHTTP200,11.89GiBfree. No concurrent
+live diagnosis or implementation changes. Preserve actual failures and audit all
+four published tools, including complete same-record booking selections.
+
+Teach49tracefA5r0jvKim/Znp6MtVV8/w==:274spans/72usage,16,798,449input,
+14,600,192cache reads,185,086output,zeroemittedwrites,$18.3348248baseestimate,
+zero missingsemanticusage. Campaign57teaches/45audits,102traces/12,276spans,
+3,929usage,4468.7581812932summedminutes,903,513,252input,754,819,584reads,
+9,543,303output,zeroemittedwrites,$1087.5685656baseAPI-equivalent. Activeaudit49
+excluded. Prior35missingsemanticcalls/interruptedCLI and pricing caveats remain.
+
+New click-target diagnostic recovery and multi-response selected evidence remain
+unprovenlive. Hotels policy rejection unresolved; no automaticretry/bypass.
+All failures and generated revisions retained. No codechange,push,MR,merge,reset,
+evidence deletion or old artifacts/private strategies supplied to teachers.
