@@ -12428,3 +12428,34 @@ Accounting through audit45:53teaches/42audits,95traces/11,115spans/3,582usage,
 35prior missingsemanticcalls and interruptedCLI/pricing caveats remain. Hotels
 policy rejection unresolved; no automatic retry, bypass or model switch.
 No push,MR,merge,reset,evidence deletion.
+
+
+## 2026-09-14 05:28 PDT — Target missed with search and calendar research unresolved
+
+Flights46 remains active on unchanged faaa985, PID51185, beyond its30-minute
+target. Run cf008064-d7ca-4bea-ad37-4376be8708e9, home-46. Still before final
+planning; no generated-tool success or independent audit. Assessment12:57:17UTC
+and hard13:27:17UTC remain unchanged. Disk14.09GiB at12:26UTC.
+
+Lookup research is proven through fetch. Search returned useful rendered
+LAX–JFKOctober20one-way results in33.995seconds, but its five-observation handoff
+correctly remains partial: flight numbers are absent and its DOM selection handles
+have not been shown to satisfy booking. The researcher contrasted trip-mode
+encoding against the preceding Multi-city case. That establishes the selected
+rendered boundary, not a working producer-to-booking contract. Booking reported a
+factual blocker after its diagnostic; no successful fresh consumer chain exists.
+Do not treat transport completion or visible itinerary handles as booking proof.
+
+Calendar independently selected networkResponse.actionIndex0 for a recorded
+calendar-button click. That shows the new control was chosen by the agent, not
+that the candidate succeeded. Later calendar research still has no final handoff;
+the most recent CDP attempt failed in91.190seconds including setup. An earlier
+calendar attempt completed in34.829seconds, but a later failure and unresolved
+handoff prevent a reusable-source claim. Let retained researchers/master resolve
+the evidence; no private diagnosis or previous generated tools supplied.
+
+No code change or concurrent live diagnostic. Accounting remains through audit45
+at$989.8401896baseestimate,53teaches/42audits,35missingsemanticcalls plus prior
+pricing/interruptedCLI caveats. Active46excluded. Hotels policy rejection remains
+unresolved; no automatic retry, bypass or model switch. No push,MR,merge,reset,
+evidence deletion. Repeatability remains unmet.
