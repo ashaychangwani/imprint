@@ -13686,3 +13686,33 @@ records,labels,dates,sourcepaths andpreviousgeneratedtools werenot supplied.
 Accounting unchanged throughaudit51,$1141.3645recordedbaseestimate,active52excluded.
 Prior missingusage and51session-recovery limitations remain. Hotels policyrejection
 unresolved. No push,MR,merge,reset,evidencedeletion,orfullrepeatabilityclaim.
+
+
+## 2026-09-14 16:18 PDT — Target missed while master repairs booking input boundary
+
+Flights52 remains active on2d57e13 after30minutes, run
+acda415d-90bd-4422-b948-365c307853f2. No focused journal or published tools yet.
+Lookup is proven by0.439-second directfetch for London. Search retained4research
+observations with repeated GetShoppingResults captures and a changeddeparturedate;
+its declared MVP is one-way, three-letter airport codes. Calendar retained6tests
+with repeated GetCalendarGrid API captures, canonicalLondon andairportcode inputs,
+and routecontrast. Its reported56combinations and date extents still require actual
+source/parsed reconciliation; do not infer completecoverage from that count alone.
+Unlike51's chosenHTMLworkflows, these selected research paths captureAPIresponses.
+
+Booking calledfreshsearch and used the exact AlaskaAS1329SFO–LAXOctober21token.
+Token-only and token-plus-matchingroute/date/segment requests both returned null
+payloads with protocolcode13. The researcher returned an honest blocked handoff,
+not invalidproof or evidence of API impossibility. It could not construct a fresh
+booking navigation under its selection_token-only public boundary. The master has
+returned search to its retained researcher to supply the missing complete selection
+context or navigation state. Presence of recorded headers does not establish their
+necessity, and separate-browser failures do not justify silently sharing state.
+Let agents revise the boundary/strategy and prove the resulting fresh chain.
+
+Continue original23:42:57UTC assessment andSeptember15 00:12:57UTC harddeadline;
+noextension/codechanges/concurrentlivework. Sourcecoveragecorrection and fullscope
+remain unproven. Collector6440healthy andwriting;9.72GiBfree. Battery49%estimated
+4h28m; checkagainatonehour. Accounting unchangedthroughaudit51,active52excluded.
+All failed observations preserved. No push,MR,merge,reset,evidencedeletion or
+repeatabilityclaim. Hotels providerpolicyrejection remains unresolved.
