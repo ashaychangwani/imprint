@@ -13139,3 +13139,37 @@ New click-target diagnostic recovery and multi-response selected evidence remain
 unprovenlive. Hotels policy rejection unresolved; no automaticretry/bypass.
 All failures and generated revisions retained. No codechange,push,MR,merge,reset,
 evidence deletion or old artifacts/private strategies supplied to teachers.
+
+
+## 2026-09-14 12:16 PDT — Independent four-tool audit passes; check connecting booking
+
+Audit49 completed in6.0406856972minutes; PID97473exited. PASS22/22graded:
+structured invocation arrays contain15calls,14correct and1invalid auditor input,
+plus8working parameters. No broken calls or infrastructure exclusions. The
+report's prose says17calls/16correct, which is inconsistent with its actual arrays;
+preserve the report unchanged and use the deterministic array counts. Both
+booking parameters were tested as coherent producer-returned pairs (Delta606
+andAmerican148) but not independently attributable; retain2untestableparameter
+labels rather than claiming isolation. The invalid calendar input returned before
+departure and was correctly excluded. Route/date contrasts passed across search
+and calendar; lookup returned relevant distinct city/airport results.
+
+Both audited booking cases were nonstop. A sequential private connecting check
+now uses untouched home-49 workflows, fresh ORD–MIA November19search, then the
+first returned connecting itinerary's coupled values for booking. Dedicated
+per-tool/rung pools keep search and booking browser state separate; repeatbooking
+uses the same booking pool to measure actual warm behavior. It preserves raw
+responses, choice, outcomes and timing under flights-49-connecting-* and does
+not edit generated files or supply private evidence to teaching agents. No new
+teach or concurrent live work while this check runs. Full fresh-repeatability
+remains unproven even though the independent audit passed.
+
+Audit49tracee3uN9zj2B/+2nSXvfkFgYA==:3spans/1usage,752,278input,
+711,424cache reads,5,689output,zeroemittedwrites,$0.5617656baseestimate,
+zero missingsemanticusage. Campaign57teaches/46audits,103traces/12,279spans,
+3,930usage,4474.7988669904summedminutes,904,265,530input,755,531,008reads,
+9,548,992output,zeroemittedwrites,$1088.1303312baseAPI-equivalent. Prior35missing
+semanticcalls/interruptedCLI and pricingcaveats remain. Private diagnostic has
+noLLMcalls. Search's renderedHTML distinction remains disclosed. No push,MR,
+merge,reset,evidence deletion or implementationchange. Hotels policyrejection
+unresolved; no automaticretry/bypass/modelswitch.
