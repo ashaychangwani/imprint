@@ -1,6 +1,36 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 22:50 PDT
+## Current continuation — 2026-09-13 23:08 PDT
+
+At about63minutes, continue Flights42 unchanged to its original90-minute
+deadline. Lookup and calendar are published with current contract/live receipts
+and credible semantic reviews. Lookup returned ranked Tokyo city/airport records;
+calendar returned49 cells including the November5/November14 anchor pair and
+nearby fares. Journal revision3 remains active. Search and booking have no
+current receipts. Two working tools and a concrete search repair justify the
+remaining roughly26minutes; this is not a deadline extension or completion.
+
+Generated search capture failed after91.625s. Retained research then returned a
+completed rendered SFO–LAX October22 document in33.733s, with same-card flight
+identity and booking-selection fields. It replaces dependence on a background
+request that did not arrive in the failed generated call. The proposed scalar
+packages the token, current navigation representation and coherent itinerary
+fields for the existing booking consumer. These are research claims pending a
+new generated producer check and fresh producer-to-booking chain. Rendered HTML
+is not API response capture. The candidate waits for load/body; this one result
+does not establish robust completion across layouts or connecting support.
+
+Original malformed-research recovery is confirmed, including a valid recovered
+handoff and eight preserved observations. Generated booking validation has not
+yet run. The independent audit and unchanged-code repeat remain required.
+PID98981, home-42, run3af0578d-20f3-4e01-9484-59f0dea5bcd5; hard deadline
+September14 06:34:26UTC. Disk15.74GiB. No code changes, private diagnosis supplied
+to teachers or parallel live diagnostics. Accounting remains throughaudit41 at
+$897.1119624base estimate, active42excluded,34missing semantic calls and prior
+caveats retained. Hotels policy rejection unresolved. No push, MR, merge, reset
+or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 22:50 PDT
 
 After the malformed-report recovery, retained booking research resumed real
 calls: two further CDP failures91.547s/90.970s, then a33.582s successful rendered
