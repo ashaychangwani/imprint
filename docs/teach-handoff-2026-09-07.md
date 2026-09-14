@@ -1,6 +1,29 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 22:03 PDT
+## Current continuation — 2026-09-13 22:04 PDT
+
+Fresh Flights42 started September14 05:04:26UTC on implementation7df97c3,
+PID98981, unused home-42 and exclusive flights-teach-42.log/manifest. Target
+05:34:26, assessment06:04:26, hard deadline06:34:26UTC. Original recording and
+exact four-operation guidance; configured two workers. Clean branch descended
+from34a6235, no prior live process, collector200, AC100%,16.08GiB free and both
+recording sizes verified. No old generated tools or private diagnosis supplied.
+
+This validates general completion-condition guidance after the observed booking
+selector failure. No runtime changes. Monitor core-result readiness, fresh
+producer-bound booking inputs, complete supported groups, and retained backend
+preferences. Do not change code or run live diagnostics during the teach.
+Independently audit after completion, preserve missing scope and failures, and
+require fresh unchanged-code success before claiming repeatability. Hotels
+provider policy rejection remains unresolved with no automatic retry/bypass.
+
+Audit41 accounting is complete at$1.0450768base estimate. Overall49teaches/
+38audits,87traces/10060spans/3275usage,3765.692243727984minutes,
+739462554input,615995776cache reads,7842327output,zero emitted writes,
+$897.1119624base API-equivalent estimate;34missing semantic calls and previous
+caveats retained. Active42 excluded. No push, MR, merge, reset or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 22:03 PDT
 
 Audit 41 failed after 7.4431 minutes: 12/14 graded units, 85.71%. Its ten
 actual calls were seven correct, two broken booking captures and one excluded
