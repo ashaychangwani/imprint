@@ -1,6 +1,47 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 21:05 PDT
+## Current continuation — 2026-09-13 21:44 PDT
+
+Flights41 ended at its original 90-minute deadline with three ready tools and
+calendar unfinished. PID56274 ended; journal revision8 is failed. Lookup/search
+have current contract/live receipts, and booking has current contract/live/fresh
+producer-chain receipts. Only those three tools are published. Do not resume41.
+
+Retained booking repair removed unrelated dialog text from fare conditions.
+Both revised semantic reviews accepted the distinct F9 2334 baseline and F9 3292
+fresh producer chain, each with three coherent offers. The reviewed cdp-replay
+backend was retained at publication. This exercises publication mechanics;
+ordinary independent MCP execution remains to be audited. Nonstop evidence does
+not establish connecting groups or the removed opaque-token parameter.
+
+Calendar's repaired generated capture returned49 cells in34.696s, but the review
+required independent BOS–MIA route evidence beyond caller-derived construction
+and research summary. Its receipts were retired. Retained research later returned
+proven after35.809s; the final master planning call hit the deadline before a new
+generated check. Neither late research nor the three published tools satisfies
+all four operations. Existing capture failures and rejected reviews are preserved.
+
+Independent audit41 started September14 04:44:00UTC, PID95986, same home-41,
+flights-audit-41.log and flights-audit-41-manifest.json; deadline05:29:00UTC.
+Preflight: clean source-descended branch, no prior live process, collector200,
+AC100%,16.24GiB free, original recording sizes verified. No code change or parallel
+live diagnostic during audit. Inspect actual invocation/parameter arrays, exact
+fresh booking provenance and ordinary startup backend. Missing calendar cannot
+be waived by an audit of only the published inventory. Hotels policy rejection
+remains unresolved, with no automatic retry or workaround.
+
+Teach41 accounting was extracted once during the user's20-hour status request:
+303spans/97usage carriers,89.99973170625minutes,20,795,872input,
+17,781,376cache reads,225,663output,zero emitted writes,$23.6837944base estimate.
+Two capacity failures and the final deadline interruption add three missing
+semantic usage calls. Totals:49teaches/37audits,86traces/10,057spans/3,274usage,
+3758.249190405067minutes,737,732,811input,614,345,344reads,7,838,944output,
+zero writes,$896.0668856base API-equivalent estimate.34missing semantic calls
+and previous pricing/interrupted-CLI caveats remain. Activeaudit41excluded.
+Original malformed researcher catch and repeated-call feature still lack live
+validation. No push, MR, merge, reset, or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 21:05 PDT
 
 At62minutes, Flights41 has two published tools and current plan revision1 with
 all four implementation plans. Lookup and search pass contract/live checks.
