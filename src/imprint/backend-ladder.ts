@@ -1678,11 +1678,13 @@ export async function runWorkflowWithLadder(opts: {
   /** Ephemeral host-only callback. Raw prepared requests are never retained by
    * the ladder; callers must reduce them to bounded, value-free facts inline. */
   onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+  /** Host-only complete response chain for offline research fixtures. */
+  onRawResponses?: (responses: unknown[]) => void;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
   }
-  const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials);
+  const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials, opts.onRawResponses);
   const workflow = tool.workflow;
   const toolDir = tool.dir;
   const responseObservations: BackendResponseObservation[] = [];
@@ -1855,6 +1857,7 @@ export async function runWorkflowWithLadder(opts: {
 export function resolveWorkflowTool(
   workflowPath: string,
   fallbackCredentials?: CredentialStore,
+  onRawResponses?: (responses: unknown[]) => void,
 ): ResolvedTool {
   if (!existsSync(workflowPath)) {
     throw new Error(`resolveWorkflowTool: workflow.json not found at ${workflowPath}`);
@@ -1895,6 +1898,7 @@ export function resolveWorkflowTool(
         signal: o?.signal,
         onResponse: o?.onResponse,
         onPreparedRequest: o?.onPreparedRequest,
+        onRawResponses,
       });
     },
   };

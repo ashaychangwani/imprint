@@ -229,6 +229,9 @@ interface ExecuteOptions {
   /** Teach/debug observation. It cannot affect execution and never receives an
    * unbounded response body. */
   onResponse?: (observation: ResponseObservation) => void;
+  /** Host-only offline evidence for a completed request chain. Receives a copy
+   * before parsing; never included in ordinary tool output or prompt previews. */
+  onRawResponses?: (responses: unknown[]) => void;
 }
 
 export interface PreparedRequestObservation {
@@ -758,6 +761,13 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
   // Apply parser if present
   let finalData = responseSlots.at(-1)?.raw ?? null;
+  if (opts.onRawResponses) {
+    try {
+      opts.onRawResponses(structuredClone(responseSlots.map((slot) => slot.raw)));
+    } catch {
+      // Evidence collection must not change execution or parser inputs.
+    }
+  }
   if (opts.workflow.parserModule && opts.workflowPath) {
     try {
       const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);

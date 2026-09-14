@@ -475,6 +475,7 @@ type ApiToolRunner = (input: {
   backend?: ReplayBackend;
   signal?: AbortSignal;
   onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+  onRawResponses?: (responses: unknown[]) => void;
 }) => Promise<{
   result: ToolResult<unknown>;
   executionMechanism: string;
@@ -587,6 +588,7 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   backend,
   signal,
   onPreparedRequest,
+  onRawResponses,
 }) => {
   const run = await runWorkflowWithLadder({
     workflowPath,
@@ -594,6 +596,7 @@ const runApiToolWithLadder: ApiToolRunner = async ({
     ...(backend && backend !== 'auto' ? { forceBackend: backend } : {}),
     signal,
     onPreparedRequest,
+    onRawResponses,
   });
   return {
     result: run.result,

@@ -167,6 +167,34 @@ describe('executeWorkflow', () => {
     expect(resultWithBrokenObserver.ok).toBeTrue();
   });
 
+  it('copies the ordered raw chain without letting an evidence observer change the result', async () => {
+    const chains: unknown[][] = [];
+    let calls = 0;
+    const result = await executeWorkflow({
+      workflow: { ...baseWorkflow, requests: [...baseWorkflow.requests, ...baseWorkflow.requests] },
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ item: { id: ++calls } }))) as unknown as typeof fetch,
+      onRawResponses: (responses) => {
+        chains.push(structuredClone(responses));
+        (responses[1] as { item: { id: number } }).item.id = 999;
+        throw new Error('evidence observer failed');
+      },
+    });
+    expect(chains).toEqual([[{ item: { id: 1 } }, { item: { id: 2 } }]]);
+    expect(result).toMatchObject({ ok: true, data: { item: { id: 2 } } });
+
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('failed', { status: 403 })) as unknown as typeof fetch,
+      onRawResponses: (responses) => chains.push(responses),
+    });
+    expect(chains).toHaveLength(1);
+  });
+
   it('protects only explicitly supplied login values in live response previews', async () => {
     const observations: Array<{ redactedBodyPreview?: string }> = [];
     await executeWorkflow({

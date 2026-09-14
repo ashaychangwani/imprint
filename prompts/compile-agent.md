@@ -19,6 +19,14 @@ code. If `read_file` truncates a large response, inspect relevant portions with
 local commands or load it directly in a local test rather than guessing from a
 prefix. Known typed credentials remain replaced. No extra live call is needed.
 
+When `evidenceFiles.responsesFile` is present, load its JSON array as the actual
+ordered `context.responses` and pass its last entry as `rawResponse`. It contains
+the selected call's request-chain bodies before parsing. `responseFile` alone
+contains only the final result; never duplicate it into earlier response slots
+or invent missing intermediate bodies. Older evidence may lack the array: use
+grounded recording fixtures for individual components and report any missing
+chain proof instead of manufacturing a successful fixture.
+
 Server-returned echoes are still echoes. A response field containing the user's
 query may be useful context, but extracting words or numbers from it does not
 turn them into applied settings. For example, `query: "blue large shirts"`
@@ -369,6 +377,7 @@ Follow these steps to compile the session:
    - **Binary / encrypted**: if the response is unreadable garbage, you may need to give up (but only after confirming it's truly unparseable)
 
 8. **Write parser.ts.** Implement `extract(rawResponse)`:
+   - Locate the current result collection before mapping records; a broad pattern match is a candidate location, not proof that every matching record belongs to this result. When combining a collection with a selected item's detail or continuation, derive the join from current response identities. Observed names, identifiers, routes, times, or prices are fixture values, not runtime join constants. Keep an unmatched detail unmatched instead of attaching it to a convenient row.
    - For JSON-keyed APIs: traverse the object, pull out the fields the user cares about, return a clean object
    - For JSPB: use `search_response_body` to find anchors (stable ids, dates, prices, names, statuses, or other values from narration), inspect the structure around those offsets, hypothesize the array indices, write extraction logic
    - Return a named-field object, not the raw input — the goal is to make the data usable by an AI agent without further parsing
@@ -396,6 +405,7 @@ Follow these steps to compile the session:
      try { raw = JSON.parse(target.response.body); } catch { raw = target.response.body; }
      ```
    - Import `extract` from `./parser.ts`.
+   - For a response-to-response join, exercise a different coherent identity and an unrelated or unmatched record. Reuse supplied distinct examples when available; otherwise a small synthetic structural variant can test that the parser follows current response values rather than one fixture literal. This offline check tests extraction, not live parameter support. Keep the actual response order and independently ground the expected association.
    - Call `extract(raw)` and check explicit expected values grounded in the supplied response or narration. Nonempty output and plausible types alone do not establish correct field meanings.
    - Choose contrasting records that distinguish plausible field meanings and response shapes, including records with absent optional fields or child collections. Distinguish absent optional fields from protocol-omitted default values using response and rendered evidence; do not reject a valid record solely because its encoding omits a default. When evidence shows omitted defaults, cover that representation in existing parser tests. Preserve valid records independently: one optional-field variant must not make the whole collection disappear. Check that summaries agree with their underlying records and related fields describe the same item. Keep parent-record metadata and constraints distinct from child metadata and constraints, in validation and request construction as well as output parsing. The first child's identifier or extent does not establish the whole group's; conversely, a valid group's identity, extent, or total need not describe each member individually. Derive the required member relationships from the actual structure instead of requiring every member to repeat the parent fields. When a collection contains both singleton and grouped records, compare a grouped record against its complete source before trusting a mapping that passed only on singletons. Expected values must come from response evidence, not the parser output, caller parameters, or an unverified index mapping copied into the test. Reuse recorded and researched fixtures; small synthetic variants may isolate missing-field and input-mismatch cases without another live call. Omit unsupported optional fields, or report missing core evidence, rather than inventing a default.
    - **Empty-result behavior.** `extract()` should return a clean empty collection for a no-match / empty upstream response — an empty array, or the success shape with its items array empty / count 0 — and never a single placeholder record full of nulls. When the recording does not contain an empty response, create a synthetic case with the same top-level shape as the recorded success and assert the parser yields empty, not a phantom row. Choose a descriptive test name; no title token is required.

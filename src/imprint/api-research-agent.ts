@@ -93,6 +93,7 @@ interface ApiResearchDependencies {
     backend?: 'auto' | 'fetch' | 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch';
     signal?: AbortSignal;
     onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+    onRawResponses?: (responses: unknown[]) => void;
   }): Promise<{
     result: ToolResult<unknown>;
     executionMechanism: string;
@@ -171,6 +172,10 @@ function retainedResultPath(toolDir: string, observationId: string): string {
   );
 }
 
+function retainedResponsesPath(toolDir: string, observationId: string): string {
+  return `${retainedResultPath(toolDir, observationId)}.responses.json`;
+}
+
 /** Copy only the selected observation, not another tool's or attempt's evidence. */
 export function copyApiResearchEvidence(
   researchDir: string,
@@ -179,6 +184,7 @@ export function copyApiResearchEvidence(
   | {
       observationFile: string;
       responseFile: string;
+      responsesFile?: string;
     }
   | undefined {
   const observationPath = pathJoin(researchDir, 'api-research.json');
@@ -191,9 +197,18 @@ export function copyApiResearchEvidence(
   const files = {
     observationFile: 'api-research.json',
     responseFile: 'api-research-response.txt',
+    ...(existsSync(retainedResponsesPath(researchDir, observation.id))
+      ? { responsesFile: 'api-research-responses.json' }
+      : {}),
   };
   copyFileSync(observationPath, pathJoin(compilerDir, files.observationFile));
   copyFileSync(responsePath, pathJoin(compilerDir, files.responseFile));
+  if (files.responsesFile) {
+    copyFileSync(
+      retainedResponsesPath(researchDir, observation.id),
+      pathJoin(compilerDir, files.responsesFile),
+    );
+  }
   return files;
 }
 
@@ -624,11 +639,15 @@ export async function researchApiMvpCall(input: {
     const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
     try {
       const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
+      let rawResponses: unknown[] | undefined;
       const observed = await input.dependencies.runApiTool({
         workflowPath,
         parameters: candidate.parameterValues,
         backend: candidate.testBackend,
         signal: input.signal,
+        onRawResponses: (responses) => {
+          rawResponses = responses;
+        },
         onPreparedRequest: (observation) => {
           if (requestComparisons.length >= 32) requestComparisons.shift();
           requestComparisons.push(
@@ -660,6 +679,15 @@ export async function researchApiMvpCall(input: {
           flag: 'wx',
         });
         observation.resultTextLength = text.length;
+        if (rawResponses) {
+          writeFileSync(
+            retainedResponsesPath(input.toolDir, observation.id),
+            JSON.stringify(rawResponses, (_key, value) =>
+              typeof value === 'string' ? resultText(value, observed.credentialValues) : value,
+            ),
+            { encoding: 'utf8', flag: 'wx' },
+          );
+        }
       }
       observations.push(observation);
       retainedTurnDelta = { kind: 'observation', latestObservation: observation };

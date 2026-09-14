@@ -111,6 +111,68 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('copies only the selected observation chain with distinct response slots and protected login values', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-chain-'));
+    const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-compiler-chain-'));
+    const first = apiCandidate('chain', 'fetch');
+    first.workflow.requests.push({
+      method: 'GET',
+      url: 'https://fixture.invalid/detail',
+      headers: {},
+      recordingRequestSeq: 12,
+    });
+    const second = { ...first, parameterValues: { query: 'beta' } };
+    const password = 'fixture-"password"-with-escapes';
+    try {
+      await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) =>
+            input.observations.length < 2
+              ? {
+                  binding,
+                  action: 'test',
+                  candidate: input.observations.length ? second : first,
+                  reason: 'Inspect two cases.',
+                }
+              : {
+                  binding,
+                  action: 'proven',
+                  candidate: first,
+                  basedOnObservationId: input.observations[0]?.id,
+                  reason: 'Select the first case.',
+                },
+          runApiTool: async ({ parameters, onRawResponses }) => {
+            const last = `<main>${parameters.query} ${password}</main>`;
+            onRawResponses?.([{ items: [{ id: parameters.query, password }] }, last]);
+            return {
+              result: { ok: true, data: last },
+              executionMechanism: 'fetch',
+              credentialValues: { password },
+            };
+          },
+        },
+      });
+      const files = copyApiResearchEvidence(toolDir, compilerDir);
+      expect(files?.responsesFile).toBeDefined();
+      if (!files?.responsesFile) throw new Error('Missing selected chain fixture');
+      const responses = JSON.parse(readFileSync(join(compilerDir, files.responsesFile), 'utf8'));
+      expect(responses).toEqual([
+        { items: [{ id: 'alpha', password: '${credential.password}' }] },
+        '<main>alpha ${credential.password}</main>',
+      ]);
+      expect(readFileSync(join(compilerDir, files.responseFile), 'utf8')).toBe(responses[1]);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+      rmSync(compilerDir, { recursive: true, force: true });
+    }
+  });
   it('retains actual contrast results and inputs under the same request definition', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-contrasts-'));
     const first = apiCandidate('working', 'fetch');

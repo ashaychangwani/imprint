@@ -12527,3 +12527,60 @@ failure before choosing a small general correction. Preserve failed inputs,
 conversation history and evidence. No teach may resume after a code/prompt change.
 Hotels remains blocked by the earlier provider policy rejection; no automatic
 retry, bypass or model switch. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-14 06:47 PDT — Preserve full response chains after the partial audit
+
+Audit 46 ended after 2.4474413625 minutes. Partial-scope PASS: 7 actual calls
+were correct and all 5 advertised parameters worked (12/12 graded, no exclusions).
+Lookup contrasted LAX/JFK. Calendar changed origin, destination, departure date
+and return date individually and returned the requested selected pair each time.
+Only two tools were installed; search and booking remain absent. This is not a
+four-operation pass or repeatability. Reports and transcripts remain unchanged.
+
+Inspection found two concrete search-parser defects in revision 1: an unbounded
+pattern traversed unrelated itinerary collections, and attaching continuation
+data depended on one researched flight's literal identity, times and price.
+The parser test checked that same identity. It also passed the final research
+response into both context.responses slots, even though the workflow made two
+distinct requests. Research had retained only the final body, so no faithful
+live chain fixture was available to that test. The existing semantic reviewer
+caught the incorrect generated result; no new runtime semantic gate is needed.
+
+The correction retains successful research's actual ordered response bodies
+before parsing, then copies only the selected observation's chain into its
+compiler directory as api-research-responses.json. Known typed login values
+are replaced while saving, including escaped string values. This host-only
+observer receives a copy and cannot mutate execution or fail the workflow.
+The optional evidence file leaves older runs readable. It is neither ordinary
+tool output nor a runtime dependency; publication still uses its artifact list.
+The compiler is told to preserve real response slots, locate the current result
+collection, derive joins from current response identities, and test changed and
+unmatched identities offline. No site-specific rules, extra live-call quota,
+request strategy selection, or generated tools supplied to teachers.
+
+Validation: 214 focused runtime/backend/research/controller tests passed; lint
+214 files and type checking passed. Initial type checking found two test-only
+fetch casts, then passed after correction. README, architecture, compiler prompt
+and website updated; website build passed with its existing bundle-size warning.
+Desktop/mobile full-page and changed-paragraph screenshots inspected, no page
+errors or horizontal overflow. Preview stopped. Prior unrelated combined CDP
+synthetic-form timeout remains a separate unresolved check; no claim of a fully
+green whole suite. Private evidence response-chain-runtime-tests.log,
+response-chain-web-check.ts and response-chain-*.png preserved.
+
+Audit accounting: trace 3QaxL7LWamI717VwuueIvw==, 3 spans / 1 usage span,
+267,147 input, 243,968 cache reads, 2,414 output, zero emitted writes,
+$0.2385832 base estimate, no missing semantic usage. Campaign 54 teaches /
+43 audits, 97 traces / 11,312 spans, 3,676 usage spans, 4200.0601388842 summed
+minutes, 832,394,702 input, 692,870,656 cache reads, 8,854,579 output,
+zero emitted writes, $1012.3360264 base estimate. Prior 35 missing semantic calls,
+interrupted CLI usage and pricing caveats remain.
+
+Next: NEW Flights 47 on this correction with original recording and exact
+four-operation guidance, isolated unused home, target 30 / assess 60 / hard 90.
+Do not resume 46, reroll its audit or supply its generated parser to teachers.
+Watch whether the compiler uses actual chain bodies and current identities,
+research retains failures, and booking consumes fresh coherent search output.
+Hotels policy rejection remains unresolved; no automatic retry or bypass.
+No push, MR, merge, hard reset or evidence deletion.

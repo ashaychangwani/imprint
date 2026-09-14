@@ -120,6 +120,15 @@ slice or searches literal text in that saved result; no network call or candidat
 edit occurs. Initial prompts keep compact previews, while retained follow-ups can
 inspect HTML attributes, embedded state or JSON beyond those prefixes. This does
 not automatically expose intermediate responses or a page behind a captured XHR.
+Separately, successful research calls retain the completed chain's ordered raw
+response bodies for the compiler's offline fixtures. Only the selected
+observation's array is copied into its compiler directory; older evidence may
+lack it. The host takes a copy before parsing, replaces known typed login values
+when saving it, and keeps it out of ordinary tool output and prompt previews.
+An observer cannot mutate parser inputs or fail execution. Compilers preserve
+the real response slots and test joins against changed and unmatched identities;
+one researched record's literal values are not reusable join logic. This is
+offline parser evidence, not proof that another live input works.
 The baseline reviewer also receives a bounded copy of the parser referenced by
 the exact checked build, read from its immutable artifact manifest. This is
 evidence for tracing returned values, not a code-quality review or a host field

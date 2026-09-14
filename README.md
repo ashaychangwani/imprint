@@ -164,6 +164,9 @@ input does not repair the failed valid case. Reviewers trace ambiguous metadata
 to its context; matching keywords or units alone cannot justify a named field.
 Compilers test the complete current research response before live validation,
 including result frames beyond initial metadata, alongside recording examples.
+For a request chain, they receive its actual ordered response bodies as a local
+offline fixture. They test associations using current response identities and
+unmatched records, rather than copying one example's values into parser logic.
 For framed protocols, a small parser test checks that an earlier empty or metadata
 frame does not hide later records; agents derive the expected result from evidence.
 Failed browser calls can include bounded page evidence from browser inspection,
