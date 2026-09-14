@@ -13767,3 +13767,26 @@ Collector6440HTTP200,lasttracewrite23:40UTC;new74790active,old54899paused. Free9
 battery42%estimated2h52m at23:41:50UTC. Evidence and unchangedimplementation retained.
 Accounting throughaudit51 unchanged,active52excluded. Hotels policyblock unresolved.
 No push,MR,merge,reset,evidence deletion or repeatabilityclaim.
+
+
+## 2026-09-14 16:50 PDT — Three tools published; grid research count reconciled
+
+Flights52 active around67minutes on2d57e13,planrevision2. Calendar published after
+35.299seconds with49datepairs. Master retainedsearchcompiler after its populated
+page lacked a matching capturedXHR. The generated workflow removed waitUntil and
+resourceType filters while preserving GetShoppingResults URL/POST/provenance;
+parser unchanged. Subsequent livecheck passed34.957seconds,34itineraries,core review
+credible,searchpublished. One passing retry does not isolate which change caused
+recovery or prove repeatability. Lookup remainsready;bookingcompile started with
+freshproducerdependency. Original00:12:57UTC deadline,implementationunchanged.
+
+A private offline read of all three populated calendar research responses found
+49rawrecords and49unique datepairs each:departureOctober16–22,returnOctober28–
+November3. Thus research/master prose saying56was a counting error; the generated
+49-item result agrees with those response dimensions. No evidence of dropped
+researchgridcells. Saved counts,paths,andSHA256s in private
+flights-52-private-grid-research-counts.json. This uses no livecalls orLLMusage and
+was not supplied to teachingagents. Classification meanings, independent fresh
+route/date behavior, and full search-to-booking coverage still require audit.
+Collectorhealthy/writing,9.58GiBfree. Accountingunchanged,active52excluded. No
+push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
