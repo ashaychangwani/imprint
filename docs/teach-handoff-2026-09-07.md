@@ -1,5 +1,28 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 08:51 PDT — Launch fresh click-target timing validation
+
+Flights48 started at2026-09-14T15:51:07.827290UTC on d07a033, PID32522.
+Unused home-48 and exclusive flights-teach-48.log/manifest, original recording,
+exact four-operation guidance, two workers. Target16:21:07UTC, assessment
+16:51:07UTC, hard deadline17:21:07UTC. Preflight verified clean correct branch,
+source ancestry, ended prior teach/audit/diagnostics/preview, healthy collector,
+intact recordings, AC100% and12.97GiBfree. No old artifacts or private diagnosis
+were supplied to teachers. Keep implementation unchanged during this run.
+
+Watch actual delayed-target polling, response capture boundaries and fresh
+coherent search-to-booking inputs. The post-change calendar diagnostic passed
+three calls, but all targets were present at first inspection; it did not exercise
+the new wait live. Preserve any failed research handoffs and let retained agents
+repair them. Independently audit all published tools after completion; a partial
+score cannot prove the four-operation objective. Do not resume failed47.
+
+Accounting remains through audit47:55teaches/44audits,$1042.4069792 base
+API-equivalent estimate; active48excluded, prior missing usage/pricing caveats
+remain. Hotels policy rejection is unresolved; no automatic retry/bypass/model
+switch. No push,MR,merge,reset or evidence deletion.
+
+
 ## 2026-09-14 08:50 PDT — Preserve calendar audit failure and wait for selected click targets
 
 Audit47 ended in9.84484589305minutes, PID28706exited. FAIL18/21graded (85.71%).
