@@ -12240,3 +12240,48 @@ parent diagnosis or prior generated tools supplied. Accounting remains through
 audit44 at$968.3626112baseestimate,52teaches/41audits,35missingsemanticcalls
 and prior caveats; active45excluded. Hotels policy rejection unresolved, no
 automatic retry/bypass/model switch. No push,MR,merge,reset,evidence deletion.
+
+
+## 2026-09-14 04:23 PDT — Continue after one-hour assessment of focused repairs
+
+Continue Flights45 on unchanged a36ec1c to its original11:49:09UTC hard deadline.
+At11:22UTC, PID15636 was active with journal planrevision3. Search and calendar
+are published with current passed contract/live receipts and credible reviews.
+Lookup has a semantic labeling defect, and booking compilation has started.
+Complete research and two accepted tools justify the remaining time, not an
+extension. Disk14.57GiB. No concurrent live diagnostic or independent audit.
+
+Search's accepted research handoff retains seven observations, including the
+initial failure, identical SFO–LAXOctober20capture repeat and destination-only
+SFO–SEA contrast. The latter exposes coherent AS1327, UA500 and DL1134 records
+with their same-record selection material. This exercises the requested research
+repeat/contrast, not fresh-teach repeatability or warm-session behavior. The
+published generated search returned nested itineraries in44.386seconds; its
+receipt counts the outer result as1, which is not an itinerary count. Review
+accepted complete ordered segments and corresponding selected_flights tuples.
+
+Booking explicitly called that producer for fresh values (33.869seconds). Its
+research preserves five observations and identifies AS1327SFO–SEAOctober20,
+09:43–11:55, with an Alaska SAVER option atUSD89 in the33.113-second captured
+booking response. Generated booking and its dependent chain remain untested.
+Research-level success does not substitute for those later checks.
+
+Calendar was narrowed to two seven-day windows around supplied anchor dates;
+its latest generated response returned49cells in35.147seconds. Review accepted
+the date coverage, numeric fares, token-derived currency and raw numeric
+classification. No broader category meaning is established. Earlier two-route
+research and a later revised-boundary observation do not establish an identical
+warm repeat or individual window-bound effects.
+
+Lookup returned five results in0.320seconds, but review rejected airport-level
+googleLocationId: each London airport carried the same parent London identifier.
+This is missing field meaning, not an empty result or transport failure. Let the
+master and retained compiler repair or narrow it; do not override semantic review
+with its passing execution receipt. Current timings include setup and reused
+per-tool cookies where logged; separate browser pools remain in use.
+
+No prompt/runtime change, prior generated tools or private parent diagnosis sent
+to teachers. Accounting remains through audit44 at$968.3626112baseestimate,
+52teaches/41audits,35missingsemanticcalls and prior caveats; active45excluded.
+Hotels policy rejection unresolved, no automatic retry/bypass/model switch.
+No push,MR,merge,reset,evidence deletion. Repeatability remains unmet.
