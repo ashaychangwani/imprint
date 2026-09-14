@@ -303,6 +303,10 @@ refreshing. Use an observed completion condition for the resulting collection
 and preserve the evidence tying those records to the current action. HTML may
 still contain hidden or previous results while the visible page is loading.
 Do not treat those records plus a changed widget as a proven parameter effect.
+An element seen in one result layout is not proof that every valid result
+contains it. Ground completion in the core result, not incidental presentation
+or optional content. Use a small contrasting case when observed layout
+variation makes that condition uncertain, preserving current-result freshness.
 If completion or result scope is uncertain, return that precise missing proof
 for a focused follow-up or a narrower MVP. Do not substitute a guessed delay.
 

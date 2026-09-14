@@ -333,6 +333,12 @@ Follow these steps to compile the session:
    is not a successful result, even when it contains plausible records. If the
    supplied evidence establishes only the control change, name the missing
    completion evidence for research instead of inventing selectors or delays.
+   A completion element observed on one result variant is not automatically
+   required by the public contract. Ground the wait in the core result, not
+   incidental presentation or optional content. Where supplied evidence shows
+   different result layouts, check that the chosen condition accepts those
+   completed results while still rejecting stale or loading content; return
+   an unsupported condition to research instead of adding a delay.
      **Endpoint paths must be exact.** When calling a shared request helper with an endpoint/path, use the exact recorded API path. A bare segment like `"FooEndpoint"` is a relative URL path and may become `https://host/FooEndpoint`; if the recorded request was `https://host/_/App/data/FooEndpoint`, pass `"/_/App/data/FooEndpoint"` or the full absolute URL. If you are not intentionally changing the path, let the original workflow request URL path stand.
    - **Do not classify a value from its field name.** For any header, query field, cookie, or body field, inspect exact requests, prior responses, session boundaries, and verification. Decide whether it is a durable literal, caller input, credential, captured value, generated value, or transform output from that evidence.
    - **Do not use `${env.NAME}` for recording-derived values.** Choose among supported parameters, credentials, captures/responses, generation, transforms, or a literal only after inspecting the relevant evidence. Never hardcode a secret, and never infer that a value is durable merely from its header name or endpoint.

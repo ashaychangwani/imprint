@@ -1,6 +1,51 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 21:44 PDT
+## Current continuation — 2026-09-13 22:03 PDT
+
+Audit 41 failed after 7.4431 minutes: 12/14 graded units, 85.71%. Its ten
+actual calls were seven correct, two broken booking captures and one excluded
+120-second booking timeout. Five parameters were graded working; the booking
+parameter grade partly uses visible page changes despite failed structured
+capture. Lookup passed two calls and search four. Booking returned ten options
+for fresh AS761 SEA–PDX October15; two fresh-selection DL3997 calls loaded fares
+but timed out on an unmatched completion selector. No calendar was published,
+so this partial inventory cannot establish the requested four-operation MVP.
+No connecting booking coverage or repeatability. Audit artifacts unchanged.
+
+The published booking workflow requires a partner-logo element after selecting
+the itinerary. A separate deterministic check used fresh search output for the
+exact DL3997 record and reproduced the same post-action selector timeout.
+Saved page evidence includes the selected route/date and Delta fares159/194/234,
+but also includes loading text; this is not proof that every page region finished
+or that the parser would pass with a different selector. The unsupported wait
+is concrete. Search took34.8158s and booking90.4863s including setup. Separate
+browser pools were closed, with existing tool-specific bootstrap cookies reused;
+these are not pristine cold or separately measured warm timings. The diagnostic
+pinned the published cdp-replay choice, made no LLM calls, and changed no artifacts.
+Private flights-41-booking-selector-diagnostic.ts/log and flights-41-selector-*
+JSON preserve source, exact selection, result and bounded page evidence.
+
+Research and compiler guidance now says an element seen in one result layout
+is not automatically required by the public contract. Agents ground completion
+in core content and use a small contrasting case when observed layout variation
+makes the condition uncertain, preserving current-result freshness. This extends
+the existing completion guidance; no site-specific selector, runtime rule, new
+mandatory test matrix or fixed delay. README, architecture and website match.
+Lint214files, type checking, website build and desktop/mobile full-page plus
+changed-card inspection passed without page errors or horizontal overflow.
+Existing bundle warning remains. No prompt-mirroring tests were added. Preview
+and diagnostic ended. Validate with a NEW Flights42 teach, not a resumed41.
+
+Audit41 accounting adds1,729,743input,1,650,432cache reads,3,383output,zero emitted
+writes,$1.0450768base estimate,3spans/1usage and no missing usage. Totals:
+49teaches/38audits,87traces/10,060spans/3,275usage,3765.692243727984minutes,
+739,462,554input,615,995,776reads,7,842,327output,zero writes,$897.1119624base
+API-equivalent estimate.34prior missing semantic calls and all pricing/CLI
+interruption caveats remain. The original malformed researcher catch and repeated
+invocation feature remain unexercised live. Hotels rejection remains unresolved
+with no automatic retry or workaround. No push, MR, merge, reset or deletion.
+
+## Previous checkpoint — 2026-09-13 21:44 PDT
 
 Flights41 ended at its original 90-minute deadline with three ready tools and
 calendar unfinished. PID56274 ended; journal revision8 is failed. Lookup/search

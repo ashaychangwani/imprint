@@ -519,6 +519,11 @@ The public teaching path is one fresh foreground controller:
    loading remains a missing-proof or failure case for semantic review.
    Agents choose the evidence-backed condition using existing navigation
    mechanics; the runtime adds no fixed delay or site-specific classifier.
+   An element present in one layout is not a universal completion requirement.
+   Researchers and compilers ground waits in core result content and use a
+   small contrasting case when observed layout variation makes the condition
+   uncertain. Optional presentation must not silently restrict the contract;
+   current-result freshness remains necessary.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first
