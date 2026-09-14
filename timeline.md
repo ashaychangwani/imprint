@@ -12606,3 +12606,34 @@ full scope. No concurrent live diagnostics. No resumed failed teach.
 Accounting through audit 46: 54 teaches / 43 audits, $1012.3360264 base estimate;
 active teach 47 excluded. Prior missing usage and pricing caveats remain. Hotels
 policy rejection unresolved. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-14 07:18 PDT — Target missed while selection and calendar research continue
+
+Flights 47 remains active on unchanged 0a02ab7 at the 30-minute target,
+PID 90900, run 74d348ef-2e34-48ad-bf25-2047266e79b1, home-47. No published tools
+or final plan yet. Assessment remains 14:47:53 UTC and hard deadline 15:17:53 UTC.
+Disk 13.51 GiB at 14:17 UTC. No concurrent live diagnostic or code/prompt change.
+
+Location research is proven through fetch. Search has a seven-observation
+handoff, with earlier failures and short protocol responses preserved. Its
+selected GetShoppingResults API capture returned current SFO–LAX round-trip
+records; supplemental rendered evidence distinguished two passengers from cabin
+class. This is the researcher's selected round-trip boundary, not an independent
+parameter audit or one-way/multi-city proof. The candidate captures from navigation
+start without actionIndex. Selection research called search_flights for fresh
+upstream values (50.667 seconds including browser setup), then its initial direct
+API construction failed across all four rungs. A later CDP attempt completed;
+transport completion does not establish the final booking contract. Calendar
+research has both completed calls and capture timeouts; no accepted handoff yet.
+
+The new response arrays are saved and copied into lookup/search draft compiler
+directories. Those selected candidates each contain one response, so their parsers
+use the final-body fixture. This confirms live evidence delivery, not the ordered
+multi-response case that motivated the correction. Search and lookup drafts have
+offline tests; no generated live MVP or independent audit has passed yet.
+
+Continue retained agents to resolve the current evidence. Accounting unchanged
+through audit 46: 54 teaches / 43 audits, $1012.3360264 base estimate; active 47
+excluded, prior missing usage/pricing caveats remain. Hotels policy rejection
+unresolved; no automatic retry or bypass. No push, MR, merge, reset or deletion.
