@@ -11209,3 +11209,41 @@ carriers,3608.552111266867 minutes,699085044 input,582032128 reads,7433001 outpu
 zero emitted writes,$849.6845352 base estimate. Active40 excluded;31 missing
 semantic calls and prior pricing/interruption caveats retained. Hotels provider
 rejection remains unresolved. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 18:59 PDT — Record target miss and public selection repair
+
+Flights 40 missed its 30-minute target. At 31 minutes no tools were published
+and no accepted implementation journal existed. Lookup, one-way airport-code
+search and the date grid had proven research; search/grid draft compilation had
+started while booking research continued. Drafts are not current validated tools.
+
+Search uses rendered CDP documents, not API response capture. A 2.929s warm
+research call followed earlier browser setup; the latest fresh SFO–JFK October23
+call took34.087s including setup and exposed26 itinerary cards with retained
+structured records. Grid research used fetch-bootstrap and contrasted origin
+and destination while holding dates fixed; its advertised bounds still require
+independent audit. These mechanisms and timings do not establish isolated warm
+API performance or tool repeatability.
+
+Booking returned JetBlue B6624 LAX–JFK October22 offers with a229USD fare and
+provider/fare/baggage data, but only when the token was accompanied by itinerary
+context missing from the selected_flights public value. The researcher returned
+partial proof and a follow-up was factually blocked. The master retained that
+history and requested a coordinated search/booking contract repair. Revised
+search research grounds a JSON string containing selection_token, route, date,
+carrier and flight number from one SFO–JFK AA148 record. This is a proposed
+producer mapping, not yet a generated result-path or live chain pass. Booking
+research is now continuing against it. Do not count a raw token or a successful
+request with extra undeclared context as a complete public tool.
+
+No capture-timeout summary has yet appeared in this run;01fc429 remains without
+live exercise of that path. Original malformed-handoff catch and repeated-call
+capability also remain unexercised. Ordinary blocked/partial advisory repair is
+observed. No code changes or private parent diagnosis supplied to teachers.
+
+Continue on unchanged01fc429 to assessment02:27:54 and hard02:57:54 UTC
+September14. PID23437,home-40,run9c2294f8-a6fb-4f66-b0af-67b0db2c17a6.
+Accounting through audit39 remains$849.6845352 base estimate; active40 excluded
+and previous missing-usage/pricing caveats retained. No concurrent audit/live
+diagnostic, push, MR, merge, reset or evidence deletion. Hotels rejection remains.
