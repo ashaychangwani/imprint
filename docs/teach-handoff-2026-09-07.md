@@ -1,5 +1,42 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Current continuation — 2026-09-14 07:48 PDT
+
+At the one-hour assessment, Flights 47 remains active on unchanged 0a02ab7,
+PID 90900. The master created revision 1 at 14:46:12 UTC: four tools in two waves.
+No published tools or generated live receipts at the assessment. Continue to the
+original 15:17:53 UTC hard deadline, without extension: retained selection research
+has resolved its earlier blocker with concrete provider results, and the complete
+plan is now available for validation. Disk 13.30 GiB. No concurrent diagnostics.
+
+The master returned blocked select_flights research to the retained researcher.
+Earlier fresh one- and two-adult producer calls and detached booking attempts
+failed semantically; those failures remain in its 13 observations. The revised
+boundary takes legs, adults and a structured selected_flights identity. It recreates
+the search and selects the matching record in its own browser session, capturing
+GetBookingResults from navigation actionIndex 0. The researcher reports matching
+provider links for WN 3480 and AA 6316 in two changed-selection cases. Exact
+observations: 0a74760d-451e-472d-a18f-22350508b59d (35.755s) and
+19484424-8b24-4aa7-a6ea-4e7fc82c3d40 (41.074s), including separate browser setup.
+This preserves separation between tools; no producer browser session was shared.
+It is CDP API capture, not a playbook. A failed detached request does not by itself
+prove that a specific missing header or browser state was the cause.
+
+Calendar's 14-observation handoff is accepted after two consecutive captures of
+the November 1–7 by November 10–16 grid and earlier contrasting route/date evidence.
+The plan keeps seven-day windows. Search's connected MVP is intended to support
+the one-way producer needed by selection; broader journey types remain unproven.
+Lookup remains fetch-based. These are planned/researched boundaries, not published
+contracts or independent audit results. The new response-array files are present,
+but selected candidates have only one workflow response; multi-response use is
+still unexercised. Keep actual failed inputs and same-run history through repair.
+
+Accounting unchanged through audit 46: 54 teaches / 43 audits,
+$1012.3360264 base API-equivalent estimate. Active 47 excluded; prior missing usage
+and pricing caveats remain. Hotels policy rejection remains unresolved. No push,
+MR, merge, reset, evidence deletion, private diagnosis or old artifacts to teachers.
+
+
 ## Current continuation — 2026-09-14 07:18 PDT
 
 Flights 47 remains active on unchanged 0a02ab7 at the 30-minute target,
