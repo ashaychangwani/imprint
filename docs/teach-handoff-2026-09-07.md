@@ -1,6 +1,57 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 04:23 PDT: Continue after one-hour assessment of focused repairs
+## Current continuation — 2026-09-14 04:36 PDT: Complete repeat-tested research run and start audit
+
+Flights45 completed in74.6649180583minutes on a36ec1c. PID15636 ended,
+run5723f082-ef97-4d75-88f8-1c37588fa868, finaljournalrevision4completed. All
+four tools have current passed contract/live receipts and accepted semantic
+reviews. The search-to-booking invocation passed both dependency edges for
+selection_token and selected_flights; those two receipts describe one shared
+consumer execution, not two independent booking successes. Completion review
+accepted the MVP. Target30missed; one-hour assessment continued concrete work;
+hard90honored. No fresh-teach repeatability or independent audit claim yet.
+
+Lookup's retained compiler repaired the parent-city identifier labeling; final
+five-result London lookup passed in0.220seconds. Search uses the researched
+trip-type control action and CDP API capture, with ordered segment tuples and
+their same-record selection token. Its live result is a nested itinerary
+collection; outer receiptcount1 must not be reported as one flight. Calendar
+exposes origin, destination, departure_date and return_date anchors and returned
+49cells in35.147seconds. Arbitrary ranges and location identifiers are excluded.
+Raw numeric classification is returned without establishing broader meaning.
+
+Booking accepts a fresh token and JSON-encoded ordered segment tuples from the
+same search itinerary. Baseline AS1327SFO–SEAOctober20returned10options in
+32.850seconds; the generated dependency invocation returned21options for the
+same identified flight in32.557seconds. Both reviews accepted provider, price,
+covered-flight, handoff and available fare-detail evidence. These calls do not
+establish connecting coverage or every optional metadata field. Search's
+research repeat/destination contrast was exercised, but all three calls launched
+fresh browser sessions with per-tool cookies; measured warm reuse is still not
+established. Calendar/booking research did not establish the same full contrast.
+Lookup uses fetch; other tools use CDP API capture, and published preferences
+retain those exact choices. No generated artifacts or old evidence were supplied
+to teachers. All failed research and semantic reviews remain local.
+
+Independent audit45 started September14 11:35:16.557806UTC, PID47650, home-45,
+exclusive flights-audit-45.log/manifest; hard12:20:16UTC. Prior teach ended,
+clean branch, collectorHTTP200, AC100%,14.53GiBfree. Inspect actual invocation
+and parameter counts, exclusions, fresh coherent booking inputs, capture reuse,
+and supported scope. Preserve audit unchanged. No concurrent diagnostics or
+code changes. A pass requires fresh unchanged-code repeat validation. Hotels
+policy rejection remains unresolved; no automatic retry/bypass/model switch.
+
+Teach45 accounting extracted once: traceEvnpTiIJ8cmnGbcWUlGSMw==,273spans/83usage,
+17,638,654input,14,924,288cache reads,184,730output,zero emittedwrites,
+$20.5217792baseestimate,zero missingsemanticcalls. Totals53teaches/41audits,
+94traces/11,112spans/3,581usage,4100.0666750044summedminutes,
+809,395,471input,672,763,776cache reads,8,662,605output,
+zero emittedwrites,$988.8843904baseAPI-equivalentestimate.35earliermissing
+semanticcalls and interrupted-CLI/pricing caveats remain. Activeaudit45excluded.
+No push,MR,merge,reset,evidence deletion.
+
+
+## Previous continuation — 2026-09-14 04:23 PDT: Continue after one-hour assessment of focused repairs
 
 Continue Flights45 on unchanged a36ec1c to its original11:49:09UTC hard deadline.
 At11:22UTC, PID15636 was active with journal planrevision3. Search and calendar
