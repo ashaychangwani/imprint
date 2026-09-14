@@ -13492,3 +13492,40 @@ Free10.20GiB. Keep implementation fixed and live work sequential. Accounting rem
 throughaudit50, active51excluded. No generated edits, private diagnostic input,
 push,MR,merge,reset,evidence deletion, or repeatability claim. Hotels providerpolicy
 rejection remains unresolved.
+
+
+## 2026-09-14 15:03 PDT — Continue after one hour with a concrete search context repair
+
+Flights51 is active on263ea9d, journalrevision3, after the one-hour assessment.
+Lookup and calendar are published following credible semantic reviews. Lookup
+returned Heathrow forLHR in0.244seconds; calendar returned24USDcells in35.179seconds
+including setup within its requested five-day windows, covering the bounds with
+rendered fare/classification evidence. Broader coverage still requires audit.
+
+The master previously required search to distinguish short UI continuation IDs
+from the completed booking scalar and booking to prove a fresh producer chain.
+Retained search research now has12observations; booking9. Booking called initial
+search and its continuation, selected the same-row Frontier F92858 SFO–LAXOct20
+and F94593 LAX–SFOOct27, then returned both matching legs and current provider
+fares in34.039seconds including setup. This is live research proof, not a final
+generated search-to-booking chain or independent audit. Search, calendar and
+booking selected rendered document workflows; strategy label API does not turn
+HTML extraction into API-response capture.
+
+Generated search then failed its live parser check: the final continuation page
+did not repeat the outbound record needed for the completed selection. Transport
+lasted35.183seconds; receipt duration39.081seconds includes pacing. The master
+accepted a two-response repair: preserve the exact selected outbound row from a
+first navigation, then parse return rows from the second response and combine
+the matching records. It retains the public continuation contract and booking
+edge at flights[0].completed_selected_flights. The master chose this strategy
+inside the run; no parent intervention, private mapping, or runtime rule added.
+Revision3 was accepted22:00:46UTC; generated repair and its chain are unverified.
+
+Continue because two core tools passed, fresh booking research is credible, and
+search has a concrete source-context repair with about26minutes remaining. Keep
+original22:28:05UTC harddeadline, with no extension or implementation change.
+Composite-offer guidance, fullscopeaudit and fresh repeatability remain unproven.
+Free10.05GiB; sequential live work only. Accounting unchanged throughaudit50;
+active51 excluded. Preserve all failed research/build revisions. Hotels policy
+rejection unresolved. No push,MR,merge,reset,evidence deletion or generated edits.
