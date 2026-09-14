@@ -11573,3 +11573,31 @@ deadline September14. Disk15.87GiB. No concurrent live diagnostic or code change
 Accounting remains throughaudit41 at$897.1119624base API-equivalent estimate,
 active42excluded,34missingsemanticcalls andpriorcaveats retained. Hotels policy
 rejection unresolved; no automatic retry. No push, MR, merge, reset or deletion.
+
+
+## 2026-09-13 22:43 PDT — Observe malformed research recovery in the live run
+
+Read-only trace inspection at about36–40minutes confirms live exercise of the
+original malformed-research-handoff recovery path. Four retained booking replies
+are invalid JSON with one extra trailing character, not truncated trace outputs.
+The master explicitly receives a reporting failure, keeps booking unproven and
+requests a valid factual handoff instead of terminating the whole teach or
+calling the API impossible. It narrows the next reporting instruction after
+repeated malformed replies. No invalid proof was promoted and no tool is yet
+published. This supersedes the30-minute note's characterization of the latest
+blocked handoffs as ordinary only, and its claim that this catch was unexercised.
+
+Private flights-42-malformed-research-recovery.json preserves six relevant
+provider spans, including raw invalid replies and master repair decisions.
+Master input traces are truncated at50,000characters before the handoff history,
+so those traces do not independently establish every retained observation. Code
+inspection confirms the executed SemanticAgentOutputError-to-ApiResearchBlockedError
+path carries actual observations and the master handoff includes up to64. Do
+not turn that mechanical confirmation into a claim that booking research passed.
+The original recovery behavior is observed; successful repair remains pending.
+
+Continue unchanged on7df97c3, PID98981, original06:34:26UTC deadline and
+06:04:26assessment. No code change or parallel live diagnostic. Accounting
+remains throughaudit41 at$897.1119624base estimate, active42excluded. Repeated
+invocation feature remains unexercised. Hotels policy rejection unresolved.
+No push, MR, merge, reset or evidence deletion.
