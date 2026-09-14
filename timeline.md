@@ -13065,3 +13065,38 @@ Latest click-target diagnostic recovery remains unproven in this fresh run.
 Free space12.10GiB; accounting unchanged throughaudit48, active49excluded.
 Hotels provider policy rejection remains unresolved. No push,MR,merge,reset
 or evidence deletion; original recordings and failed attempts retained.
+
+
+## 2026-09-14 11:48 PDT — Continue focused semantic repairs after one hour
+
+Flights49 is active on unchanged90db75e, journalrevision2. Calendar is published:
+49date pairs passed live verification in33.377seconds including setup and were
+accepted by semantic review. Lookup and search both ran but were rejected for
+concrete semantic defects; retained compilers are repairing them. Lookup assigned
+the London city identifier to distinct airports and labeled rail stations as
+airports. Search returned only the first segment of connecting ORD–MIA journeys,
+misstating their destination/stops while attaching the whole-itinerary fare/token
+and incomplete selected_flights. Neither failed result is a usable MVP pass.
+
+Booking research recovered after the master required fresh producer evidence.
+Producer2481a75c-a398-4364-90b6-4293033d525e supplied SouthwestWN1874 LAX–LAS
+October27, with price/token and serialized selection from one itinerary record.
+Selected booking observationeb15cff5-2f3c-43e9-8886-a255f78ce024 captured
+GetBookingResults in34.791seconds including separate browser setup: correct
+10:50–12:00 itinerary, Southwest-specific handoff, Basic fare, USD94. All5research
+observations, including earlier failures, remain retained. Generated booking and
+the final fresh producer-consumer chain still have not run.
+
+Search research's selected workflow now captures rendered HTML after a result
+selector, not a network API response. Its 23current one-way records and raw
+embedded selection state were useful, but this must not be described as API
+capture. Preserve this execution distinction in the final audit/accounting.
+The new click-target diagnostics have not yet demonstrated repair in this run.
+
+Continue because a reviewed calendar is ready and two specific semantic repairs
+are active, with fresh booking research available. Keep the original19:16:29UTC
+hard deadline (12:16PDT), no extension or concurrent live work. About29minutes
+remain at assessment; full four-tool success and independent audit are unproven.
+Free11.94GiB. Accounting unchanged throughaudit48, active49excluded. No code or
+prompt changes, private strategy injection, push,MR,merge,reset,evidence deletion.
+Hotels policy rejection remains unresolved.
