@@ -1250,6 +1250,7 @@ WorkflowRequest = {
       method?: string;
       resourceType?: string;
       occurrence?: number;
+      actionIndex?: number; // zero-based action that starts response matching; earlier request starts are excluded
     };
     cookie?: { name: string; domain?: string; path?: string };
   };

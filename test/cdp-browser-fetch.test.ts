@@ -1112,6 +1112,156 @@ describe('navigation network-response capture', () => {
     }
   });
 
+  it('captures only requests started by the selected action, including repeated pooled calls', async () => {
+    let currentUrl = 'about:blank';
+    let clicked = 0;
+    let serial = 0;
+    const reads: string[] = [];
+    const listeners: Record<string, (event: unknown) => void> = {};
+    const emit = (id: string, phase: 'start' | 'response' | 'finish' | 'fail') => {
+      const common = { requestId: id, loaderId: 'current', frameId: 'main', type: 'XHR' };
+      if (phase === 'start')
+        listeners.request?.({
+          ...common,
+          request: { method: 'POST', url: 'https://fixture.test/results' },
+        });
+      if (phase === 'response')
+        listeners.response?.({
+          ...common,
+          response: { url: 'https://fixture.test/results', status: 200, headers: {} },
+        });
+      if (phase === 'finish') listeners.finish?.(common);
+      if (phase === 'fail') listeners.fail?.({ ...common, errorText: 'net::ERR_ABORTED' });
+    };
+    __setCdpBrowserFetchHooksForTest({
+      launchChromium: async () =>
+        ({
+          process: {} as never,
+          port: 12345,
+          userDataDir: '/tmp/imprint-fake-chrome',
+          ready: Promise.resolve(),
+          close: async () => {},
+        }) as Awaited<ReturnType<typeof import('../src/imprint/chromium.ts').launchChromium>>,
+      connectCdp: async () =>
+        ({
+          Runtime: {
+            enable: async () => ({}),
+            evaluate: async ({ expression }: { expression: string }) => ({
+              result: {
+                value:
+                  expression === 'navigator.userAgent'
+                    ? 'Mozilla/5.0 Chrome/148.0.0.0'
+                    : expression === 'location.href'
+                      ? currentUrl
+                      : { x: 10, y: 20 },
+              },
+            }),
+          },
+          Network: {
+            enable: async () => ({}),
+            setUserAgentOverride: async () => ({}),
+            getCookies: async () => ({ cookies: [] }),
+            requestWillBeSent: (fn: (event: unknown) => void) => {
+              listeners.request = fn;
+            },
+            responseReceived: (fn: (event: unknown) => void) => {
+              listeners.response = fn;
+            },
+            loadingFinished: (fn: (event: unknown) => void) => {
+              listeners.finish = fn;
+            },
+            loadingFailed: (fn: (event: unknown) => void) => {
+              listeners.fail = fn;
+            },
+            getResponseBody: async ({ requestId }: { requestId: string }) => {
+              reads.push(requestId);
+              return { body: requestId };
+            },
+          },
+          Page: {
+            bringToFront: async () => ({}),
+            enable: async () => ({}),
+            getFrameTree: async () => ({ frameTree: { frame: { id: 'main' } } }),
+            domContentEventFired: async () => ({}),
+            loadEventFired: async () => ({}),
+            navigate: async ({ url }: { url: string }) => {
+              currentUrl = url;
+              clicked = 0;
+              serial++;
+              emit(`initial-${serial}`, 'start');
+              emit(`initial-${serial}`, 'response');
+              return { loaderId: 'current', frameId: 'main' };
+            },
+          },
+          Input: {
+            dispatchKeyEvent: async () => ({}),
+            dispatchMouseEvent: async ({ type }: { type: string }) => {
+              if (type !== 'mouseReleased') return {};
+              clicked++;
+              if (clicked === 1) {
+                emit(`menu-${serial}`, 'start');
+                emit(`menu-${serial}`, 'response');
+                emit(`menu-${serial}`, 'finish');
+                emit(`late-${serial}`, 'start');
+              } else {
+                emit(`initial-${serial}`, 'fail');
+                // Earlier requests finishing after the boundary are still excluded.
+                emit(`late-${serial}`, 'response');
+                emit(`late-${serial}`, 'finish');
+                emit(`chosen-${serial}`, 'start');
+                emit(`chosen-${serial}`, 'response');
+                emit(`chosen-${serial}`, 'finish');
+              }
+              return {};
+            },
+          },
+          close: async () => {},
+        }) as never,
+    });
+    const browser = createCdpBrowserFetch({
+      baseUrl: 'https://fixture.test',
+      abckWaitSeconds: 0,
+      cdpCommandTimeoutMs: 100,
+    });
+    const actions = [
+      { action: 'click' as const, selector: '#menu' },
+      { action: 'click' as const, selector: '#choice' },
+    ];
+    const networkResponse = {
+      urlIncludes: '/results',
+      recordingResponseRequestSeq: 2,
+      actionIndex: 1,
+    };
+    try {
+      await expect(
+        browser.navigate?.('https://fixture.test/page', {
+          actions,
+          networkResponse: { ...networkResponse, actionIndex: 2 },
+        }),
+      ).rejects.toThrow('existing navigation action');
+      for (let index = 0; index < 2; index++) {
+        const response = await browser.navigate?.('https://fixture.test/page', {
+          waitUntil: 'domcontentloaded',
+          timeoutMs: 1500,
+          actions,
+          networkResponse,
+        });
+        expect(await response?.text()).toBe(`chosen-${serial}`);
+      }
+      expect(reads).toEqual(['chosen-2', 'chosen-3']);
+      const firstAction = await browser.navigate?.('https://fixture.test/page', {
+        waitUntil: 'domcontentloaded',
+        timeoutMs: 1500,
+        actions,
+        networkResponse: { ...networkResponse, actionIndex: 0 },
+      });
+      expect(await firstAction?.text()).toBe('menu-4');
+      expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
+    } finally {
+      await browser.close();
+    }
+  }, 10_000);
+
   it('closes a pooled page before a detached body read can overlap another navigation', async () => {
     let currentUrl = 'about:blank';
     let navigationCount = 0;

@@ -1,6 +1,74 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 04:36 PDT: Complete repeat-tested research run and start audit
+## Current continuation — 2026-09-14 04:57 PDT — Preserve failed audit and add an explicit capture action boundary
+
+Audit45 ended in7.5423638458minutes, PID47650ended. FAIL19/22graded (86.36%).
+Actual15calls:12correct,2broken search calls,1initial aborted search excluded by
+the auditor as infrastructure. Seven parameters worked, destination failed, and
+both bound booking members were individually untestable. No bad-input exclusions.
+Lookup and all four isolated calendar inputs passed. Two fresh coherent booking
+pairs selected F92858 and WN2847SFO–LAXOctober20, returning8 and3matching options.
+Connecting coverage and every optional metadata field remain unproven. The audit
+report/transcript remain unchanged. Repeatability remains unmet.
+
+Search SFO–SEAOctober15failed twice despite visible results. First sequential
+CDP-event diagnostic did not reproduce: SFO–LAX34.909s then same-date SEA2.499s
+with pooled reuse both passed. The SEA page cancelled one request before headers,
+then completed its replacement. A longer sequence reproduced failure on identical
+SFO–LAX and SFO–SEA repeats. Their first matching requests received headers, were
+selected, then were aborted; replacement requests completed successfully. This
+establishes a request-selection race in those diagnostic cases, not a universal
+explanation for every previous audit failure. The auditor's initial-abort exclusion
+is retained as reported; it is not independent proof of a provider outage.
+The original auto ladder retained preferredCDPfirst but then tried fallback rungs
+after failure; inspect the recorded CDP error/events, not its last fallback error.
+
+Added optional navigation.networkResponse.actionIndex: the agent selects a
+zero-based navigation click, and capture begins immediately before dispatching
+that action. Requests started earlier cannot supply its result, even when they
+finish later. Omission retains navigation-wide matching; selected-response failure
+is still rejected. The runtime does not choose an action, infer a replacement,
+or add site-specific behavior. Invalid action indices fail before browser setup.
+Researcher/compiler schema guidance and README/architecture/web match.
+
+A private in-memory diagnostic added actionIndex1 to the unchanged generated
+workflow, leaving its files untouched. Explicit CDP only, same five-call sequence:
+SFO–LAXOctober15baseline41itineraries34.452s, identical warm repeat41in2.901s,
+JFK–LAX34in10.836s, SFO–SEA24in2.465s, identical SEA repeat24in2.338s. Returned
+segments had the requested dates and selection material. The SEA cases still
+aborted earlier requests but selected completed replacement responses after the
+chosen action boundary. All five passed. These are targeted diagnostics, not a
+new independent audit, complete semantic audit, or fresh-teach repeatability.
+Existing per-tool cookies reused; first timing includes browser setup, others
+reuse the same tool/rung pool. Pools closed; no concurrent teaches or audits.
+Private flights-45-capture-*, flights-45-sequence-*, and
+flights-45-action-boundary-* preserve results/events/pages; no LLM charges.
+
+Validation:154runtime/backend tests and13capture tests passed; lint214files and
+typecheck passed. The full34-test CDP file had one unrelated synthetic-form
+browser-test timeout (at5sand15s); that test passed alone and in a standalone
+step-by-step diagnostic. Its combined-suite timing discrepancy remains unresolved;
+do not claim an entirely green full file. Initial new-test mock lacked bringToFront;
+fixed the mock, and boundary/reuse/late-response/first-action checks now pass.
+Webbuild passed with existing bundle warning. Desktop/mobile full-page and changed
+paragraph visual checks passed, no page errors/overflow. Preview ended.
+
+Audit45 accounting extracted once:trace11KJO7IHXtBiDVLHiZyX7g==,3spans/1usage,
+1,022,200input,902,528cache reads,5,805output,zero emittedwrites,$0.9557992,
+zero missingsemanticcalls. Totals53teaches/42audits,95traces/11,115spans,
+3,582usage,4107.6090388502summedminutes,810,417,671input,673,666,304cache
+reads,8,668,410output,zero emittedwrites,$989.8401896baseAPI-equivalent.
+35prior missingsemanticcalls and interruptedCLI/pricing caveats remain.
+
+Next:NEWFlights46teach on the action-boundary implementation, original recording
+and exact four-operation guidance, isolated unused home, target30/assess60/hard90.
+Do not resume45 or reroll its audit; do not feed the private diagnostic or generated
+workflow to teachers. Verify whether agents choose an appropriate boundary and
+preserve repeat/contrast evidence and fresh booking inputs. Hotels remains blocked
+on provider policy rejection; no automatic retry, bypass or model switch.
+No push,MR,merge,reset,evidence deletion.
+
+## Previous continuation — 2026-09-14 04:36 PDT: Complete repeat-tested research run and start audit
 
 Flights45 completed in74.6649180583minutes on a36ec1c. PID15636 ended,
 run5723f082-ef97-4d75-88f8-1c37588fa868, finaljournalrevision4completed. All

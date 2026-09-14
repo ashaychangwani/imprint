@@ -287,7 +287,7 @@ browser-navigation request when direct API constructions fail. A request with `m
 loads its parameterized page URL in CDP, lets the page run its own JavaScript,
 and normally returns the final rendered HTML. When the page itself must
 construct one result request, explicitly set
-`navigation.networkResponse:{urlIncludes,recordingResponseRequestSeq,method?,resourceType?,occurrence?}`;
+`navigation.networkResponse:{urlIncludes,recordingResponseRequestSeq,method?,resourceType?,occurrence?,actionIndex?}`;
 the selected completed response body becomes this workflow request's raw
 response. Pin either research test to `cdp-replay` and inspect the returned body
 for the operation's real core data. This is agent-selected, site-neutral, and
@@ -297,6 +297,9 @@ merely because a recorded header looks opaque.
 When the selected response is the only completion requirement, omit
 `waitUntil`; declare lifecycle, selector, or action waits only when research
 actually requires them after navigation.
+
+When a specific action triggers the desired response, you may set `networkResponse.actionIndex` to that zero-based action index. Matching begins immediately before that click is dispatched; earlier request starts cannot satisfy it even if they finish later. Omit it to capture from navigation start. Choose this boundary from the observed operation, not a guessed response occurrence. A pre-action response may be cancelled or replaced by the action; do not treat its headers as the final result.
+
 For rendered-document extraction after navigation or an action, a document
 load event, an existing page shell, or an updated control does not prove the
 result collection finished rendering. Use an observed completion condition for
@@ -453,6 +456,7 @@ Workflow = {
         method?: string;
         resourceType?: string;
         occurrence?: number;
+        actionIndex?: number; // zero-based action that starts response matching
       };
       cookie?: { name: string; domain?: string; path?: string };
     };

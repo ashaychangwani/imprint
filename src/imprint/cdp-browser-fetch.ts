@@ -2089,7 +2089,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
     }
 
-    for (const interaction of options.actions ?? []) {
+    for (const [actionIndex, interaction] of (options.actions ?? []).entries()) {
       if (interaction.action !== 'click') continue;
       const target = await withTimeout(
         c.Runtime.evaluate({
@@ -2104,6 +2104,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         throw new Error(
           `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)}`,
         );
+      }
+      if (networkCapture?.matcher.actionIndex === actionIndex) {
+        activeNetworkResponseCapture = networkCapture;
       }
       await dispatchTrustedClick(
         c,
@@ -2194,6 +2197,15 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   };
 
   const navigate: NonNullable<CdpBrowserFetch['navigate']> = async (rawUrl, options = {}) => {
+    const actionIndex = options.networkResponse?.actionIndex;
+    if (
+      actionIndex !== undefined &&
+      (!Number.isInteger(actionIndex) ||
+        actionIndex < 0 ||
+        actionIndex >= (options.actions?.length ?? 0))
+    ) {
+      throw new Error('networkResponse.actionIndex must identify an existing navigation action');
+    }
     if (navigationInProgress) {
       throw new Error('another browser navigation is already active in this workflow session');
     }
@@ -2210,7 +2222,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         : null;
       if (networkCapture) {
         completedRequestIds.clear();
-        activeNetworkResponseCapture = networkCapture;
+        if (actionIndex === undefined) activeNetworkResponseCapture = networkCapture;
       }
       return await navigateOnce(c, rawUrl, options, networkCapture);
     } finally {

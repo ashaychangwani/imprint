@@ -281,7 +281,12 @@ a `navigation.networkResponse` matcher and return the selected response body.
 The matcher is an explicit URL/method/resource-type/occurrence choice made from
 recorded evidence; occurrence follows request-start order within one navigation,
 and CDP observes the live page traffic and retrieves the chosen
-completed body. The workflow keeps two exact recording origins: the outer
+completed body. An optional `networkResponse.actionIndex` starts matching immediately
+before the specified zero-based navigation click. Earlier requests cannot satisfy
+that capture even if their responses arrive after the click. The agent chooses
+this boundary when the action triggers its result; omission preserves matching
+from navigation start. It does not silently replace a failed selected response.
+The workflow keeps two exact recording origins: the outer
 `recordingRequestSeq` identifies the document navigation being sent, while
 `networkResponse.recordingResponseRequestSeq` identifies the background
 request whose recorded response supplies body, status, and headers during
@@ -350,6 +355,7 @@ type WorkflowRequest = {
       method?: string;
       resourceType?: string;
       occurrence?: number;
+      actionIndex?: number; // zero-based action that starts response matching
     };
   };
   extract?: Record<string, string>; // legacy ${response[N].name}

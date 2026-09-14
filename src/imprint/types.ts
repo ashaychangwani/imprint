@@ -324,6 +324,9 @@ const WorkflowRequestBaseSchema = z.object({
            * within this navigation scope. Starts that never receive a response
            * do not consume an occurrence. */
           occurrence: z.number().int().positive().optional(),
+          /** Begin matching immediately before this zero-based navigation action
+           * is dispatched. Requests started earlier cannot satisfy the capture. */
+          actionIndex: z.number().int().nonnegative().optional(),
         })
         .strict()
         .optional(),
