@@ -13583,3 +13583,38 @@ Prior36missinganalysiscalls/interruptedCLI and pricing caveats remain; activeaud
 excluded. The105prior completedtrace counts are unchanged;51uses provider-session
 recovery. No push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
 Hotels providerpolicyrejection remains unresolved; no automaticretry/bypass.
+
+
+## 2026-09-14 15:39 PDT — Audit passes including connecting booking; inspect two coverage gaps
+
+Audit51 completed in7.5759865695minutes,PID74845exited. PASS30/30graded:
+18actualcalls,17correct and1calendar selector timeout excluded as infrastructure;
+13working parameters,no broken/badinput/untestable labels. All4tools exercised.
+The excluded return-window call had a loaded Google Flights page and passed a
+paced retry; preserve the auditor's exclusion without asserting an external outage.
+Lookup/route/date/continuation contrasts passed. Two fresh booking selections
+returned F93308outbound with either F92857nonstopreturn or F93292/F94157connecting
+return, preserving all three ordered segments in the latter;13offers,lowestprices
+USD65/102. Original report and transcript remain unchanged.
+
+Before an unchanged-code fresh repeat, inspect two uncovered observations:
+calendar repeatedly returns one fewer cell than its rectangular window suggests
+(8for3x3,24for5x5), and the audit did not exercise separate-provider ticket grouping.
+A sequential private untouched-workflow diagnostic now calls the audited3x3grid,
+then freshSFO–BOSOct5/12search, selects an availableUnitedoutbound andJetBluereturn
+from the actual outputs, and calls booking with that exact completed selection.
+It saves rawresponses/pages and a same-booking-poolwarmrepeat, with separatepools
+pertool/rung. Script flights-51-coverage-diagnostic.ts/log andflights-51-diagnostic-*
+under the private evidencebase. No oldopaquevalues or generated edits. Do not
+assume a missing cell is a defect until comparing the actual rendered response.
+Search's returned arrival dates also warrant checking against overnight page labels;
+the parser currently copies departure date into arrival_date.
+
+Audittrace6u8gR1Vw4vO4Lbx45ba83w== captured normally by replacementcollector6440:
+3spans1usage,869632input810112cache reads5675output0writes,$0.6756248estimate,
+no missingusage. Campaign recorded59teaches48audits,4644.7712992904summedminutes,
+948933976input792813440cache reads9987849output0writes,$1141.3645baseestimate.
+Prior36missinganalysiscalls/interruptedCLI andteach51trace-gap caveats remain.
+Teach51 recovered105providerturns remain separate from tracedcounts; do notdoubleadd.
+No freshteach launched yet. No fullrepeatabilityclaim,push,MR,merge,reset or evidence
+deletion. Hotels providerpolicyrejection unresolved; no automaticretry/bypass.

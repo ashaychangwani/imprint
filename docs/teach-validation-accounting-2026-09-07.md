@@ -1,6 +1,6 @@
 # Teach validation accounting — September 7, 2026
 
-These are fifty-nine teaches and forty-seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fifty-nine teaches and forty-eight independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
@@ -114,7 +114,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights teach 50 | 4 ready; missing return leg repaired, fresh two-leg chain passed; first-outbound round-trip MVP, audit pending | 68.78 | 19,245,082 | 15,599,104 | 0 | 193,917 | $24.70 |
 | Flights audit 50 | FAIL 21/24 graded; 12 correct calls, 3 booking semantic failures, 1 bad input; 9 working and 2 bound inputs | 7.65 | 782,937 | 746,496 | 0 | 6,058 | $0.57 |
 | Flights teach 51 | 4 ready; search context and booking fields repaired; fresh chain passed; usage recovered from sessions, audit pending | 85.97 | 23,770,795 | 20,126,720 | 0 | 233,207 | $27.29 |
-| **Total** | **Includes failures/cancellations; recorded usage** | **4,637.20** | **948,064,344** | **792,003,328** | **0** | **9,982,174** | **$1,140.69** |
+| Flights audit 51 | PASS30/30graded;17 correct calls,1excluded timeout,13working parameters; connecting booking passed | 7.58 | 869,632 | 810,112 | 0 | 5,675 | $0.68 |
+| **Total** | **Includes failures/cancellations; recorded usage** | **4,644.77** | **948,933,976** | **792,813,440** | **0** | **9,987,849** | **$1,141.36** |
 
 ## Cost assumptions and completeness
 
@@ -2611,3 +2612,38 @@ Prior36missinganalysiscalls/interruptedCLI and pricing caveats remain; activeaud
 excluded. The105prior completedtrace counts are unchanged;51uses provider-session
 recovery. No push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
 Hotels providerpolicyrejection remains unresolved; no automaticretry/bypass.
+
+
+## 2026-09-14 15:39 PDT — Audit passes including connecting booking; inspect two coverage gaps
+
+Audit51 completed in7.5759865695minutes,PID74845exited. PASS30/30graded:
+18actualcalls,17correct and1calendar selector timeout excluded as infrastructure;
+13working parameters,no broken/badinput/untestable labels. All4tools exercised.
+The excluded return-window call had a loaded Google Flights page and passed a
+paced retry; preserve the auditor's exclusion without asserting an external outage.
+Lookup/route/date/continuation contrasts passed. Two fresh booking selections
+returned F93308outbound with either F92857nonstopreturn or F93292/F94157connecting
+return, preserving all three ordered segments in the latter;13offers,lowestprices
+USD65/102. Original report and transcript remain unchanged.
+
+Before an unchanged-code fresh repeat, inspect two uncovered observations:
+calendar repeatedly returns one fewer cell than its rectangular window suggests
+(8for3x3,24for5x5), and the audit did not exercise separate-provider ticket grouping.
+A sequential private untouched-workflow diagnostic now calls the audited3x3grid,
+then freshSFO–BOSOct5/12search, selects an availableUnitedoutbound andJetBluereturn
+from the actual outputs, and calls booking with that exact completed selection.
+It saves rawresponses/pages and a same-booking-poolwarmrepeat, with separatepools
+pertool/rung. Script flights-51-coverage-diagnostic.ts/log andflights-51-diagnostic-*
+under the private evidencebase. No oldopaquevalues or generated edits. Do not
+assume a missing cell is a defect until comparing the actual rendered response.
+Search's returned arrival dates also warrant checking against overnight page labels;
+the parser currently copies departure date into arrival_date.
+
+Audittrace6u8gR1Vw4vO4Lbx45ba83w== captured normally by replacementcollector6440:
+3spans1usage,869632input810112cache reads5675output0writes,$0.6756248estimate,
+no missingusage. Campaign recorded59teaches48audits,4644.7712992904summedminutes,
+948933976input792813440cache reads9987849output0writes,$1141.3645baseestimate.
+Prior36missinganalysiscalls/interruptedCLI andteach51trace-gap caveats remain.
+Teach51 recovered105providerturns remain separate from tracedcounts; do notdoubleadd.
+No freshteach launched yet. No fullrepeatabilityclaim,push,MR,merge,reset or evidence
+deletion. Hotels providerpolicyrejection unresolved; no automaticretry/bypass.
