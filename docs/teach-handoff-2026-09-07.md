@@ -1,6 +1,28 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 04:57 PDT — Preserve failed audit and add an explicit capture action boundary
+## Current continuation — 2026-09-14 04:58 PDT — Launch fresh action-boundary validation
+
+Flights46 started September14 at11:57:17.872835UTC on faaa985, PID51185,
+unused home-46 and exclusive flights-teach-46.log/manifest. Target12:27:17UTC,
+assessment12:57:17UTC, hard13:27:17UTC. Original recording and exact four-operation
+guidance, configured two workers. Preflight clean correct branch descended solely
+from34a6235, prior teach/audit/diagnostics ended, recordings intact, collector200,
+AC100%,14.32GiBfree. No prior generated tools or private diagnosis supplied.
+
+Monitor whether agents choose and verify an appropriate capture boundary when
+an action triggers the response, and retain repeat/contrast evidence and fresh
+coherent booking selections. Keep implementation unchanged; independent audit
+follows completion. Targeted five-call diagnostic success does not prove this
+fresh teach or repeatability. Do not run concurrent live diagnostics.
+
+Accounting through audit45:53teaches/42audits,95traces/11,115spans/3,582usage,
+4107.6090388502summedminutes,810,417,671input,673,666,304cache reads,
+8,668,410output,zero emittedwrites,$989.8401896baseestimate. Active46excluded.
+35prior missingsemanticcalls and interruptedCLI/pricing caveats remain. Hotels
+policy rejection unresolved; no automatic retry, bypass or model switch.
+No push,MR,merge,reset,evidence deletion.
+
+## Previous continuation — 2026-09-14 04:57 PDT — Preserve failed audit and add an explicit capture action boundary
 
 Audit45 ended in7.5423638458minutes, PID47650ended. FAIL19/22graded (86.36%).
 Actual15calls:12correct,2broken search calls,1initial aborted search excluded by
