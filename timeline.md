@@ -11139,3 +11139,37 @@ writes and $0.7104664 base estimate, no missing usage. Totals: 47 teaches/36 aud
 missing semantic calls and previous pricing/interruption caveats remain. PID19903
 ended. No active teach, audit or diagnostic. Hotels rejection remains unresolved.
 No push, MR, merge or evidence deletion.
+
+
+## 2026-09-13 18:27 PDT — Expose factual response metadata after capture timeouts
+
+Capture timeouts now include bounded factual response metadata: up to 12 recent
+response records after the navigation boundary, omitted count, matching request
+count, endpoint, method, CDP resource type, status and navigation-scope membership.
+Endpoints omit query values, userinfo and fragments; long paths are truncated with
+an explicit flag, and non-HTTP contents are excluded. No headers or bodies are
+included. The existing response map supplies the summary; matching, navigation,
+fallback and deadlines are unchanged. Agents choose what to investigate next.
+
+This addresses the missing observed-traffic evidence exposed by audit39 and its
+isolated diagnostic. It does not repair search parser semantics or prove a cause
+for missing capture/empty booking results. Research guidance, README, architecture
+and website describe the evidence and its limits. A bounded list cannot establish
+that omitted traffic never occurred. No site-specific rule or matcher change.
+
+Two synthetic behavior cases verify navigation boundaries/scope, continued exact
+selection after inspecting a mismatch, bounded metadata, and exclusion of query
+values, userinfo, fragments, headers and non-HTTP contents. An existing exact
+error-string assertion was updated to allow the appended facts. An initial
+non-null assertion warning was removed. Capture tests:33 passed/111 assertions
+in10.53s; backend tests:98 passed/315 assertions in6.29s. Lint214files, types and
+website build passed; existing bundle warning unchanged. Desktop/mobile full-page
+and changed-card visual checks found no page errors or horizontal overflow.
+
+The first preview launch lacked Bun on PATH and failed; the corrected launch and
+visual check passed. All initial failure logs remain in private network-summary-*
+evidence. Preview PID23081 stopped before live validation. No prompt-mirroring
+tests or generated-artifact edits. Next start fresh Flights40 with the exact
+original recording/scope and two workers, target30/assess60/hard90 minutes.
+Accounting remains through audit39 at $849.6845352 base estimate, with previous
+missing-usage/pricing caveats. Hotels rejection remains unresolved. No push/MR/merge.

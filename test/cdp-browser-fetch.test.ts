@@ -391,6 +391,112 @@ describe('normalizeCdpResponseHeaders', () => {
 });
 
 describe('navigation network-response capture', () => {
+  it('reports observed response facts without selecting a mismatched response', async () => {
+    const capture = new CdpNetworkResponseCapture(
+      { urlIncludes: '/api/results', recordingResponseRequestSeq: 42, method: 'POST' },
+      { afterRequestSequence: 10, deferUntilNavigationScope: true },
+    );
+    capture.setNavigationScope({ loaderId: 'current' });
+    for (const [requestId, requestSequence, loaderId] of [
+      ['old', 9, 'previous'],
+      ['background', 11, 'previous'],
+      ['current', 12, 'current'],
+    ] as const) {
+      const request = {
+        requestId,
+        requestSequence,
+        loaderId,
+        url: 'https://fixture.test/api/changed',
+        method: 'POST',
+        resourceType: 'Fetch',
+      };
+      capture.observeRequest(request);
+      expect(capture.observeResponse({ ...request, status: 200, headers: {} })).toBe(false);
+    }
+    const evidence = JSON.parse(
+      capture.timeoutMessage(100).split('observed network responses: ')[1] ?? '',
+    );
+    expect(evidence).toMatchObject({
+      count: 2,
+      omitted: 0,
+      matchingRequestCount: 0,
+      navigationScopeReady: true,
+      recent: [
+        {
+          endpoint: 'https://fixture.test/api/changed',
+          method: 'POST',
+          resourceType: 'Fetch',
+          status: 200,
+          inNavigationScope: false,
+        },
+        { endpoint: 'https://fixture.test/api/changed', inNavigationScope: true },
+      ],
+    });
+    expect(capture.selectedRequestIs('current')).toBe(false);
+    const wanted = {
+      requestId: 'wanted',
+      requestSequence: 13,
+      loaderId: 'current',
+      url: 'https://fixture.test/api/results',
+      method: 'POST',
+      resourceType: 'XHR',
+    };
+    capture.observeRequest(wanted);
+    expect(capture.observeResponse({ ...wanted, status: 200, headers: {} })).toBe(true);
+    await capture.finish('wanted', async () => ({ body: 'selected body' }));
+    expect(await capture.outcome).toMatchObject({ ok: true, response: { body: 'selected body' } });
+  });
+
+  it('bounds timeout metadata and excludes URL secrets, headers and non-HTTP bodies', () => {
+    const capture = new CdpNetworkResponseCapture({
+      urlIncludes: '/missing',
+      recordingResponseRequestSeq: 42,
+    });
+    for (let index = 0; index < 20; index++) {
+      capture.observeResponse({
+        requestId: String(index),
+        url: `https://fixture-user:fixture-pass@fixture.test/${index}/${'x'.repeat(300)}?token=fixture-query-secret#fixture-fragment`,
+        method: 'GET',
+        resourceType: 'Script',
+        status: 200,
+        headers: { authorization: 'fixture-header-secret' },
+      });
+    }
+    capture.observeResponse({
+      requestId: 'data',
+      url: 'data:text/plain,fixture-inline-secret',
+      status: 200,
+      headers: {},
+    });
+    capture.observeResponse({
+      requestId: 'invalid',
+      url: 'fixture-invalid-secret',
+      status: 200,
+      headers: {},
+    });
+    const message = capture.timeoutMessage(100);
+    const evidence = JSON.parse(message.split('observed network responses: ')[1] ?? '');
+    expect(evidence.count).toBe(22);
+    expect(evidence.omitted).toBe(10);
+    expect(evidence.recent).toHaveLength(12);
+    expect(evidence.recent[0]).toMatchObject({ endpointTruncated: true });
+    expect(evidence.recent[0].endpoint).toHaveLength(240);
+    expect(evidence.recent.at(-2).endpoint).toBe('[non-HTTP URL]');
+    expect(evidence.recent.at(-1).endpoint).toBe('[unparseable URL]');
+    for (const secret of [
+      'fixture-user',
+      'fixture-pass',
+      'fixture-query-secret',
+      'fixture-fragment',
+      'fixture-header-secret',
+      'fixture-inline-secret',
+      'fixture-invalid-secret',
+    ]) {
+      expect(message).not.toContain(secret);
+    }
+    expect(message.length).toBeLessThan(6000);
+  });
+
   it('accepts an explicit, site-neutral network response matcher in workflow.json', () => {
     const workflow = WorkflowSchema.parse({
       toolName: 'network_response_fixture',
@@ -604,7 +710,7 @@ describe('navigation network-response capture', () => {
       recordingResponseRequestSeq: 42,
       method: 'POST',
     });
-    expect(missing.timeoutMessage(500)).toBe(
+    expect(missing.timeoutMessage(500)).toStartWith(
       'browser navigation timed out after 500ms waiting for network response with URL containing "/api/results", method POST',
     );
     missing.observeRequest({

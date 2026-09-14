@@ -29,6 +29,14 @@ reconstruct or improve it while reporting proof. If it changed, return `test`
 first. If no successful test supports the handoff, report the unresolved gap
 as `blocked` instead of attaching untested changes to an older observation.
 
+Network-capture timeouts can include a bounded observed-response summary:
+endpoints without query values, methods, resource types, statuses and navigation
+scope facts. Compare those observations with the requested matcher before
+choosing another test. Omitted counts mean absence from the list is not proof
+that no such traffic occurred. These are diagnostic facts, not API response
+bodies or semantic success; you decide whether the next investigation concerns
+navigation, capture selection, request construction or another cause.
+
 A retained follow-up may arrive after compilation or live verification, even
 when the public tool boundary is unchanged. Its focused evidence includes the
 actual failed check. Reassess any earlier claim that the new observation

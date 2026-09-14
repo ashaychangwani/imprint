@@ -735,7 +735,14 @@ do not inherit failure evidence. Research observations, master repair feedback a
 auditors receive these facts as page evidence, never as the requested API response
 or a successful result. Auditors investigate missing captures and state uncertainty
 rather than automatically attributing every timeout to infrastructure. Agents choose
-any revised request strategy. Parser guidance
+any revised request strategy. Capture timeout messages also summarize the last
+12 observed responses that started after the navigation boundary: endpoint
+(origin/path, at most 240 characters with truncation flagged), method, CDP resource
+type, status and whether each response belongs to the known navigation scope.
+Counts report omitted responses and matching request starts. Query values,
+userinfo, fragments, headers, bodies and non-HTTP URL contents are excluded.
+This diagnostic is not an alternate API result or an automatic matcher revision;
+an absent entry in the bounded list does not prove absent traffic. Parser guidance
 also distinguishes unsupported missing fields from evidenced protocol defaults,
 with a focused omission case in existing parser tests.
 

@@ -725,10 +725,53 @@ export class CdpNetworkResponseCapture {
   }
 
   timeoutMessage(timeoutMs: number): string {
+    const evidence = this.responseSummary();
     if (this.selected) {
-      return `browser navigation timed out after ${timeoutMs}ms after receiving ${JSON.stringify(this.selected.url)} but before its response body completed`;
+      return `browser navigation timed out after ${timeoutMs}ms after receiving ${JSON.stringify(this.selected.url)} but before its response body completed; observed network responses: ${evidence}`;
     }
-    return `browser navigation timed out after ${timeoutMs}ms waiting for ${describeNetworkResponseMatcher(this.matcher)}`;
+    return `browser navigation timed out after ${timeoutMs}ms waiting for ${describeNetworkResponseMatcher(this.matcher)}; observed network responses: ${evidence}`;
+  }
+
+  /** Factual failure evidence only: never relax or replace the chosen matcher. */
+  private responseSummary(): string {
+    const responses = [...this.responses.values()].filter(
+      (response) =>
+        this.afterRequestSequence === undefined ||
+        (response.requestSequence !== undefined &&
+          response.requestSequence > this.afterRequestSequence),
+    );
+    const recent = responses.slice(-12).map((response) => {
+      let endpoint: string;
+      let endpointTruncated = false;
+      try {
+        const url = new URL(response.url);
+        // Query values, userinfo, fragments, headers and bodies are not needed
+        // to compare endpoint/method/type facts. Ordinary redaction still applies.
+        const path =
+          url.protocol === 'https:' || url.protocol === 'http:'
+            ? `${url.origin}${url.pathname}`
+            : '[non-HTTP URL]';
+        endpoint = path.slice(0, 240);
+        endpointTruncated = path.length > endpoint.length;
+      } catch {
+        endpoint = '[unparseable URL]';
+      }
+      return {
+        endpoint,
+        ...(endpointTruncated ? { endpointTruncated: true } : {}),
+        method: response.method?.slice(0, 16) ?? null,
+        resourceType: response.resourceType?.slice(0, 32) ?? null,
+        status: response.status,
+        inNavigationScope: this.navigationScopeReady ? this.matchesNavigationScope(response) : null,
+      };
+    });
+    return JSON.stringify({
+      count: responses.length,
+      omitted: responses.length - recent.length,
+      matchingRequestCount: this.matchingRequestOrder.length,
+      navigationScopeReady: this.navigationScopeReady,
+      recent,
+    });
   }
 
   private matchesMatcher(response: ObservedCdpNetworkRequest): boolean {

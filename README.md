@@ -154,7 +154,10 @@ frame does not hide later records; agents derive the expected result from eviden
 Failed browser calls can include bounded page evidence from browser inspection,
 including through fallback and MCP audit errors. Agents use it to investigate missing
 captures without treating a timeout as automatic infrastructure failure or rendered
-text as API success.
+text as API success. Network-capture timeouts also include a bounded list of
+observed response endpoints, methods, resource types, statuses and navigation
+scope facts, with omitted counts. These facts help agents compare a failed
+matcher with actual traffic; they do not change response selection.
 Parser checks distinguish unsupported missing fields from evidenced protocol defaults.
 Auditors receive exact report tool names.
 Planning and final review also check how callers obtain required inputs,
