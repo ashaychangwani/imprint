@@ -1,7 +1,43 @@
 # Teach rebuild handoff — September 7, 2026
 
 
-## Current continuation — 2026-09-14 00:24 PDT: Thirty-minute target missed during booking research
+## Current continuation — 2026-09-14 00:54 PDT: Continue after one-hour assessment of search repair
+
+At60minutes, continue Flights43 unchanged on a283cd2 to its original08:23:01UTC
+hard deadline. PID35614 remains active; journalrevision3. Lookup and calendar
+are published with current passed contract/live receipts and credible reviews.
+Lookup SFO returned two ranked matches in0.231s; calendar returned49cells in
+34.377s including the October23/November5 pair atUSD99. Timings include setup.
+Search and booking have no current receipts. These two working tools and a
+concrete search repair justify the remaining30minutes, not an extension.
+
+Booking research recovered after four failed CDP calls (91.716s,91.579s,91.150s,
+91.000s). Its33.779s API capture identifies the fresh producer's F92858 SFO–LAX
+October20 itinerary and Frontier43/75USD plus another provider offer. The valid
+handoff retains six observations. Master review has not yet yielded a generated
+booking tool or a fresh generated chain. The candidate accepts one flight only;
+connecting scope and optional fare metadata remain unproven.
+
+Generated search failed twice:91.812s transport (99.380s receipt including
+pacing), then150.932s transport after a retained compiler repair. Master returned
+the failure to the same researcher. It now compares the recorded XHR restriction
+with a broader endpoint/method matcher, using changed locale-qualified URLs to
+avoid repeating the preceding exact navigation. The broader candidate captured
+fresh structured results in35.181s. A further Fetch-type contrast is in progress.
+These are the researcher's causal hypotheses and tests, not yet proof of the
+source of every timeout or a passing emitted search. Do not change runtime
+matching rules, inject parent diagnosis, or count a research response as an audit.
+
+Lookup uses fetch; calendar and current search/booking research use CDP API
+capture. The rendered-readiness guidance is not yet independently exercised by
+a published rendered tool. No repeatability claim. Continue sequentially with
+no code changes or parallel live diagnostics. Disk15.23GiB. Accounting remains
+throughaudit42 at$924.310912baseestimate,50teaches/39audits,35missingsemantic
+calls and prior caveats; active43excluded. Hotels policy rejection unresolved,
+no automatic retry/bypass/model switch. No push,MR,merge,reset,evidence deletion.
+
+
+## Previous continuation — 2026-09-14 00:24 PDT: Thirty-minute target missed during booking research
 
 Flights43 remains active on a283cd2, PID35614, run
 c9c450fe-56fd-4469-83c4-1145cdecca7b. At30minutes no tools are published and no
