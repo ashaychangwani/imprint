@@ -1,5 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 10:46 PDT — Launch fresh click-diagnostic validation
+
+Flights49 started at2026-09-14T17:46:29.436651UTC on 90db75e, PID68324.
+Unused home-49, exclusive flights-teach-49.log and manifest, original recording
+and exact four-operation guidance, two workers. Target18:16:29UTC, assessment
+18:46:29UTC, hard deadline19:16:29UTC. Preflight verified clean correct branch
+and source ancestry, stopped prior teach/audit/diagnostics/preview, collectorHTTP200,
+intact recordings, AC100% and12.23GiBfree. Keep implementation unchanged.
+
+Watch whether actual click-target facts reach researchers and compilers after
+failures and support agent-chosen repairs. Preserve valid failed inputs and fresh
+coherent producer records. The private single-action search diagnostic passed
+baseline and warm repeat, but its selectors/action strategy were not supplied
+to this teach. No claim of full audit or repeatability. Audit published tools
+independently after completion; no resumed failure or concurrent live work.
+
+Accounting throughaudit48 remains56teaches/45audits,$1069.2337408base
+API-equivalent estimate, with prior missing usage/pricing caveats. Active49excluded.
+Hotels policy rejection remains unresolved. No push, MR, merge, reset or evidence
+deletion. Reviewable local checkpoints and all failed evidence retained.
+
+
 ## 2026-09-14 10:45 PDT — Expose click geometry after reproducing the search failures
 
 The corrected private diagnostic reproduced the final search failure in 92.699
