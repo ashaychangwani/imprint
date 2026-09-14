@@ -13716,3 +13716,27 @@ remain unproven. Collector6440healthy andwriting;9.72GiBfree. Battery49%estimate
 4h28m; checkagainatonehour. Accounting unchangedthroughaudit51,active52excluded.
 All failed observations preserved. No push,MR,merge,reset,evidencedeletion or
 repeatabilityclaim. Hotels providerpolicyrejection remains unresolved.
+
+
+## 2026-09-14 16:35 PDT — Fresh booking URL resolves the research boundary
+
+Flights52 remains active around52minutes on unchanged2d57e13. The retained master
+and researchers revised the consumer from selection_token to one booking_url
+constructed from a coherent fresh search record. Search retained6observations,
+including booking navigation proof for AS1329SFO–LAXOctober21. Consumer then called
+fresh search: one91.831-second network failure, followed by a34.275-second completed
+producer request. Its own33.534-second navigation captured populatedGetBookingResults
+for AS1329SFO–LAXOctober22, with matching itinerary,Alaska options,prices andUSD.
+Consumer observationc0b8fec4-e0ac-4a72-a7f6-b01f954850f3,7retainedobservations.
+No stale selection or shared browser state was needed. Navigation regenerated
+page-owned context; selection_token is no longer a separate public consumer input.
+The master is reviewing first-pass research; no focusedjournal/publishedtools yet.
+This is research proof, not generated-tool or independent-audit success. Public
+search descriptions still require alignment with its three-letter-airport MVP.
+
+Collector6440HTTP200 and tracefilewriting at23:33UTC;newNode74790healthy,old54899
+remainsSIGSTOP. Free9.62GiB,battery44%estimated3h24m. Original23:42:57UTCassessment
+andSeptember15 00:12:57UTC harddeadline unchanged. No codechange/concurrentlivework.
+Accounting remains throughaudit51;active52excluded. Failed observations preserved.
+No push,MR,merge,reset,evidence deletion or repeatabilityclaim. Hotels policyblock
+remains unresolved.
