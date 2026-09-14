@@ -1,6 +1,31 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-14 03:21 PDT: Preserve failed audit and test capture reuse before planning
+## Current continuation — 2026-09-14 03:20 PDT: Launch fresh capture-reuse validation
+
+Flights 45 started September 14 at 10:19:09.712240 UTC on implementation a36ec1c,
+PID 15636, unused home-45 and exclusive flights-teach-45.log/manifest. Target
+10:49:09 UTC, assessment11:19:09 UTC, hard11:49:09 UTC. Original recording and
+exact four-operation guidance; configured two workers. Preflight confirmed the
+correct clean branch descended from34a6235, both prior processes ended, both
+recordings intact, collectorHTTP200, AC100%, and13.74GiBfree.
+
+Monitor whether navigation research actually repeats a valid call and compares
+one coherent core-input variation before accepting the source. Preserve the
+exact failing inputs and conversation when repair is needed. Fresh coherent
+search selections must feed booking. This is first validation of the new guidance,
+not a claim that capture reuse is repaired. No prior generated tools or private
+parent diagnosis supplied. Keep implementation unchanged; audit after completion,
+then require unchanged-code repeatability. No concurrent live diagnostics.
+
+Accounting is complete through audit44:52teaches/41audits,93traces/10,839spans,
+3,498usage,4025.401756946034summedminutes,791,756,817input,657,839,488cache
+reads,8,477,875output,zero emittedwrites,$968.3626112baseestimate.35missing
+semantic calls and prior interrupted-CLI/pricing caveats remain. Active45excluded.
+Hotels policy rejection unresolved; no automatic retry, bypass or model switch.
+No push, MR, merge, reset or evidence deletion.
+
+
+## Previous continuation — 2026-09-14 03:18 PDT: Preserve failed audit and test capture reuse before planning
 
 Audit 44 ended after 9.6940154049 minutes and failed 18/22 graded units
 (81.82 percent). The 15 actual calls were 12 correct and 3 broken, with no

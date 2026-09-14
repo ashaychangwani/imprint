@@ -2055,7 +2055,7 @@ API-equivalent estimate. The 35 earlier missing semantic calls and interrupted
 CLI/pricing caveats remain. Active audit 44 is excluded.
 
 
-## 2026-09-14 03:21 PDT — Preserve failed audit and test capture reuse before planning
+## 2026-09-14 03:18 PDT — Preserve failed audit and test capture reuse before planning
 
 Audit 44 ended after 9.6940154049 minutes and failed 18/22 graded units
 (81.82 percent). The 15 actual calls were 12 correct and 3 broken, with no
