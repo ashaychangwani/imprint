@@ -1,5 +1,51 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Current continuation — 2026-09-14 08:20 PDT
+
+Flights 47 ended at its original hard deadline on unchanged 0a02ab7. PID 90900
+has exited. Root duration 90.0421947382 minutes; journal revision 5 is failed.
+Three tools were published: search_flight_locations, search_flights and
+get_flight_date_grid. Booking tool select_flights finished compilation and passed
+its artifact contract, but only 22 seconds remained for its live check. That
+check timed out during browser setup; the grouped three-edge search-to-booking
+check then had zero seconds remaining. Neither produced a checked result.
+Do not describe this as a semantic booking failure or a proven generated chain.
+The teach failed the four-operation objective despite its three usable tools.
+
+The first generated search review had rejected missing one-adult proof. Retained
+research then compared one and two adults with otherwise unchanged inputs:
+rendered labels changed from one adult to two passengers, first-flight price from
+$59 to $117, and response-owned emissions/bag counts also changed. The resulting
+10-observation search handoff was accepted; rebuilt search passed semantic review
+and was published after 45.252 seconds of transport including setup. Earlier
+failed reviews remain. Calendar passed with all 49 requested date pairs.
+Booking compilation took almost six minutes; it did not receive enough remaining
+time for live verification. No code/prompt change or deadline extension occurred.
+
+Independent audit 47 started 2026-09-14T15:19:30.157576 UTC, PID 28706,
+home-47, exclusive flights-audit-47.log and manifest, unchanged implementation,
+45-minute deadline 16:04:30 UTC. It sees exactly the three published tools;
+booking remains absent regardless of the resulting score. Disk 13.16 GiB,
+collector healthy, prior teach stopped. No concurrent live diagnostics.
+
+Teach accounting: trace rz0aaFFMCTvr8VLqO7s13Q==, 372 spans / 95 usage spans,
+28,367,614 input, 24,818,816 cache reads, 262,741 output, zero emitted writes,
+$29.3775384 base estimate, no missing semantic usage spans. Campaign totals:
+55 teaches / 43 completed audits, 98 traces / 11,684 spans / 3,771 usage spans,
+4290.1023336224 summed minutes, 860,762,316 input, 717,689,472 cache reads,
+9,117,320 output, zero emitted writes, $1041.7135648 base estimate. Active audit 47
+excluded. Prior 35 missing semantic calls, interrupted CLI and pricing caveats
+remain. Accounting is API-equivalent, not an invoice.
+
+Next: inspect the independent audit and actual failed cases before choosing a
+correction. Preserve the unpublished booking artifact and timeout receipts for
+separate diagnosis. Do not resume 47 or treat a later diagnostic as teach success.
+Response arrays reached compilers, but every selected candidate had one workflow
+response; the multi-response case remains unexercised live. Hotels policy rejection
+is unresolved; no automatic retry, bypass or model switch. No push, MR, merge,
+reset, evidence deletion or previous generated tools supplied to teachers.
+
+
 ## Current continuation — 2026-09-14 07:48 PDT
 
 At the one-hour assessment, Flights 47 remains active on unchanged 0a02ab7,
