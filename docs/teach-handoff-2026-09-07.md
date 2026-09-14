@@ -1,6 +1,49 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 23:08 PDT
+## Current continuation — 2026-09-13 23:27 PDT
+
+Flights42 completed all four tools in75.42357401735minutes on7df97c3, before
+the original90-minute deadline but beyond the30-minute target. PID98981 ended.
+Final journal revision4 has current contract/live receipts for all tools and a
+passing search-to-booking chain; completion review accepted the plan. The run
+recovered malformed booking reports, retained failed observations, and repaired
+a generated search capture through retained research and compiler history.
+
+Lookup uses direct fetch. Search and booking use rendered CDP documents; grid
+uses CDP API response capture. Each published backends.json retains its reviewed
+choice. Public scope: location query; one-way search with IATA airport codes and
+departure date; nearby grid with origin/destination and two anchor dates; booking
+from the unchanged versioned scalar returned by a complete search card. Grid
+advertises location entity IDs as well as codes; that representation still needs
+independent coverage. No separate date-window bounds or round-trip search inputs.
+
+Repaired generated search returned21LAX–LAS itineraries in33.648s. Booking baseline
+identified F9 3308 SFO–LAX October22 and21offers in33.682s; the fresh producer chain
+identified F9 3292 LAX–LAS October20 and18offers in32.165s. Both semantic reviews
+were credible. Timings include setup; the chain seeded existing tool-specific
+cookies, and warm/setup costs are not separately established. These nonstop
+cases do not prove connecting groups or repeatability. Raw failed capture and
+malformed-report evidence remain, with no prior tools supplied to teachers.
+
+Independent audit42 started September14 06:26:06UTC, PID31783, same home-42,
+flights-audit-42.log and flights-audit-42-manifest.json. Deadline07:11:06UTC.
+Preflight clean source-descended branch, prior live processes ended, collector200,
+AC100%,15.70GiB free. No code changes or concurrent live diagnostics during audit.
+Inspect actual calls, input coverage, exclusions, default backend behavior and
+fresh coherent booking selections; preserve the report. If supported, test missing
+connecting coverage where advertised and repeat a NEW teach on unchanged code.
+Hotels remains unresolved after the provider policy rejection; no automatic retry.
+
+Teach42 accounting:262spans/81usage,17,915,325input,13,802,624cache reads,
+216,653output,zero emitted writes,$26.3049136base estimate. One deferred optional
+finesse call lacks usage, raising missing semantic calls to35. Totals50teaches/
+38audits,88traces/10,322spans/3,356usage,3841.115817745334minutes,
+757,377,879input,629,798,400reads,8,058,980output,zero writes,$923.416876base
+API-equivalent estimate. Prior pricing/interrupted-CLI caveats remain; active
+audit42excluded. Original malformed-report recovery is live-validated; repeated
+invocation feature is still unexercised. No push, MR, merge, reset or deletion.
+
+## Previous checkpoint — 2026-09-13 23:08 PDT
 
 At about63minutes, continue Flights42 unchanged to its original90-minute
 deadline. Lookup and calendar are published with current contract/live receipts
