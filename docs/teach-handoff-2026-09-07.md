@@ -1,6 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 22:04 PDT
+## Current continuation — 2026-09-13 22:34 PDT
+
+Flights42 missed the30-minute target with no published tools and no current
+implementation journal. Lookup, search and the narrowed nearby-date grid have
+proven research and draft compilation; booking remains factually blocked.
+These are research results, not validated public tools. PID98981 remains active
+on7df97c3, run3af0578d-20f3-4e01-9484-59f0dea5bcd5, home-42.
+
+Booking called the current search producer for fresh upstream values in34.121s
+including setup. Subsequent direct transports completed without proving booking;
+CDP returned BAD_RESPONSE after31.021s and a navigation failure after91.114s.
+The blocked handoff reached the master, which requested retained research and
+received another blocked report. This is observed ordinary blocked-handoff
+handling, not exercise of the original malformed-report recovery catch.
+
+Calendar research removed independently adjustable window bounds and demonstrated
+a seven-day grid around departure/return anchors. Its earlier91.134s failure is
+preserved. The latest35.392s CDP API capture returned the requested center pair
+and nearby fares. Search research captured structured shopping results through
+CDP; lookup used direct fetch. No completion, repeatability or root-cause claim
+follows from these transports. Agent histories and failed evidence remain intact.
+
+Continue unchanged to the06:04:26UTC assessment and original06:34:26UTC hard
+deadline September14. Disk15.87GiB. No concurrent live diagnostic or code change.
+Accounting remains throughaudit41 at$897.1119624base API-equivalent estimate,
+active42excluded,34missingsemanticcalls andpriorcaveats retained. Hotels policy
+rejection unresolved; no automatic retry. No push, MR, merge, reset or deletion.
+
+## Previous checkpoint — 2026-09-13 22:04 PDT
 
 Fresh Flights42 started September14 05:04:26UTC on implementation7df97c3,
 PID98981, unused home-42 and exclusive flights-teach-42.log/manifest. Target

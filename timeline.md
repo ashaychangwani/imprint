@@ -11544,3 +11544,32 @@ Audit41 accounting is complete at$1.0450768base estimate. Overall49teaches/
 739462554input,615995776cache reads,7842327output,zero emitted writes,
 $897.1119624base API-equivalent estimate;34missing semantic calls and previous
 caveats retained. Active42 excluded. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 22:34 PDT — Target missed while master repairs blocked booking research
+
+Flights42 missed the30-minute target with no published tools and no current
+implementation journal. Lookup, search and the narrowed nearby-date grid have
+proven research and draft compilation; booking remains factually blocked.
+These are research results, not validated public tools. PID98981 remains active
+on7df97c3, run3af0578d-20f3-4e01-9484-59f0dea5bcd5, home-42.
+
+Booking called the current search producer for fresh upstream values in34.121s
+including setup. Subsequent direct transports completed without proving booking;
+CDP returned BAD_RESPONSE after31.021s and a navigation failure after91.114s.
+The blocked handoff reached the master, which requested retained research and
+received another blocked report. This is observed ordinary blocked-handoff
+handling, not exercise of the original malformed-report recovery catch.
+
+Calendar research removed independently adjustable window bounds and demonstrated
+a seven-day grid around departure/return anchors. Its earlier91.134s failure is
+preserved. The latest35.392s CDP API capture returned the requested center pair
+and nearby fares. Search research captured structured shopping results through
+CDP; lookup used direct fetch. No completion, repeatability or root-cause claim
+follows from these transports. Agent histories and failed evidence remain intact.
+
+Continue unchanged to the06:04:26UTC assessment and original06:34:26UTC hard
+deadline September14. Disk15.87GiB. No concurrent live diagnostic or code change.
+Accounting remains throughaudit41 at$897.1119624base API-equivalent estimate,
+active42excluded,34missingsemanticcalls andpriorcaveats retained. Hotels policy
+rejection unresolved; no automatic retry. No push, MR, merge, reset or deletion.
