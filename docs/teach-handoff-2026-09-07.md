@@ -1,5 +1,49 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 16:57 PDT — Flights 52 completes; independent audit started
+
+Flights 52 completed all four tools at 23:51:18 UTC in 68.349248 minutes
+on unchanged implementation 2d57e13. Run acda415d-90bd-4422-b948-365c307853f2,
+home /tmp/imprint-fresh-inputs-VYbJm1/home-52; teach PID 77552 exited.
+Location lookup uses direct fetch; search, calendar and booking capture API
+responses through separate CDP browser sessions. Search is explicitly one-way
+with three-letter airport codes; optional breadth was deferred.
+
+The retained master repaired booking's public input from an insufficient token
+to a booking URL built from a coherent fresh search record. Booking standalone
+passed in 34.732 seconds with 22 offers for AS1329, SFO–LAX, October 22. The
+fresh generated chain passed in 32.673 seconds with 21 offers for AS1329 on
+October 21. Both core reviews and final completion review passed. These timings
+include setup, not warm reuse. Lookup 0.219 seconds; search 34.957 seconds after
+an earlier failed capture; calendar 35.299 seconds and 49 date pairs. The failed
+search observation remains preserved. Private source counts confirmed the earlier
+research claim of 56 cells was wrong: all three populated responses contain 49.
+
+Independent audit 52 started 23:55:44.547336 UTC, PID 6685, same home/code,
+exclusive flights-audit-52.log and manifest. Its deadline is September 15 at
+00:40:44 UTC. Preflight confirmed prior teach ended, clean correct branch/source
+ancestry, intact original recording, collector 6440 healthy and 9.57 GiB free.
+Do not run concurrent live diagnostics. After audit, inspect uncovered connecting
+itinerary behavior: the producer currently constructs booking URLs from the first
+segment only. This is a coverage concern, not yet an observed live failure.
+Independent overnight-date, source-coverage and classification checks remain due.
+
+Teach trace BEPHQpEbFDQtyJaag1VxvQ== contains 262 spans and 71 usage spans,
+all reporting usage; no missing analysis call in this run. Recorded 16,532,169
+input including 13,143,808 cache reads, 191,051 output, zero emitted
+writes, and $22.6319872 base API-equivalent estimate.
+Campaign through teach 52: 60 teaches, 48 audits, 4713.120548 summed minutes,
+965,466,145 input including 805,957,248 reads, 10,178,900 output, zero emitted
+writes, $1163.9964872 base estimate. Active audit 52 is excluded. Prior 36 missing
+analysis calls, interrupted CLI usage and teach 51 recovery limitations remain.
+107 completed traces / 12,822 spans / 4,081 usage spans, plus teach 51's separately
+recovered 105 provider turns; do not double count its partial trace.
+
+Use new Node collector 74790 at http://127.0.0.1:6440/v1/traces. Old collector
+54899 remains paused with memory retained. No evidence deleted. Hotels' provider
+policy rejection remains unresolved. No full repeatability claim, push, MR or merge.
+
+
 ## 2026-09-14 15:43 PDT — Launch fresh source-coverage validation
 
 Flights52 started2026-09-14T22:42:57.049442UTC,PID77552,on2d57e13.
