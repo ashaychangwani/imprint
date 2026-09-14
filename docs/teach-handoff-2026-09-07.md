@@ -5132,3 +5132,27 @@ Those are experiment settings, not universal runtime policy.
 - Fresh producer calls, cached CDP reuse, HTTP success, and final semantic
   correctness are different facts. Warm CDP timing must be measured separately
   from setup, and state must not be shared across tools or rungs.
+
+
+## 2026-09-14 12:26 PDT — Fresh Flights50 validates producer-structure guidance
+
+Flights50 started2026-09-14T19:25:51.597102UTC, PID710, on implementatione30d431.
+Unused /tmp/imprint-fresh-inputs-VYbJm1/home-50, exclusive flights-teach-50.log
+and flights-teach-50-manifest.json. Original Flights recording and exact four-
+operation scope, configured two workers. Target19:55:51UTC, assessment20:25:51UTC,
+hard deadline20:55:51UTC (13:55PDT). Keep implementation unchanged through teach
+and independent audit. No concurrent live checks. Verified source ancestry,
+clean branch, prior teach/audit/preview stopped, collectorHTTP200, AC100%, intact
+28,053,884-byte Flights and13,570,216-byte Hotels recordings,11.93GiBfree.
+
+Watch whether agents compare the actual selected record structure with consumer
+constraints and choose compatible fresh producer values, including multiple
+members when available. A narrow explicit shared scope remains an agent choice;
+unsupported inputs must not be silently accepted or advertised. No site-specific
+runtime logic, old generated tools or private diagnostic strategy supplied.
+
+Flights49 remains an independent auditpass with a subsequent concrete connecting
+failure, not repeatability proof. Its original report and all15recordedinvocations
+remain unchanged. Accounting throughaudit49:57teaches/46audits,$1088.1303312base
+API-equivalent, active50excluded, prior35missingsemanticcalls and pricingcaveats
+remain. Hotels policy rejection unresolved. No push,MR,merge,reset,evidence deletion.
