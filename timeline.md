@@ -12879,3 +12879,51 @@ Accounting unchanged throughaudit47:55teaches/44audits,$1042.4069792base
 API-equivalent; active48excluded and prior missing usage/pricing caveats remain.
 Hotels policy rejection unresolved, no automaticretry/bypass/modelswitch. No push,
 MR,merge,reset,evidence deletion or old artifacts/private diagnosis to teachers.
+
+
+## 2026-09-14 10:24 PDT — Record partial completion and audit the two published tools
+
+Flights48 ended in89.8979110708minutes on unchanged d07a033, just before its
+original90-minute deadline. PID32522exited. Journalrevision7statuspartial, with
+search_flight_locations and get_flight_date_grid published; search and booking
+remain explicitly unresolved. The master narrowed the final build to already
+reviewed tools, and completion review accepted that partial result. This is NOT
+a four-operation success, a failed deadline cancellation, or repeatability proof.
+
+Lookup passed after two retained semantic repairs: nearby airports had inherited
+the parent city identifier, then rail-station codes were mislabeled airport codes.
+The accepted result distinguishes location types and their code fields; final
+fetch took0.419s. Calendar passed49cells in33.551s including setup, with the
+November3/10pair atUSD190 and response-decoded currency. Its broader input
+coverage still needs independent audit.
+
+Search's generated tool failed all six successive live checks despite its
+successful research candidate:91.514s,45.503s,91.753s,91.423s,91.419s,92.187s.
+Retained compiler revisions changed selectors and interaction scoping; none
+produced a verified continuation result. The master preserved these failures and
+left the API operation unresolved without claiming infeasibility or moving to a
+playbook. Booking was researched with a fresh complete AS1327/AS688selection,
+but its generated compiler and final producer-consumer chain never ran because
+search remained unverified. Do not call research-only booking proof a tool pass.
+
+Independent audit48 started2026-09-14T17:22:51.572424UTC, PID65167,home-48,
+exclusive flights-audit-48.log/manifest; deadline18:07:51UTC. It sees ONLYlookup
+andcalendar. A partial audit pass cannot satisfy search/booking or the fullscope.
+Preflight confirmed prior teach ended, clean branch, healthycollector,12.48GiBfree.
+No concurrent live diagnostics or code changes. Preserve report and actual failed
+inputs, then diagnose generated interaction failures before choosing a correction.
+
+Teach48 accounting:traceANXXRFYPUGkuud+IgeXHIg==,312spans/84usage,
+24,294,639input,20,971,648cache reads,230,848output,0emittedwrites,
+$26.2975832baseestimate,zero missingsemanticusage. Campaign56teaches/44audits,
+100traces/11,999spans/3,856usage,4389.8450905863summedminutes,
+886,067,221input,739,629,056cache reads,9,355,014output,zeroemittedwrites,
+$1068.7045624baseAPI-equivalent estimate. Activeaudit48excluded; prior35missing
+semanticcalls/interruptedCLI and pricing caveats remain. Notaninvoice.
+
+The d07a033 bounded wait was exercised in research but failed to recover two
+missing targets. Successful delayed-target recovery and freshteachrepeatability
+remain unproven. Orderedmulti-response evidence is still unexercisedlive because
+selectedworkflows hadone response. Hotels provider policyrejection remains
+unresolved; no automaticretry/bypass/modelswitch. No push,MR,merge,reset,evidence
+deletion or old generated artifacts/private diagnosis supplied to teachers.
