@@ -13258,3 +13258,32 @@ failure, not repeatability proof. Its original report and all15recordedinvocatio
 remain unchanged. Accounting throughaudit49:57teaches/46audits,$1088.1303312base
 API-equivalent, active50excluded, prior35missingsemanticcalls and pricingcaveats
 remain. Hotels policy rejection unresolved. No push,MR,merge,reset,evidence deletion.
+
+
+## 2026-09-14 13:00 PDT — Target missed; complete selection remains the booking blocker
+
+Flights50 is active after its30-minute target on unchangede30d431, run
+78fe03fd-83fd-4009-9aa7-e529f45f668d. No generated tools published or focused
+plan yet. Lookup is research-proven,0.438-second fetch. Calendar retained6tests,
+proved49date pairs and route contrasts, then its retained researcher cleared the
+partial handoff by explicitly omitting the unlabeled trailing scalar instead of
+advertising a guessed relative-price classification. Selected CDP call3.587seconds;
+verify actual pool reuse before calling that a warm measurement.
+
+Search retained7observations and a150,192-byte GetShoppingResults capture with
+round-trip prices. Two repeated captures and a return-date-only contrast changed
+the same DL934 outbound fare tuple from387 to398. Its selected capture took
+48.220seconds including setup. However, these are initial outbound choices:
+booking still lacks the fresh post-return-selection token and complete itinerary.
+The master returned search to its retained researcher to prove the intermediate
+continuation and identify both exact booking values from one complete record.
+Booking then must call that updated producer and verify credible provider options.
+Earlier recorded-token and fresh-outbound-only booking attempts returned protocol
+error13; those failures remain evidence, not API exhaustion or a tool pass.
+
+Continue original20:25:51UTCassessment/20:55:51UTCharddeadline, no extension.
+No claim yet for multi-member producer compatibility, new click diagnostic repair,
+fullscopeaudit or repeatability. Free10.90GiB; no evidence deletion. Accounting
+unchanged throughaudit49, active50excluded. No implementationchanges,private
+strategy injection,concurrentlivework,push,MR,merge,reset. Hotels policyrejection
+unresolved.
