@@ -299,7 +299,11 @@ Each navigation click polls its exact selector at `pollIntervalMs` until the
 target is visible and hit-testable, using the remaining navigation deadline.
 The click is dispatched once; its capture boundary begins only at dispatch,
 not while waiting for the target. Invalid selector evaluation, CDP errors and
-browser closure fail rather than polling indefinitely.
+browser closure fail rather than polling indefinitely. The final failed target
+evaluation is included in the error: match count, first target and parent tag/id/
+class/role, computed display/visibility/pointer-events, rectangle, and the actual
+center-hit element. Identifying strings are bounded and no page text is copied.
+These facts do not select another element or change click acceptance.
 The workflow keeps two exact recording origins: the outer
 `recordingRequestSeq` identifies the document navigation being sent, while
 `networkResponse.recordingResponseRequestSeq` identifies the background

@@ -300,6 +300,13 @@ actually requires them after navigation.
 
 When a specific action triggers the desired response, you may set `networkResponse.actionIndex` to that zero-based action index. Matching begins immediately before that click is dispatched; earlier request starts cannot satisfy it even if they finish later. Omit it to capture from navigation start. Navigation clicks poll their exact selector until it is clickable within the remaining navigation timeout, then dispatch once. Waiting does not activate an action-scoped capture. Choose this boundary from the observed operation, not a guessed response occurrence. A pre-action response may be cancelled or replaced by the action; do not treat its headers as the final result.
 
+Failed clicks include bounded target diagnostics: match count, first-match
+bounds and computed styles, parent identity, and the actual center-hit element.
+Inspect these facts with the current page before revising the interaction. A
+matched element may have no area or pass pointer events through to another
+element. If the page already advanced, reassess the remaining actions and the
+action that triggers the desired response.
+
 For rendered-document extraction after navigation or an action, a document
 load event, an existing page shell, or an updated control does not prove the
 result collection finished rendering. Use an observed completion condition for

@@ -42,6 +42,77 @@ describe('buildNavigationClickTargetExpression', () => {
   });
 });
 
+describe('navigation click target facts', () => {
+  it('reports bounded geometry and hit facts without choosing another element', () => {
+    class FixtureElement {
+      tagName = 'BUTTON';
+      parentElement: FixtureElement | null = null;
+      attrs: Record<string, string> = {};
+      style = { display: 'block', visibility: 'visible', pointerEvents: 'auto' };
+      rect = { x: 10, y: 20, left: 10, top: 20, width: 100, height: 40 };
+      disabled = false;
+      focused = false;
+      getAttribute(name: string) {
+        return this.attrs[name] ?? null;
+      }
+      getBoundingClientRect() {
+        return this.rect;
+      }
+      scrollIntoView() {}
+      matches() {
+        return this.disabled;
+      }
+      contains(element: unknown) {
+        return element === this;
+      }
+      focus() {
+        this.focused = true;
+      }
+    }
+    const target = new FixtureElement();
+    const blocker = new FixtureElement();
+    blocker.attrs.class = 'cover';
+    const parent = new FixtureElement();
+    parent.attrs.role = 'group';
+    target.parentElement = parent;
+    target.attrs.class = 'x'.repeat(1000);
+    const evaluate = (element: FixtureElement | null, hit = element) =>
+      runInNewContext(buildNavigationClickTargetExpression('#fixture'), {
+        Element: FixtureElement,
+        getComputedStyle: (node: FixtureElement) => node.style,
+        document: {
+          querySelector: () => element,
+          querySelectorAll: () => (element ? [element, blocker] : []),
+          elementFromPoint: () => hit,
+        },
+      });
+    target.style.pointerEvents = 'none';
+    const covered = evaluate(target, blocker).diagnostic;
+    expect(covered.reason).toBe('center_hit_other_element');
+    expect(covered.matchedCount).toBe(2);
+    expect(covered.target.pointerEvents).toBe('none');
+    expect(covered.target.class.length).toBe(160);
+    expect(covered.parent.role).toBe('group');
+    expect(covered.hit.class).toBe('cover');
+    expect(covered.rect).toEqual({ x: 10, y: 20, width: 100, height: 40 });
+    expect(target.focused).toBe(false);
+    target.rect.width = 0;
+    expect(evaluate(target).diagnostic.reason).toBe('zero_area');
+    target.rect.width = 100;
+    target.disabled = true;
+    expect(evaluate(target).diagnostic.reason).toBe('disabled');
+    expect(evaluate(null).diagnostic).toMatchObject({
+      reason: 'not_found',
+      matchedCount: 0,
+      target: null,
+    });
+    target.disabled = false;
+    target.style.pointerEvents = 'auto';
+    expect(evaluate(target)).toEqual({ x: 60, y: 40 });
+    expect(target.focused).toBe(true);
+  });
+});
+
 describe('buildInPageFetchExpr', () => {
   it('keeps the request timeout active while reading the response body', async () => {
     let abortedDuringBodyRead = false;
@@ -1154,6 +1225,11 @@ describe('navigation network-response capture', () => {
                 if (targetState === 'invalid') {
                   return { result: {}, exceptionDetails: { text: 'Invalid CSS selector' } };
                 }
+                if (targetState === 'diagnostic') {
+                  return {
+                    result: { value: { diagnostic: { reason: 'zero_area', matchedCount: 2 } } },
+                  };
+                }
                 if (targetState === 'transport-error') throw new Error('CDP disconnected');
                 if (targetState === 'closed') await browser.close();
                 if (targetState !== 'delayed' || targetAttempts <= 2) {
@@ -1284,6 +1360,7 @@ describe('navigation network-response capture', () => {
       expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
       for (const [state, message] of [
         ['missing', 'within 120ms'],
+        ['diagnostic', 'target diagnostics: {"reason":"zero_area","matchedCount":2}'],
         ['invalid', 'Invalid CSS selector'],
         ['transport-error', 'CDP disconnected'],
         ['closed', 'browser closed'],
@@ -1300,7 +1377,7 @@ describe('navigation network-response capture', () => {
           }),
         ).rejects.toThrow(message);
         expect(clicked).toBe(0);
-        if (state === 'missing') {
+        if (state === 'missing' || state === 'diagnostic') {
           expect(targetAttempts).toBeGreaterThan(1);
           expect(Date.now() - started).toBeLessThan(1000);
         } else {

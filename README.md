@@ -156,7 +156,9 @@ Agents can scope a background response capture to a specific navigation click.
 Requests started before that action cannot satisfy the capture, including ones
 that finish later. Without an action boundary, capture starts with navigation.
 Navigation clicks wait for the selected target to become clickable within the
-existing navigation deadline, then dispatch once.
+existing navigation deadline, then dispatch once. Failed clicks report bounded
+match, geometry, computed-style and center-hit facts so agents can repair their
+chosen interaction from actual page evidence.
 Before accepting a navigation capture as reusable, researchers repeat a valid
 input and compare a small core-input variation with the same candidate. They
 reuse existing decisive observations and distinguish session reuse from setup.

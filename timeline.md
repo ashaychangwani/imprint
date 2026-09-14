@@ -12962,3 +12962,55 @@ Campaign56teaches/45audits,101traces/12,002spans/3,857usage,
 Prior35missingsemanticcalls/interruptedCLI and pricing caveats remain. No new
 teach started. Hotels policy rejection unresolved. No codechange,push,MR,merge,
 reset or evidence deletion. Runtime strategy remains agent-owned.
+
+
+## 2026-09-14 10:45 PDT — Expose click geometry after reproducing the search failures
+
+The corrected private diagnostic reproduced the final search failure in 92.699
+seconds including setup. Across 227 evaluations, its chosen overlay had a visible
+1022-by-74 rectangle but pointer-events:none; the center hit a sibling duration
+element. The runtime correctly rejected that target. The earlier diagnostic's
+warm repeat also failed in 60.253 seconds; its over-escaped instrumentation remains
+preserved with its limitation, alongside valid original results and page snapshots.
+
+A private in-memory variant selected the observed card parent. That click advanced
+to the return-flight stage, but the remaining global Select flight selector had
+zero area and timed out. Both calls failed: 92.042 seconds including setup and
+60.209 seconds warm. Its actionIndex1 boundary also excluded the response caused
+by the first action. A second private variant used the one necessary parent click
+and actionIndex0. It returned six round-trip choices twice, 33.286 seconds including
+setup and 3.342 seconds warm, with AS1327 outbound and AS688 return among them at
+USD177. Same requested SFO–SEA November4/11 dates, same generated parser, separate
+diagnostic pool per variant. Generated files were untouched. These targeted
+results explain the interaction failure; they are not an independent full audit,
+generated booking check, or fresh-teach repeatability.
+
+The correction exposes the final failed click-target evaluation in its existing
+error: match count, selected first element and parent identities, computed styles,
+rectangle, and actual center-hit element. Identifying strings are bounded; no
+page text or full markup is added. Missing, zero-area, disabled and covered targets
+remain rejected. The runtime keeps the exact selector, click acceptance, deadline
+and capture boundary; it neither chooses another element nor removes actions.
+Researcher/compiler guidance asks agents to use these facts and the current page
+when revising their interaction and response boundary. No site-specific selectors
+or private solution were added to runtime or prompts or supplied to teachers.
+
+Validation: 14 capture/target-fact tests and 155 runtime/backend tests passed.
+The new behavioral test executes the page expression against synthetic elements;
+checks bounds, styles, match count, parent/hit identity, string limits and unchanged
+acceptance. The navigation regression verifies facts reach the failure message,
+while preserving deadline, closure, invalid-selector and capture-boundary behavior.
+Lint214files and type checking passed. README, architecture, prompts and website
+aligned; web build and desktop/mobile visual checks passed, no page errors or
+horizontal overflow. Existing bundle warning and prior unrelated combined-CDP
+synthetic-form timeout remain disclosed. Preview and diagnostic pools stopped.
+
+Private flights-48-search-*, flights-48-search-observed-*,
+flights-48-search-parent-*, flights-48-search-single-action-* and click-facts-*
+preserve every result, failed attempt and validation artifact. Diagnostics used
+no LLM calls. Accounting remains 56 teaches/45 audits, $1069.2337408 base
+API-equivalent estimate, with prior missing usage and pricing caveats.
+Next: NEW Flights49 on this correction, original recording/exact four-operation
+scope, unused home, two workers, target30/assess60/hard90. Never resume48 or feed
+these private diagnostics/generated tools to teachers. Hotels policy rejection
+remains unresolved. No push, MR, merge, reset or evidence deletion.

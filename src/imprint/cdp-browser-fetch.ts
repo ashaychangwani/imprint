@@ -102,15 +102,40 @@ export function buildNavigationSelectorExpression(selector: string): string {
 export function buildNavigationClickTargetExpression(selector: string): string {
   return `(() => {
     const target = document.querySelector(${JSON.stringify(selector)});
-    if (!(target instanceof Element)) return null;
+    const describe = (element) => {
+      if (!(element instanceof Element)) return null;
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName.toLowerCase().slice(0, 80),
+        id: (element.getAttribute('id') || '').slice(0, 120),
+        class: (element.getAttribute('class') || '').slice(0, 160),
+        role: (element.getAttribute('role') || '').slice(0, 80),
+        display: style.display,
+        visibility: style.visibility,
+        pointerEvents: style.pointerEvents,
+      };
+    };
+    const unavailable = (reason, rect = null, hit = null) => ({
+      diagnostic: {
+        reason,
+        matchedCount: document.querySelectorAll(${JSON.stringify(selector)}).length,
+        target: describe(target),
+        parent: describe(target?.parentElement),
+        rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        hit: describe(hit),
+      },
+    });
+    if (!(target instanceof Element)) return unavailable('not_found');
     target.scrollIntoView({ block: 'center', inline: 'center' });
     const rect = target.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    if (target.matches(':disabled')) return null;
+    if (rect.width <= 0 || rect.height <= 0) return unavailable('zero_area', rect);
+    if (target.matches(':disabled')) return unavailable('disabled', rect);
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
     const hit = document.elementFromPoint(x, y);
-    if (hit !== target && !target.contains(hit) && !hit?.contains(target)) return null;
+    if (hit !== target && !target.contains(hit) && !hit?.contains(target)) {
+      return unavailable('center_hit_other_element', rect, hit);
+    }
     target.focus();
     return { x, y };
   })()`;
@@ -2092,6 +2117,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     for (const [actionIndex, interaction] of (options.actions ?? []).entries()) {
       if (interaction.action !== 'click') continue;
       let point: { x: number; y: number } | undefined;
+      let targetDiagnostic: unknown;
       while (Date.now() < deadline) {
         if (client !== c)
           throw new Error('browser closed while waiting for navigation click target');
@@ -2108,7 +2134,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             target.exceptionDetails.exception?.description ?? target.exceptionDetails.text;
           throw new Error(`browser navigation click target evaluation failed: ${detail}`);
         }
-        const value = target.result.value as { x?: unknown; y?: unknown } | null | undefined;
+        const value = target.result.value as
+          | { x?: unknown; y?: unknown; diagnostic?: unknown }
+          | null
+          | undefined;
+        targetDiagnostic = value?.diagnostic;
         if (
           typeof value?.x === 'number' &&
           typeof value.y === 'number' &&
@@ -2123,7 +2153,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       if (client !== c) throw new Error('browser closed while waiting for navigation click target');
       if (!point || Date.now() >= deadline) {
         throw new Error(
-          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} within ${timeoutMs}ms`,
+          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} within ${timeoutMs}ms${targetDiagnostic ? `; target diagnostics: ${JSON.stringify(targetDiagnostic)}` : ''}`,
         );
       }
       if (networkCapture?.matcher.actionIndex === actionIndex) {

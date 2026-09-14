@@ -1204,7 +1204,12 @@ report that coverage gap to the master instead of extrapolating the singleton.
 Navigation clicks poll the exact agent-selected selector until it is clickable,
 using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches
 once; an action-scoped response capture starts at dispatch, not during that wait.
-Invalid selector evaluations and CDP errors still fail.
+Invalid selector evaluations and CDP errors still fail. Failed clicks include
+bounded target diagnostics: match count, first-match bounds and computed styles,
+parent identity, and the actual center-hit element. Inspect these facts with the
+current page before revising the interaction. A matched element may have no area
+or pass pointer events through to another element. If the page already advanced,
+reassess the remaining actions and the action that triggers the desired response.
 
 ## WorkflowSchema Reference
 
