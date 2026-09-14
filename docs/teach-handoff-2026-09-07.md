@@ -1,6 +1,41 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 20:34 PDT
+## Current continuation — 2026-09-13 21:05 PDT
+
+At62minutes, Flights41 has two published tools and current plan revision1 with
+all four implementation plans. Lookup and search pass contract/live checks.
+Their published backends.json preferences match the observed reviewed executions:
+fetch for lookup (345ms backend,346ms total) and cdp-replay for search (34.678s
+backend,40.733s total including pacing/setup). This exercises b88d107 publication
+mechanics live; fresh independent MCP audit is still required.
+
+Calendar's generated live capture failed after90.562s. Booking baseline and fresh
+producer-bound chain returned three offers each, taking35.234s/35.163s including
+setup. Those transport receipts passed, but both semantic reviews rejected the
+Frontier Basic Fare conditions field: it mixes actual fare/baggage conditions
+with unrelated passenger controls, legroom, emissions and contrail-dialog text.
+Booking therefore remains unpublished. The master is revising from these failures.
+
+Earlier retained booking research removed the unproven selection_token input and
+used selected_flights as a structured itinerary identity. Its two same-run LAX–LAS
+October22 source records produced distinct F9 3292 and F9 2334 schedules and
+matching offers. Generated baseline/chain also identify those respective flights.
+That narrowing is not proof that the opaque-token parameter was repaired, and
+nonstop cases do not establish complete connecting-group support. Search/booking
+use rendered CDP documents; calendar research used API response capture. No
+private parent diagnosis or old generated tools were supplied to teachers.
+
+Continue unchanged on b88d107: there are concrete parser and capture failures to
+repair, retained successful research, and roughly27minutes before the original
+04:32:07UTC hard deadline September14. Do not extend it or resume a failed teach.
+PID56274,home-41,run758f4f3f-5a44-4c69-a2c8-eebc9c11cc3b. Disk16.35GiB.
+Original malformed researcher catch and repeated-invocation feature remain
+unexercised live. Accounting remains throughaudit40 at$872.3830912baseestimate;
+active41excluded,31missingsemanticcalls andpriorcaveats retained. Hotels policy
+rejection unresolved. No concurrent live diagnostic/audit, code change, push,
+MR, merge, reset or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 20:34 PDT
 
 Flights41 remains active on b88d107 at32minutes. No tools are published and no
 accepted implementation journal exists yet. Lookup and search research are proven;
