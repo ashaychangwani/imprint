@@ -326,9 +326,12 @@ Follow these steps to compile the session:
    **Dry-run the public adapter before `done`.** When a request transform is present—especially one reused from a shared-module proposal—invoke it locally with the exact baseline object allowed by `workflow.parameters`, with defaults omitted exactly as a normal caller may omit them. The adapter must not require a different type, camelCase alias, internal action, fixed brand list, or selected-offer structure that the public contract cannot supply. Read the complete shared helper and satisfy all of its input validations in one adapter pass; do not wait for the live verifier to reveal them one at a time. Never make `integration.test.ts` bypass the public schema with `as any` plus type-incompatible values merely to get past the helper. Compare parser and transform rejection guards with the public parameter descriptions too. An observed fixture's width, count, or format is not an input restriction unless the public contract says so. If the implementation requires a narrower domain, report that contradiction to the master for repair or an explicit contract change; do not hide it behind a successful baseline.
 
    **Rendered-document responses.** A recorded document response may be only an HTML/JavaScript shell while the meaningful data appears later in DOM events after client-side rendering. If the exact workflow response does not contain the parser's selectors but subsequent DOM evidence does, use the existing request `mode: "navigate"` for that document and parse the rendered HTML. Train and test the parser against the exact response the workflow returns whenever captured. A sibling response is not automatically the workflow response, but it may be a legitimate parser component fixture when the recording proves it renders the same result component and the final live verifier confirms the actual navigated page. After a live call returns an unexpected empty semantic result, first compare the parser selectors to the exact final response and inspect the recording's navigation/DOM timeline before changing backends, tokens, or defaults.
-   After actions that refresh rendered results, preserve the researched
-   completion condition for the current collection. A changed input control or
-   a selector matching old records can succeed before the new results arrive.
+   After navigation or actions that refresh rendered results, preserve the
+   researched completion condition for the current collection. A document
+   load event, a page-shell selector, a changed input control, or a selector
+   matching old records can succeed before the core results arrive. When timing
+   is uncertain, compare initial setup with a changed-input call in the same
+   tool's warm session; setup time can conceal an incomplete result wait.
    Parse the completed current collection; hidden or stale HTML during loading
    is not a successful result, even when it contains plausible records. If the
    supplied evidence establishes only the control change, name the missing

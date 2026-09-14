@@ -297,10 +297,12 @@ merely because a recorded header looks opaque.
 When the selected response is the only completion requirement, omit
 `waitUntil`; declare lifecycle, selector, or action waits only when research
 actually requires them after navigation.
-For rendered-document extraction after an action, an updated control proves
-only that control's state; it does not prove the result collection finished
-refreshing. Use an observed completion condition for the resulting collection
-and preserve the evidence tying those records to the current action. HTML may
+For rendered-document extraction after navigation or an action, a document
+load event, an existing page shell, or an updated control does not prove the
+result collection finished rendering. Use an observed completion condition for
+the core results and preserve the evidence tying them to the current request.
+When timing is uncertain, contrast initial setup with a changed-input call in
+the same tool's warm session; setup time can conceal incomplete result waits. HTML may
 still contain hidden or previous results while the visible page is loading.
 Do not treat those records plus a changed widget as a proven parameter effect.
 An element seen in one result layout is not proof that every valid result

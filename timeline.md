@@ -11703,3 +11703,65 @@ finesse call lacks usage, raising missing semantic calls to35. Totals50teaches/
 API-equivalent estimate. Prior pricing/interrupted-CLI caveats remain; active
 audit42excluded. Original malformed-report recovery is live-validated; repeated
 invocation feature is still unexercised. No push, MR, merge, reset or deletion.
+
+
+## 2026-09-13 23:52 PDT — Preserve failed audit and diagnose capture before core results
+
+Audit 42 ended after 5.7664 minutes and failed: 20/24 graded units, 83.33%.
+Its 16 actual calls were 12 correct, three broken booking results, and one
+excluded invalid calendar input; no infrastructure exclusions. Eight inputs
+worked and the booking input failed. Lookup, one-way search, and nearby date
+grids passed their tested contrasts. Three exact fresh producer packages across
+two dates and two carriers returned null itinerary and zero offers, including
+an immediately consumed October 15 result. Entity-ID calendar inputs and
+connecting itineraries were not covered. Published artifacts and audit report
+remain unchanged; teaching success is not independent success or repeatability.
+
+Two sequential, deterministic diagnostics used fresh search output and preserved
+exact returned HTML plus later snapshots. The first direct-runtime diagnostic
+returned 19 offers both initially (32.022s) and on an identical warm repeat
+(1.551s); producer setup took 34.220s. Later snapshots parsed identically. This
+did not reproduce failure and does not establish a readiness fix.
+
+The second used the actual emitted tool through discoverTools and its normal
+persisted backend selection. Fresh SFO–LAX October 13 search took 34.559s. The
+first booking call, F9 2858, returned 21 offers in 32.088s. Changing to WN 2847
+from the same producer in the same booking session returned zero offers and
+null itinerary in 1.670s. Its exact captured HTML has the correct Southwest
+itinerary but loading text, no booking heading, and no offer action labels.
+The next snapshot of that same page has three offers ($59/$94/$164), also
+present at five and ten seconds. The unchanged parser extracts all three.
+This is direct evidence of premature capture for that diagnostic call, not
+proof of the cause of every earlier audit failure. The warm call changes the
+input; it is not a same-input latency comparison. Separate tool pools were
+closed, existing per-tool bootstrap cookies were reused, and setup was included
+in initial-call timings. Neither diagnostic made LLM calls or altered artifacts.
+
+Private evidence: flights-42-readiness-diagnostic.ts/log and flights-42-booking-*
+raw/snapshot files; flights-42-emitted-diagnostic.ts/log and
+flights-42-emitted-{producer,first,warm,provenance}.json, raw HTML and subsequent
+snapshots. flights-42-emitted-readiness-comparison.json records the contrast.
+All are under /tmp/imprint-fresh-inputs-VYbJm1. The parser's optional fare-condition
+mapping remains unverified beyond existing evidence; no broader correctness claim.
+
+Researcher and compiler guidance now extends the existing result-readiness rule
+to navigation as well as actions. Document load or a shell selector is not proof
+that core results finished rendering. When timing is uncertain, agents compare
+initial setup with a changed-input call in the same tool's warm session. Agents
+still choose conditions from evidence; no site-specific selector, fixed delay,
+runtime rule or mandatory exhaustive matrix. README, architecture and website
+match. Lint (214 files), type checking, website build, and desktop/mobile visual
+inspection passed without page errors or horizontal overflow; existing bundle
+warning remains. No prompt-mirroring tests added. Preview and diagnostics ended.
+Next validate with a NEW Flights43 teach; do not resume42 or reroll its audit.
+
+Audit42 accounting was extracted once: 3 spans/1 usage carrier, 1,209,852 input,
+1,125,120 cache reads, 5,253 output, zero emitted writes, $0.894036 base estimate.
+Totals: 50 teaches/39 audits, 89 traces/10,325 spans/3,357 usage carriers,
+3846.882228512 summed minutes, 758,587,731 input, 630,923,520 cache reads,
+8,064,233 output, zero emitted writes, $924.310912 base API-equivalent estimate.
+35 missing semantic calls and all interrupted-CLI/pricing caveats remain.
+Original malformed-research recovery is live-validated with eight observations
+preserved. Repeated-invocation feature remains unexercised. Hotels provider
+policy rejection remains unresolved; no automatic retry or bypass. No push,
+MR, merge, reset or evidence deletion.

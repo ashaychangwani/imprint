@@ -175,8 +175,10 @@ Handoffs identify the response evidence that establishes the core records' scope
 for the compiler to preserve. Demonstrated ignored inputs return for contract
 revision; they are not deferred as optional minimization. Audits distinguish a
 bound pair's combined behavior from proof of each input's individual effect.
-For rendered results, agents verify that the current collection finished
-refreshing; an updated control alone cannot establish result freshness.
+For rendered results after navigation or actions, agents verify that the current
+collection finished rendering; document load, a page shell, or an updated control
+alone cannot establish readiness. When timing is uncertain, agents compare
+initial setup with changed-input calls in the same tool's warm session.
 Selection handling respects structured field boundaries and complete identities.
 Checking an input does not prove that it selects the corresponding result.
 That contrast must distinguish claimed mappings from defaults; changing one
