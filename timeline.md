@@ -11064,3 +11064,43 @@ run91086204-b441-422e-b440-fc70a9660fbd. Accounting remains throughaudit38 at
 $821.8669232 base estimate; active39 excluded and previous caveats retained.
 No concurrent audit/live diagnostic, private diagnosis supplied to teachers,
 push, MR, merge, model switch, reset or evidence deletion.
+
+
+## 2026-09-13 18:05 PDT — Account deadline failure and audit published artifacts
+
+Flights 39 ended at its original 90-minute deadline on 69be77e. Final journal
+revision 6 has lookup and grid ready; search and booking have no implementation
+plans or current receipts. Three published directories include the retired search
+build. The terminal reports 2 ready / 2 not ready. This is a failed four-operation teach.
+
+Late retained search research recovered a structured response by matching an
+observed service URL prefix, POST and occurrence 1 without a resource-type filter.
+Individual XHR/Fetch/Other/Document-filter probes timed out. Booking then used
+an immediately preceding producer and returned matching AA 2563 AUS–DFW November 2
+provider fares through direct fetch (producer 33.977s, consumer 0.701s, including
+setup). Research and master attributed the booking difference to freshness, but
+the route/selection and request construction also changed; causality remains
+unproven. No site-specific fix or private diagnosis was supplied to the agents.
+Private flights-39-late-proven-research.json preserves the complete late handoffs.
+
+The master accepted the revised search/booking research and retired search's
+implementation plan in revision 6. Focused implementation planning hit the deadline
+before rebuilding either tool. Existing generated booking baseline/chain failures
+and the capture timeouts are retained. No repeated-call references were used;
+69be77e repeated-call behavior and the original malformed researcher catch remain
+unexercised live. Useful research is not generated-tool validation or repeatability.
+
+Independent audit 39 started September 14 01:04:23 UTC, PID 19903, home-39,
+flights-audit-39.log and flights-audit-39-manifest.json; its deadline is 01:49:23.
+It audits the three published artifacts, including the retired search build;
+booking is absent and cannot be waived. Teach PID 83965 ended before audit launch.
+Preflight verified clean source-descended branch, collector 200, host on AC at 100% and
+17.22 GiB free. No concurrent live diagnostics or code changes during the audit.
+
+Teach 39 is accounted: 90.00 minutes,26,667,958 input,23,421,824 cache reads,
+237,694 output,zero emitted writes, $27.1071456 base API-equivalent estimate, one
+missing interrupted master planning call. Totals through teach 39: 47 teaches / 35 audits,
+82 traces / 9,476 spans / 3,099 usage carriers,3,600.43 minutes,698,166,858 input,
+581,184,512 reads,7,428,544 output,zero writes, $848.9740688 base estimate; 31 missing
+semantic calls and previous caveats remain. Active audit 39 excluded. Hotels
+provider rejection remains unresolved. No push, MR, merge, reset or evidence deletion.
