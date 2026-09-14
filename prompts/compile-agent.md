@@ -1194,12 +1194,14 @@ would fool that shortcut; preserve the full selected group when the contract
 requires it. Checking identity also does not apply a selection: the resulting
 request or interaction must choose the corresponding record, not a fixed
 default that happened to match the baseline.
-When the declared consumer accepts a selected group, choose a fresh producer
-record with multiple members for a representative chain check when available.
-Compare the complete returned group with the chosen record, including member
-identities and order. A successful singleton does not exercise preservation of
-multiple members. If the plan's fixed example cannot distinguish these behaviors,
-report that coverage gap to the master instead of extrapolating the singleton.
+Compare the consumer's accepted structure with the actual producer records.
+One selected record may contain several members; a singular operation name or
+one-member fixture does not restrict that structure. Unless the public contract
+explicitly excludes it, choose an available fresh record with multiple members
+for a representative chain check. Compare all member identities and their order
+with the consumer result. If the planned example or adapter rejects that valid
+record, report the exact incompatibility to the master for repair or an explicit
+scope decision. Do not extrapolate a passing singleton to that structure.
 
 Navigation clicks poll the exact agent-selected selector until it is clickable,
 using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches

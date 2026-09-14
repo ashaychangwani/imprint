@@ -75,7 +75,12 @@ selects strategy or changes the required checks.
 When userGuidance requires an end-to-end producer-consumer use case, standalone
 receipts are insufficient if the tools use incompatible modes or value types.
 Require evidence that a current producer result actually works as the consumer
-input. The master chooses how to align their supported MVPs; do not invent an
+input. Compare observed producer record structures with the consumer's public
+scope: one selected record can contain several members. A singular description
+or passing singleton does not exclude an observed multi-member structure. When
+supplied evidence exposes that incompatibility, require a repair or explicit
+supported scope decision rather than extrapolating the easier passing case.
+The master chooses how to align their supported MVPs; do not invent an
 edge or silently waive the requested connection because no edge was declared.
 
 `semanticReviewHistory` contains prior result-review decisions, their actual

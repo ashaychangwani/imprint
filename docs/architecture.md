@@ -38,9 +38,13 @@ one consumer/invocation pair execute together. The runtime validates an acyclic
 invocation graph, preserves exact source receipts, and invalidates transitive
 consumers when source results or bindings change. Self-use needs no self-dependency
 in the separate tool build graph. Agents choose the sequence and public boundaries.
-For consumers that accept grouped selections, the compiler and auditor choose a
-fresh multi-member producer record when available and compare the complete group,
-including identities and order. A singleton success does not prove preservation
+The planner, compiler and auditor compare actual producer record structures
+with the consumer's public contract. One selected record may have several members;
+a singular operation name or singleton fixture does not exclude that structure.
+Unless the public contract explicitly excludes it, agents choose an available
+fresh multi-member record and compare all identities and their order with the
+consumer result. A narrower scope needs an explicit decision across connected
+tools; a failed adapter does not redefine valid producer input. A singleton success does not prove preservation
 of multiple members. If a fixed planned example cannot exercise that distinction,
 the compiler reports the gap for a master decision. Selection and interpretation
 remain agent decisions; the runtime adds no group classifier or sampling rule.

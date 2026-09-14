@@ -66,7 +66,9 @@ invented server mismatch. Unseen source or imported helpers are not proof.
 A concrete input-rejection guard in supplied parser/request source can contradict
 the declared core input domain even when this baseline passes. Report the exact
 guard and allowed input it rejects as `revision_required`; an observed fixture's
-shape is not a public restriction. This does not require an optional parameter
+shape is not a public restriction. One selected record can contain several
+members; a singular operation name does not establish a one-member limit.
+This does not require an optional parameter
 sweep or speculative failures: cite only an explicit contradiction in the supplied
 source and contract. The master decides whether to repair or narrow the contract.
 

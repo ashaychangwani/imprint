@@ -13203,3 +13203,34 @@ members. Keep interpretation and representative record selection with agents;
 no site-specific rule or runtime cardinality classifier. No generated edits,
 newteach,concurrentlivework,push,MR,merge,reset,evidence deletion. Accounting
 unchanged throughaudit49; private diagnostic used noLLMcalls.
+
+
+## 2026-09-14 12:26 PDT — Check selected record structure instead of singular wording
+
+The connecting failure came from an explicit one-member guard already present
+in booking research, while search and booking descriptions promised a selected
+one-way itinerary. Existing grouped-selection guidance was conditional on the
+consumer declaring group scope. Revised that condition across planner, compiler
+and audit guidance: compare actual producer record structures with the public
+consumer contract; one selected record may contain multiple members. Unless the
+public scope explicitly excludes that structure, use an available fresh such
+record for representative chain proof. A failed adapter does not retroactively
+make an otherwise compatible producer value bad input. Reviewers likewise must
+not infer one-member limits from singular wording or a successful singleton.
+Agents still choose the record, interpretation, repair or explicit narrower
+scope across connected tools. No runtime code or site-specific examples changed.
+
+README, architecture and website aligned. Lint214files, typechecking and diff
+checks passed. Initialwebbuild failed because bunx was absent from PATH; with
+the existing Bun directory on PATH, build passed (existing bundle warning).
+Desktop1440/mobile390fullpage and focused screenshots inspected; no pageerrors
+or horizontaloverflow. Focusedmobile screenshot includes sticky navigation at
+the top; fullpage layout remains intact. Private selection-structure-* artifacts
+retained. Preview stopped. No prompt-mirroring tests added; behavior needs a
+fresh teach and independent audit, not an old-run resume.
+
+Nextlaunch freshFlights50 using originalrecording/exactfour-operationguidance,
+unusedhome, two workers, target30/assess60/hard90. Keep all49evidence, including
+its auditpass and subsequent real connectingfailure. No oldgeneratedtools or
+private diagnosis to teachers. Accounting unchanged throughaudit49; Hotels
+providerpolicyrejection unresolved. No push,MR,merge,reset,evidence deletion.

@@ -391,7 +391,12 @@ each constituent field. Keep machine identifiers distinct from display labels
 (for example, a catalog code and its product name); a shared field name or
 string type does not establish interchangeability. Plan the consumer check
 using the producer's unchanged returned selection, rather than a more
-convenient test value rebuilt by hand.
+convenient test value rebuilt by hand. Compare the consumer's accepted structure
+with the observed producer records: one selected record can contain several
+members. Prefer an available such record for the representative chain when the
+public contract does not explicitly exclude it. A singular operation name or
+one-member fixture does not establish that exclusion. Align any narrower scope
+explicitly across the connected tools instead of choosing an easier singleton.
 
 All incoming edges for this consumer form one explicit consumer invocation.
 Use at most one producer binding for each consumer parameter. If the evidence

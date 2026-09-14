@@ -233,8 +233,10 @@ Agents can plan repeated calls to the same tool and bind each call to an exact
 prior result. The runtime checks a finite invocation order and invalidates dependent
 proof when that source result changes; a continuation does not require a separate
 public tool. Existing single-call plans retain their behavior.
-For tools that accept grouped selections, chain checks and audits use a fresh
-multi-member record when available and compare the complete returned group.
+Chain checks and audits compare actual producer record structures with the
+consumer's public contract. One selected record can contain several members;
+unless explicitly excluded, an available fresh multi-member record is checked
+and compared with the complete consumer result.
 A passing singleton check does not establish that every selected member survives.
 Validation, request construction, and parsing keep group properties separate
 from member properties; a valid group need not repeat its overall fields on every
