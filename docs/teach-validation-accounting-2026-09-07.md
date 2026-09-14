@@ -1,10 +1,10 @@
 # Teach validation accounting — September 7, 2026
 
-These are fifty-eight teaches and forty-seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are fifty-nine teaches and forty-seven independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
-Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 and teaches 18 and 29 are exceptions: host sleep interrupted their monotonic trace clocks. They use launch time to final report/terminal modification time: 52.37, 103.43 and 93.40 wall minutes, versus 0.54, 71.79 and 60.98 trace minutes respectively. Input includes cache reads and writes; do not add the cache columns again. All 4,009 usage spans identify `gpt-5.6-sol`.
+Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root span. Audit 17 and teaches 18 and 29 are exceptions: host sleep interrupted their monotonic trace clocks. They use launch time to final report/terminal modification time: 52.37, 103.43 and 93.40 wall minutes, versus 0.54, 71.79 and 60.98 trace minutes respectively. Input includes cache reads and writes; do not add the cache columns again. The 4,009 usage spans through audit 50 identify `gpt-5.6-sol`. Teach 51 uses 105 final per-turn usage counters recovered from 25 attributable Codex session files after the local collector stopped responding; its duration is launch to journal completion. Those counters also identify `gpt-5.6-sol` and replace, rather than add to, its partial trace usage. Phase/span accounting is unavailable for that run; unrecorded usage remains unknown.
 
 | Attempt | Result | Minutes | Total input | Cache read | Cache write | Output | Base API estimate |
 | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -113,7 +113,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights audit 49 | PASS 22/22 graded; 14 correct calls, 1 bad input, 8 working inputs, 2 coupled inputs jointly proven | 6.04 | 752,278 | 711,424 | 0 | 5,689 | $0.56 |
 | Flights teach 50 | 4 ready; missing return leg repaired, fresh two-leg chain passed; first-outbound round-trip MVP, audit pending | 68.78 | 19,245,082 | 15,599,104 | 0 | 193,917 | $24.70 |
 | Flights audit 50 | FAIL 21/24 graded; 12 correct calls, 3 booking semantic failures, 1 bad input; 9 working and 2 bound inputs | 7.65 | 782,937 | 746,496 | 0 | 6,058 | $0.57 |
-| **Total** | **Includes failures/cancellations** | **4,551.23** | **924,293,549** | **771,876,608** | **0** | **9,748,967** | **$1,113.40** |
+| Flights teach 51 | 4 ready; search context and booking fields repaired; fresh chain passed; usage recovered from sessions, audit pending | 85.97 | 23,770,795 | 20,126,720 | 0 | 233,207 | $27.29 |
+| **Total** | **Includes failures/cancellations; recorded usage** | **4,637.20** | **948,064,344** | **792,003,328** | **0** | **9,982,174** | **$1,140.69** |
 
 ## Cost assumptions and completeness
 
@@ -2556,3 +2557,57 @@ $1113.3977472baseAPI-equivalent. Prior36missinganalysiscalls/interruptedCLI and
 pricingcaveats remain. Diagnostic hasnoLLMcalls. No fullreliability/repeatability
 claim. Hotels policyrejection unresolved. No codechange,push,MR,merge,reset,
 evidence deletion or private diagnostic input to teachingagents.
+
+
+## 2026-09-14 15:30 PDT — Four tools finish; recover usage and launch independent audit
+
+Flights51 completed at22:24:03.651UTC in85.9651504167wallminutes on263ea9d;
+PID34549exited. Four tools published, journalrevision7 and completionreview passed.
+The exact two-navigation search repair was first rejected as unproven; retained
+research then executed both responses together and the compiler used that evidence.
+Final search passed in37.070seconds including setup, with two return options and
+the exact complete selection from preserved outbound plus matching return records.
+This exercises a multi-response generated parser, but does not establish broader
+repeatability or the separate repeated-invocation graph feature.
+
+Booking standalone and generatedchain initially failed semantic review for baggage
+text containing raw HTML/SVG/event attributes and fare labels appended to provider
+names. The retained compiler repaired individual provider/fare parsing. Final
+standalone35.681seconds and generatedchain32.294seconds passed, preserving both
+Frontier F92858/F94593legs, a USD60lowest total backed by BudgetAir, and clean fare
+and baggage fields. Lookup0.244s; calendar24cells35.179s. These browser timings
+include setup. Search/calendar/booking parse renderedHTML, not capturedAPIresponses.
+The separate-ticket parent/child case motivating263ea9d is not yet independently
+validated merely because this same-carrier itinerary passed.
+
+Audit51 started22:27:27.436404UTC,PID74845,home-51,exclusive flights-audit-51.log
+and manifest; deadline23:12:27UTC. Code unchanged, prior teach ended and9.98GiBfree.
+Audit was delayed by collector6438health timeouts, not a teach or audit failure.
+Old Buncollector54899 consumed96.9%CPU and last wrote trace evidence around21:05UTC.
+Its original script path no longer exists; no evidence was deleted by this task.
+Preserved a process sample, then SIGSTOP paused it with memory retained. Do not
+resume or kill it blindly. An unused Pythoncollector attempt was stopped before
+any trace requests because the exporter usesprotobuf. New Nodecollector74790 on
+6440 decodes the installed OTLP protobuf schema and appends to the same tracefile.
+A synthetic span round-trip verified actual export/decode/write before auditlaunch.
+Private collector-validation-51-node-manifest.json records it; use6440 goingforward.
+
+Teach51's cli.teach root was not captured, so the normal accounting helper correctly
+refused to produce a total. Recovered recorded usage instead from25attributable
+Codex session files:23contain the exactrunID, two initialsessions are identified
+requesttriage/candidatediscovery within the run window and workspace. Sum the final
+cumulative counter of each of105unique turns, not every intermediate event or only
+the last turn of a resumed session. All105have usage and completed markers;
+within-turn counters were checked monotonic. Do not also add partialtrace usage.
+Private recover-flights-51-usage.py and flights-teach-51-recovered-usage.json retain
+session/turn IDs, sourcefilehashes and method. Recorded23,770,795input including
+20,126,720cache reads,233,207output(includes66,230reasoning),zeroemittedwrites,
+3,644,075uncached,$27.291128baseAPI-equivalent. Phase/span timing remains unavailable
+and unrecorded usage cannot be ruled out; no zero-usage assumption or exactinvoice.
+
+Campaign recorded59teaches47audits,4637.195312721summedminutes,948,064,344input,
+792,003,328cache reads,9,982,174output,zeroemittedwrites,$1140.6888752baseestimate.
+Prior36missinganalysiscalls/interruptedCLI and pricing caveats remain; activeaudit51
+excluded. The105prior completedtrace counts are unchanged;51uses provider-session
+recovery. No push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
+Hotels providerpolicyrejection remains unresolved; no automaticretry/bypass.

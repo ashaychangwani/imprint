@@ -1,5 +1,59 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 15:30 PDT — Four tools finish; recover usage and launch independent audit
+
+Flights51 completed at22:24:03.651UTC in85.9651504167wallminutes on263ea9d;
+PID34549exited. Four tools published, journalrevision7 and completionreview passed.
+The exact two-navigation search repair was first rejected as unproven; retained
+research then executed both responses together and the compiler used that evidence.
+Final search passed in37.070seconds including setup, with two return options and
+the exact complete selection from preserved outbound plus matching return records.
+This exercises a multi-response generated parser, but does not establish broader
+repeatability or the separate repeated-invocation graph feature.
+
+Booking standalone and generatedchain initially failed semantic review for baggage
+text containing raw HTML/SVG/event attributes and fare labels appended to provider
+names. The retained compiler repaired individual provider/fare parsing. Final
+standalone35.681seconds and generatedchain32.294seconds passed, preserving both
+Frontier F92858/F94593legs, a USD60lowest total backed by BudgetAir, and clean fare
+and baggage fields. Lookup0.244s; calendar24cells35.179s. These browser timings
+include setup. Search/calendar/booking parse renderedHTML, not capturedAPIresponses.
+The separate-ticket parent/child case motivating263ea9d is not yet independently
+validated merely because this same-carrier itinerary passed.
+
+Audit51 started22:27:27.436404UTC,PID74845,home-51,exclusive flights-audit-51.log
+and manifest; deadline23:12:27UTC. Code unchanged, prior teach ended and9.98GiBfree.
+Audit was delayed by collector6438health timeouts, not a teach or audit failure.
+Old Buncollector54899 consumed96.9%CPU and last wrote trace evidence around21:05UTC.
+Its original script path no longer exists; no evidence was deleted by this task.
+Preserved a process sample, then SIGSTOP paused it with memory retained. Do not
+resume or kill it blindly. An unused Pythoncollector attempt was stopped before
+any trace requests because the exporter usesprotobuf. New Nodecollector74790 on
+6440 decodes the installed OTLP protobuf schema and appends to the same tracefile.
+A synthetic span round-trip verified actual export/decode/write before auditlaunch.
+Private collector-validation-51-node-manifest.json records it; use6440 goingforward.
+
+Teach51's cli.teach root was not captured, so the normal accounting helper correctly
+refused to produce a total. Recovered recorded usage instead from25attributable
+Codex session files:23contain the exactrunID, two initialsessions are identified
+requesttriage/candidatediscovery within the run window and workspace. Sum the final
+cumulative counter of each of105unique turns, not every intermediate event or only
+the last turn of a resumed session. All105have usage and completed markers;
+within-turn counters were checked monotonic. Do not also add partialtrace usage.
+Private recover-flights-51-usage.py and flights-teach-51-recovered-usage.json retain
+session/turn IDs, sourcefilehashes and method. Recorded23,770,795input including
+20,126,720cache reads,233,207output(includes66,230reasoning),zeroemittedwrites,
+3,644,075uncached,$27.291128baseAPI-equivalent. Phase/span timing remains unavailable
+and unrecorded usage cannot be ruled out; no zero-usage assumption or exactinvoice.
+
+Campaign recorded59teaches47audits,4637.195312721summedminutes,948,064,344input,
+792,003,328cache reads,9,982,174output,zeroemittedwrites,$1140.6888752baseestimate.
+Prior36missinganalysiscalls/interruptedCLI and pricing caveats remain; activeaudit51
+excluded. The105prior completedtrace counts are unchanged;51uses provider-session
+recovery. No push,MR,merge,reset,evidence deletion or fullrepeatabilityclaim.
+Hotels providerpolicyrejection remains unresolved; no automaticretry/bypass.
+
+
 ## 2026-09-14 13:58 PDT — Start fresh composite-output validation
 
 Flights51 started2026-09-14T20:58:05.741975UTC, PID34549, on263ea9d.
