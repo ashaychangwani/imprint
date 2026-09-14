@@ -10991,3 +10991,36 @@ PID83965,run91086204-b441-422e-b440-fc70a9660fbd,home-39. Target00:03:32,
 assessment00:33:32,hard01:03:32 UTC September14 unchanged. Accounting throughaudit38
 remains$821.8669232 base estimate; active39 excluded. No concurrent live work,
 implementation change, push, MR, merge, model switch or evidence deletion.
+
+
+## 2026-09-13 17:07 PDT — Thirty-minute target missed; four-tool plan enters validation
+
+Flights39 missed its30-minute target. At33minutes the master had accepted four
+tools in two build waves. Lookup had a contract receipt and its direct live call
+returned for semantic review; search and grid were compiling. No tool was yet
+published and booking had not reached generated compilation or chain verification.
+The preserved compiler conversations resumed within this same fresh run.
+
+The accepted plan uses one-way airport-code search with origin, destination and
+departure_date. Grid advertises separate start/end bounds for departure and return;
+those public bounds still need independent audit beyond the proven49-cell research
+sample. Lookup accepts query. Booking accepts selection_token and selected_flights;
+both bindings explicitly select itineraries[0] from the same generated search
+result. It is a single booking invocation, with no repeated-call fields in this
+plan. Thus69be77e's new repeated-invocation capability remains synthetic-tested
+only even if this narrower one-way flow eventually passes.
+
+The master retained the repaired research context and removed a multi-city event
+from the one-way search evidence. Booking derives itinerary fields from the same
+selected_flights value instead of retaining the recorded route. Private research
+provenancev3 remains bounded evidence with normalized JSON-string equality and
+retained same-run source reuse after failed retries, not generated chain proof.
+Original malformed researcher catch also remains unexercised. Do not treat narrow
+scope or individually credible baselines as full success or repeatability.
+
+Continue on unchanged69be77e to the planned00:33:32 UTC assessment and01:03:32 hard
+deadline September14. PID83965,run91086204-b441-422e-b440-fc70a9660fbd,home-39.
+No concurrent audit/live diagnostic or private diagnosis supplied to teachers.
+Accounting throughaudit38 stays$821.8669232 base estimate; active39 excluded,
+prior missing usage and pricing caveats retained. No push, MR, merge, reset,
+model switch or evidence deletion. Hotels provider rejection remains unresolved.
