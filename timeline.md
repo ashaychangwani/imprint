@@ -11364,3 +11364,35 @@ zero writes,$872.3830912baseestimate. Active41 excluded;31missingsemanticcalls
 and prior caveats remain. Original malformed researcher catch, repeated-call
 feature and capture-timeout facts still unexercised live. Hotels policy rejection
 remains unresolved. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-13 20:34 PDT — Thirty-minute target missed with booking research unresolved
+
+Flights41 remains active on b88d107 at32minutes. No tools are published and no
+accepted implementation journal exists yet. Lookup and search research are proven;
+calendar research is also proven and its draft compilation started while booking
+research continued. Drafts and research are not current validated public tools.
+
+Lookup uses direct fetch with London query evidence. Search uses rendered CDP
+HTML for a one-way LAX–LAS October22 result with31itineraries and same-card
+selection/context fields. Calendar used CDP API capture to obtain49priced cells
+centered on November10 departure/November18 return, with LAX–JFK route evidence.
+Rendered search is not API capture; the calendar capture is not a playbook.
+Reported setup-inclusive research calls were34.791s for search and35.340s for
+calendar; these are not separately measured warm calls.
+
+Booking called the current search producer for fresh values (34.225s including
+setup), but subsequent booking research returned BAD_RESPONSE across fetch,
+fetch-bootstrap, CDP and stealth backends, followed by CDP failures91.347s and
+33.638s. Research is still investigating. These failures are not proof of stale
+inputs or provider capacity. Separately, transient model capacity interruptions
+were retried within the original run with retained compiler sessions. No private
+parent diagnosis or previous generated tools were supplied to the teaching agents.
+
+Continue unchanged to the60-minute assessment04:02:07UTC and original90-minute
+hard deadline04:32:07UTC September14. PID56274,home-41,
+run758f4f3f-5a44-4c69-a2c8-eebc9c11cc3b. Backend publication remains untested live
+because nothing is published. Accounting remains throughaudit40 at$872.3830912
+baseestimate, active41excluded,31missingsemanticcalls andpriorcaveats retained.
+Hotels rejection unresolved. No concurrent live diagnostic/audit, push, MR, merge,
+reset or evidence deletion.
