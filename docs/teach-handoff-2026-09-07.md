@@ -1,5 +1,39 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Current continuation — 2026-09-14 06:31 PDT
+
+Flights 46 ended at its original 90-minute deadline on unchanged faaa985.
+PID 51185 has exited. Two tools were published: search_locations (5 results,
+0.319s receipt) and get_date_grid_prices (44 cells, 33.586s transport including
+setup). Search review rejected mixed destinations and missing promised
+selected_flights booking URLs with tfs/tfu continuation data. The master resumed
+the retained compiler, but the deadline interrupted repair. Booking was never
+published. Proven research did not yield a proven generated producer-consumer
+chain. This fresh teach failed; the action-boundary fix is not repeatably validated.
+
+Independent audit 46 started at 13:31:14.274598 UTC, PID 88291, on home-46,
+with exclusive flights-audit-46.log/manifest, unchanged implementation and a
+45-minute deadline (14:16:14 UTC). Only the two published tools are auditable;
+missing search and booking remain failures of the requested scope regardless of
+this partial audit's score. No concurrent live diagnostics. Disk 13.83 GiB.
+
+Teach 46 accounting: trace Zo6tClu8xFZ255xL/uuPHQ==, 90.0036586715 minutes,
+194 spans, 93 usage spans, 21,709,884 input, 18,960,384 cache reads,
+183,755 output, zero emitted cache writes, $22.2572536 base API estimate.
+No missing semantic usage spans; interrupted CLI usage may still be absent.
+Campaign: 54 teaches / 42 completed audits, 96 traces / 11,309 spans,
+3,675 usage spans, 4197.6126975217 summed minutes, 832,127,555 input,
+692,626,688 cache reads, 8,852,165 output, zero emitted writes,
+$1012.0974432 base estimate. Prior 35 missing semantic calls and pricing caveats
+remain. Active audit 46 excluded.
+
+Next: inspect the independent partial audit and actual search parser/contract
+failure before choosing a small general correction. Preserve failed inputs,
+conversation history and evidence. No teach may resume after a code/prompt change.
+Hotels remains blocked by the earlier provider policy rejection; no automatic
+retry, bypass or model switch. No push, MR, merge, reset or evidence deletion.
+
+
 ## Current continuation — 2026-09-14 05:58 PDT — Continue focused research to the original hard deadline
 
 At the one-hour assessment, Flights46 remains active on unchanged faaa985,
