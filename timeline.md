@@ -13361,3 +13361,38 @@ $1112.8322248baseAPI-equivalent. Activeaudit50excluded; pricingcaveatsremain.
 No runtime/promptchangesduringteach,push,MR,merge,reset,evidencedeletion.
 Hotels providerpolicyrejection unresolved. All failed generated revisions and
 research remain preserved; no oldartifacts/private strategies fedto teachers.
+
+
+## 2026-09-14 13:45 PDT — Preserve failed booking audit and inspect fare ownership
+
+Audit50 ended in7.6475975285minutes, PID31462exited. FAIL21/24graded87.5%:
+16actualcalls,12correct,3bookingsemanticfailures,1invalidauditorinput; noinfra
+exclusions. All9ordinaryparameters worked; two bookingvalues were exercised as
+coherentproducerpairs but remain individuallyuntestable. Lookup,search andcalendar
+passed their calls. Booking reconstructed bothorderedlegs but returned separate
+one-flight seller/fare records under its complete-itineraryoption promise.
+UA371+B6413 gave184/446 components on baseline and controlrepeat; alternate
+UA371+DL2919 gave184/559. These are actualsemanticfailures, not capturefailures.
+Originalreport/transcript preserved unchanged. Corrected the locallyauthored
+accountingresult label which initially called them searchcapturefailures; raw
+trace/report unchanged and correction recorded in accounting_note.
+
+Current parser recursively collects seller records into a flat booking_options
+array with total_price and flight_numbers, losing parent grouping. This suggests
+a fare-ownership/representation issue but does not by itself establish how the
+page presents separate-ticket options. A sequential private untouched-workflow
+check now repeats the original SFO–BOS October5/12query, selects its fresh first
+complete itinerary and calls booking twice with coherentvalues. Separatepertool/
+rungpools, rawresponse and page snapshots, actualsame-booking-poolwarmrepeat;
+all evidence under flights-50-diagnostic-* plus flights-50-booking-diagnostic.ts
+and.log. No generatededits or newteach. Inspect actual response/page before
+choosing any generalcorrection or assuming each provider covers every leg.
+
+Audit50traceTorEMdaGzqoRBjtWiAFj1Q==:3spans/1usage,782,937input,746,496reads,
+6,058output,zeroemittedwrites,$0.5655224baseestimate,nomissingusage. Campaign
+58teaches/47audits,105traces/12,557spans/4,009usage,4551.2301623043summedminutes,
+924,293,549input,771,876,608reads,9,748,967output,zeroemittedwrites,
+$1113.3977472baseAPI-equivalent. Prior36missinganalysiscalls/interruptedCLI and
+pricingcaveats remain. Diagnostic hasnoLLMcalls. No fullreliability/repeatability
+claim. Hotels policyrejection unresolved. No codechange,push,MR,merge,reset,
+evidence deletion or private diagnostic input to teachingagents.
