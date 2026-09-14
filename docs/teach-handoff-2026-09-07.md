@@ -1,6 +1,41 @@
 # Teach rebuild handoff — September 7, 2026
 
-## Current continuation — 2026-09-13 18:22 PDT
+## Current continuation — 2026-09-13 18:28 PDT
+
+Fresh Flights 40 started September14 at01:27:54 UTC on implementation01fc429,
+PID23437, unused home-40, original recording and exact four-operation guidance.
+Target01:57:54, assessment02:27:54, hard02:57:54 UTC. The configured two-worker
+concurrency is unchanged. Preflight verified clean source-descended branch, prior
+teach/audit/diagnostic/preview ended, collector200, host on AC, both recording
+sizes unchanged and17.15GiB free. Exclusive flights-teach-40-manifest.json and
+flights-teach-40.log preserve launch facts.
+
+01fc429 adds bounded observed-response facts to capture timeout messages, using
+existing response metadata. It does not select a replacement response or infer
+why capture failed. Two synthetic behavior tests plus existing capture/backend
+tests pass:131 tests,426 assertions. Lint, types, website build and desktop/mobile
+visual checks passed. Initial test expectation and preview-PATH failures remain
+in private network-summary-* evidence. No generated artifacts were edited.
+
+This fresh run validates that agents receive and can use the new timeout facts.
+Watch fresh producer-to-consumer binding, exact current tool receipts, semantic
+output correctness and truthful narrow scope. Repeated-call support and the
+original malformed-researcher catch remain unexercised live. Do not feed old tools
+or private diagnosis to agents, resume39, change code, or run concurrent audits
+and live diagnostics. Independently audit after completion, including missing
+operations and excluded failures.
+
+Audit39 remains failed19/21 graded:9 correct calls,2 search parser failures and
+4 capture timeouts excluded;10 inputs graded working, with origin/date evidence
+from rendered pages after capture failed. Booking absent. Final teach39 had only
+lookup/grid ready; the third published directory was retired search.
+Accounting through audit39:47 teaches/36 audits,83 traces/9479 spans/3100 usage
+carriers,3608.552111266867 minutes,699085044 input,582032128 reads,7433001 output,
+zero emitted writes,$849.6845352 base estimate. Active40 excluded;31 missing
+semantic calls and prior pricing/interruption caveats retained. Hotels provider
+rejection remains unresolved. No push, MR, merge, reset or evidence deletion.
+
+## Previous checkpoint — 2026-09-13 18:22 PDT
 
 Audit 39 failed after 8.12 minutes: 19/21 graded units (90.48%). Fifteen actual
 calls include nine correct, two broken search results, and four search capture
