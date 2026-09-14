@@ -13460,3 +13460,35 @@ Accounting unchanged throughaudit50; active51excluded. All failed evidence remai
 Hotels providerpolicyrejection unresolved; no automaticretry or bypass. No push,
 MR, merge, reset, or full-reliability claim. Continue with independent audit after
 completion; use a new teach following any further code/prompt correction.
+
+
+## 2026-09-14 14:33 PDT — Target missed while booking research tests fresh selection
+
+Flights51 remains active on263ea9d after its30-minute target, run
+0a98cfb6-92f8-4bef-9bd3-c6cefe755567. No focused journal or published tools yet.
+Lookup research is proven through0.385-second directfetch with LHR returned as
+Heathrow/London. Search and calendar research are now proven after retained
+capture failures. Their selected workflows use rendered document data, not API
+response capture; do not describe them as directAPI tools or browser playbooks.
+Draft compilation has started for all three operations.
+
+Search retained10observations, including an initial SFO–LAX October20 search
+with October27return and34outbound choices. Its same-workflow continuation using
+a current row identifier preserved the selected outbound and returned two return
+choices, including nonstop and connecting options. Calendar retained8observations,
+repeated SFO–JFK and contrasted destinationLAX, covering November10–16 departures
+and November17–23returns; rendered date/price/classification labels and currency
+support its selected claims. These are research proofs, not finished tool audits.
+
+Booking called the current search producer for fresh upstream values, then tested
+several candidates. Retained61.624-second and91.370-second attempts failed; a later
+call completed transport in31.933seconds and another test is active. No proven
+booking handoff yet. A log NETWORK label alone does not establish an external
+outage, and transport success does not prove correct selection or output grouping.
+Keep original21:58:05UTC assessment and22:28:05UTC harddeadline without extension.
+The composite-output correction is not yet validated by a generated live result.
+
+Free10.20GiB. Keep implementation fixed and live work sequential. Accounting remains
+throughaudit50, active51excluded. No generated edits, private diagnostic input,
+push,MR,merge,reset,evidence deletion, or repeatability claim. Hotels providerpolicy
+rejection remains unresolved.
