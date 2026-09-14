@@ -11247,3 +11247,46 @@ September14. PID23437,home-40,run9c2294f8-a6fb-4f66-b0af-67b0db2c17a6.
 Accounting through audit39 remains$849.6845352 base estimate; active40 excluded
 and previous missing-usage/pricing caveats retained. No concurrent audit/live
 diagnostic, push, MR, merge, reset or evidence deletion. Hotels rejection remains.
+
+
+## 2026-09-13 19:27 PDT — Account four-tool completion and start independent audit
+
+Flights 40 completed all four tools in54.8426 minutes on01fc429, before its
+60-minute assessment. Final journal revision2 has current contract/live receipts
+for all tools and a passing search_flights_first_itinerary_to_booking chain.
+No deadline extension or resumed failed teach. The30-minute target was missed.
+
+The master repaired the public selected_flights value to carry its token and
+same-record route/date/carrier/flight context. Booking research then returned
+matching AA148 SFO–JFK October23 offers using only that scalar plus bootstrap
+state. Generated booking baseline returned four American options; the generated
+chain returned five JetBlue B6624 LAX–JFK October22 options. Completion review
+recalled search because promised aircraft/emissions fields were absent. The
+retained compiler repaired them, a fresh search baseline and booking chain passed
+again, and final completion review accepted the complete plan.
+
+Public tools: search_airports_and_cities(query); search_flights(origin,destination,
+departure_date), one-way airport codes; get_date_grid_prices(origin,destination,
+departure_date,return_date), a seven-by-seven grid centered on those dates;
+get_booking_options(selected_flights), a serialized selection. No separate
+start/end bounds are advertised. Search uses rendered CDP HTML, not API capture;
+lookup uses direct fetch and grid/booking use fetch-bootstrap. Repaired search
+baseline33.994s and booking baseline34.953s include setup. Booking chain1.661s
+and1.362s reuse its existing bootstrap jar; independent warm/setup measurements
+still require audit evidence. No capture-timeout summary appeared, so01fc429's
+new path, repeated-call support and original malformed catch remain unexercised.
+
+Independent audit40 started September14 02:26:05 UTC, PID51871, home-40,
+flights-audit-40.log and flights-audit-40-manifest.json. Deadline03:11:05 UTC.
+TeachPID23437 ended first. Preflight clean branch, collector200, hostAC100% and
+16.88GiB free. No concurrent live work or code changes during audit. Inspect actual
+call/parameter grades, connecting-selection behavior and excluded failures before
+claiming success. One teach completion is not repeatability; Hotels remains blocked
+by the prior provider policy rejection, with no automatic retry or workaround.
+
+Teach40 is accounted:17312293 input,14034944 reads,175773 output,zero emitted
+writes,$22.2388336 base estimate, no missing semantic usage. Totals throughteach40:
+48 teaches/36 audits,84 traces/9751 spans/3176 usage carriers,3663.3947372884004
+minutes,716397337 input,596067072 reads,7608774 output,zero writes,$871.9233688
+base estimate. Activeaudit40 excluded;31 prior missing semantic calls and pricing/
+interruption caveats retained. No push, MR, merge, reset or evidence deletion.
