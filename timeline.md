@@ -11976,3 +11976,29 @@ zero missingsemanticcalls. Totals51teaches/40audits,91traces/10,590spans/3,428us
 provider-policy rejection unresolved; no automatic retry/bypass/model switch.
 Original malformed-handoff recovery remains confirmed in42; repeated-invocation
 feature unexercised. Repeatability unmet. No push,MR,merge,reset,evidence deletion.
+
+
+## 2026-09-14 01:47 PDT — Launch fresh result-delivery validation
+
+Flights 44 started September 14 at 08:46:39 UTC on implementation 9c45f99,
+PID 77415, unused home-44 and exclusive flights-teach-44.log/manifest. Target:
+09:16:39; assessment: 09:46:39; hard deadline: 10:16:39 UTC. Original recording,
+exact four-operation scope, and configured two workers. Preflight verified a
+clean branch descended from 34a6235, no prior live processes, collector HTTP 200,
+AC power at 100%, 15.21 GiB free, and both original recording sizes.
+
+Monitor whether agents investigate the actual source when background capture
+is absent, preserve valid failing inputs during repair, use fresh coherent
+producer values for booking, and avoid unsupported optional metadata. This is
+first validation of the new guidance, not proof that either defect is fixed.
+No prior generated tools or private diagnosis were supplied to teaching agents.
+Keep code unchanged and do not run concurrent live diagnostics. Audit after
+completion, then require fresh unchanged-code repeatability. Hotels remains
+unresolved after its provider policy rejection; no automatic retry or bypass.
+
+Accounting is complete through audit 43: 51 teaches, 40 audits, 91 traces,
+10,590 spans, 3,428 usage carriers, 3941.803217923817 summed minutes,
+776,113,061 input tokens, 645,334,528 cache reads, 8,273,140 output tokens,
+zero emitted cache writes, and $946.7107432 base API-equivalent estimate.
+35 missing semantic calls and earlier interrupted-CLI/pricing caveats remain.
+Active 44 is excluded. No push, MR, merge, reset, or evidence deletion.
