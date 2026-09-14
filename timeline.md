@@ -12035,3 +12035,41 @@ to teaching agents. Accounting remains through audit 43 at $946.7107432 base
 API-equivalent estimate, with 35 missing semantic calls and prior caveats; active
 44 is excluded. Hotels policy rejection remains unresolved, with no automatic
 retry, bypass or model switch. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-14 02:51 PDT — Continue focused repair after one-hour assessment
+
+Continue Flights 44 on unchanged 9c45f99 to its original 10:16:39 UTC hard
+deadline. At 09:49 UTC, PID 77415 was active with plan revision 2. Lookup and
+search are published with current passed contract/live receipts and credible
+reviews: lookup returned two SFO matches in 0.362 seconds, and search returned
+22 SEA–LAX November 3 itineraries in 35.454 seconds of transport (37.149 seconds
+including pacing). Concrete remaining repairs justify the remaining time, not
+an extension. Disk has 14.04 GiB free.
+
+Calendar returned 49 cells in 33.592 seconds, but semantic review rejected
+missing independent route-effect evidence. Booking returned 18 SFO–LAX F9 2858
+offers in 33.994 seconds, and its generated search-to-booking chain returned
+17 SEA–LAX F9 1178 offers in 32.131 seconds. Both booking reviews rejected an
+unconditional currency:'USD' assignment. Those passing execution receipts do
+not override semantic rejection. Calendar and booking now have no current
+receipts after master revision; neither is yet accepted for publication.
+
+The retained calendar researcher compared SFO–JFK and LAX–BOS with the same
+December 7–13 departure and December 14–20 return windows. Returned same-cell
+fares changed, including December 7/14 from USD 377 to 301 and December 13/16
+from 372 to 307. The latest 34.441-second research call and four retained
+observations support that route comparison; regenerated validation is pending.
+The earlier narrowed calendar contract exposes start/end dates constrained to
+seven days per window. Arbitrary window lengths remain unsupported. Booking's
+public selection bundle has six fields, including one airline/flight identity;
+connecting behavior remains unproven. Current timings include setup and reused
+per-tool bootstrap cookies, not a measured warm repeat.
+
+A transient compiler stream disconnect retried within the run and recovered.
+No runtime/prompt changes or concurrent live diagnostics. No independent audit
+or repeatability claim yet, and the missing-delivery guidance remains unproven.
+Accounting stays through audit 43 at $946.7107432 base estimate with 35 missing
+semantic calls and prior caveats; active 44 excluded. Hotels policy rejection
+remains unresolved, with no automatic retry, bypass or model switch. Evidence
+preserved; no push, MR, merge, reset or deletion.
