@@ -1,5 +1,27 @@
 # Teach rebuild handoff — September 7, 2026
 
+## Current continuation — 2026-09-14 06:48 PDT
+
+Flights 47 started at 2026-09-14T13:47:53.930385 UTC on 0a02ab7, PID 90900.
+Unused home-47, exclusive flights-teach-47.log and manifest, original recording
+and exact four-operation guidance, configured two workers. Target 14:17:53 UTC,
+assessment 14:47:53 UTC, hard deadline 15:17:53 UTC. Preflight verified clean
+correct branch descended from remote source 34a6235, prior teach/audit stopped,
+collector healthy, recordings intact, AC power and 13.81 GiB free. No private
+parser, previous generated tool or parent diagnosis supplied to teachers.
+
+Keep implementation unchanged. Check whether the selected research handoff
+includes api-research-responses.json and the compiler tests actual ordered
+response bodies rather than duplicating the final one. Check current-record
+associations, unrelated records and fresh coherent search-to-booking values.
+Continue independent audit after completion; a partial pass does not prove the
+full scope. No concurrent live diagnostics. No resumed failed teach.
+
+Accounting through audit 46: 54 teaches / 43 audits, $1012.3360264 base estimate;
+active teach 47 excluded. Prior missing usage and pricing caveats remain. Hotels
+policy rejection unresolved. No push, MR, merge, reset or evidence deletion.
+
+
 ## Current continuation — 2026-09-14 06:47 PDT — Preserve full response chains after the partial audit
 
 Audit 46 ended after 2.4474413625 minutes. Partial-scope PASS: 7 actual calls
