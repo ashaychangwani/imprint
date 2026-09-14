@@ -527,6 +527,13 @@ The public teaching path is one fresh foreground controller:
    small contrasting case when observed layout variation makes the condition
    uncertain. Optional presentation must not silently restrict the contract;
    current-result freshness remains necessary.
+   If a background capture is absent despite current results, agents inspect
+   their actual delivery source, including structured document data. A different
+   input that produces the request does not resolve the failed valid input;
+   researchers compare those delivery cases before accepting the strategy.
+   Baseline reviewers also trace ambiguous keyword or unit matches to their
+   source context. Matching strings alone cannot establish a field's meaning
+   or which nested record owns it; unsupported metadata returns to the master.
    A proven independent tool can plan and compile a draft in its existing
    worker slot while another tool continues researching. This adds no extra
    agent concurrency. Declared consumers wait for the normal producer-first

@@ -51,7 +51,12 @@ instead of confidently mislabeled.
 
 When supplied, `resultDerivation` is the current build's parser source, with its
 saved artifact reference and an explicit truncation flag. Use it only to trace
-where reviewed output values originate: a value copied from caller parameters
+where reviewed output values originate and what supports their assigned meaning.
+Broad recursive keyword or unit matches can mix unrelated nested properties;
+matching a word or measurement unit does not establish the named field's meaning
+or ownership. When the supplied source shows such an ambiguous derivation,
+report the exact unsupported field as missing proof; a plausible value alone
+does not resolve it. A value copied from caller parameters
 is not a server observation, even if labeled `applied` or `effective`. Do not
 infer that the parameter failed merely because it is echoed. Decide whether the
 remaining actual result independently supports this invocation's core promise.

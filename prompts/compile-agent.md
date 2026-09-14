@@ -303,6 +303,11 @@ Follow these steps to compile the session:
      If that response is the only completion requirement, omit `waitUntil`;
      add lifecycle, selector, or action waits only when the workflow actually
      needs them after navigation.
+     If current results arrive without that background request, inspect their
+     actual source, including structured data embedded in the document. A
+     changed input that triggers the request does not resolve the failed valid
+     input. Return that delivery contrast to research when the supplied source
+     cannot serve the declared inputs; do not hide it by changing the baseline.
      This is an agent-selected API escape hatch, not automatic interception and
      not a reason to choose browser execution before direct API constructions.
      Navigation is not an implicit pre-step: it must be declared as a workflow

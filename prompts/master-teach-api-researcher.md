@@ -512,6 +512,12 @@ must contain the promised core data before you mark the candidate proven. The
 runtime does not decide which background response is meaningful. If the page is
 used only to mint cookies or capture state for a later direct API call, keep it
 in `workflow.bootstrap` instead.
+When a selected background request is absent but current results are visible,
+inspect their actual delivery source, including structured data in the document.
+A different input that triggers a request does not repair the original valid
+input. Compare the failed and successful cases before calling the capture
+strategy proven; choose an evidence-backed source that serves the declared
+inputs instead of changing parameters merely to obtain a passing capture.
 
 Recorded provenance identifies supporting evidence, not a URL allowlist. The
 exact parameterized destination need not appear as a recorded Document request.

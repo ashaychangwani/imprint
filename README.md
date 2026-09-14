@@ -152,6 +152,10 @@ shapes. Extra responses used to corroborate research stay in the evidence;
 required execution requests must contribute necessary state or core output.
 Agents ground rendered-result completion checks in core content and inspect
 observed layout variations before treating an incidental element as required.
+When a background capture fails despite current page results, agents inspect
+their delivery source, including structured document data. Changing the baseline
+input does not repair the failed valid case. Reviewers trace ambiguous metadata
+to its context; matching keywords or units alone cannot justify a named field.
 Compilers test the complete current research response before live validation,
 including result frames beyond initial metadata, alongside recording examples.
 For framed protocols, a small parser test checks that an earlier empty or metadata

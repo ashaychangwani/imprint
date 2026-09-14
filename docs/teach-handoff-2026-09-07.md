@@ -1,7 +1,72 @@
 # Teach rebuild handoff — September 7, 2026
 
 
-## Current continuation — 2026-09-14 01:25 PDT: Complete four tools and start independent audit
+## Current continuation — 2026-09-14 01:45 PDT: Preserve failed audit and investigate actual result delivery
+
+Audit43 ended after10.78244454515minutes and failed19/22graded units,86.36%.
+The14actual calls were10correct,3broken search captures and1excluded initial
+calendar timeout. All9parameters were graded working, but search's three
+parameter grades rely on rendered page changes despite failed structured calls.
+Lookup2calls passed. Search baseline SEA–LAX October15 returned25itineraries;
+PDX–LAX,SEA–SFO,andOctober22 variants rendered relevant results but capture failed.
+Booking used two exact producer bundles and returned Frontier1178offers and
+American4988offer data. Report parameters redact the opaque values; the audit
+report is preserved unchanged. Calendar's paced retry and four input contrasts
+passed. No connecting booking or calendar entity-ID coverage. Metadata correctness
+was not independently established by this audit's booking grades.
+
+A sequential diagnostic called the unchanged emitted search tool and recorded
+CDP request/response events. Initial SEA–LAX October15 returned structured results
+in34.885s with the expected POST/XHR request. A warm PDX–LAX October15 call failed
+in60.678s; no GetShoppingResults request or response occurred. Closing that pool
+and calling the same PDX input in a newly opened browser also failed in90.387s,
+again with no shopping request. Both pages contained current PDX itineraries
+and structured data embedded in the document. Reading that JSON offline and
+wrapping it for the unchanged parser produced14records; the page reported15.
+This establishes an alternate data source in those snapshots, not a repaired
+public tool, exact completeness, or a universal caching explanation.
+
+Harness limitation: this diagnostic accidentally used the default auto ladder
+because discoverTools alone does not populate persisted preferences. Fetch and
+fetch-bootstrap rejected the navigate request before CDP; warm failure also
+escalated through inapplicable later rungs. The real CDP event observations are
+preserved, but total durations are not an exact audit-backend comparison. Existing
+per-tool cookies were reused. Pools closed; no LLM calls or generated edits.
+Private flights-43-capture-diagnostic.ts/log, initial/warm-changed/fresh-pool-same-input
+JSON/events/page snapshots and embedded JSON/parser outputs preserve evidence.
+flights-43-embedded-parser-check.ts only adapts saved JSON offline; it is not a
+new live validation and its14records do not resolve the visible15-record count.
+
+The booking parser recursively collects strings matching keywords or measurement
+units throughout offer subtrees into baggage_details. Its output includes28in/
+28inches and31in/31inches, without a demonstrated baggage context. This is an
+unsupported semantic mapping; no wider metadata correctness claim follows from
+the teach or audit grade. No site-specific parser edits were made.
+
+Researcher/compiler guidance now tells agents to investigate actual result
+delivery when a selected background request is absent despite current results,
+including structured document data. Changing to a different passing input does
+not repair the failed valid input. The existing baseline reviewer source-tracing
+guidance now explicitly covers ambiguous recursive keyword/unit mappings and
+requires the unsupported field to return as missing proof. These are general
+prompt changes, with no runtime strategy, site-specific rule, selector or delay.
+README, architecture and website match. Lint214files,typecheck,webbuild and
+desktop/mobile visual inspection passed without errors or overflow; existing
+bundle warning remains. No prompt-mirroring tests. Diagnostic and preview ended.
+Validate with a NEW Flights44 teach; do not resume43 or reroll its audit.
+
+Audit43 accounting extracted once: trace tfGyTCo4Us2sukRQ+r1ehA==,3spans/1usage,
+1,377,792input,1,308,288cache reads,4,887output,zero emittedwrites,$0.8990712,
+zero missingsemanticcalls. Totals51teaches/40audits,91traces/10,590spans/3,428usage,
+3941.803217923817summedminutes,776,113,061input,645,334,528cache reads,
+8,273,140output,zero emittedwrites,$946.7107432baseAPI-equivalentestimate.
+35prior missingsemanticcalls and interrupted-CLI/pricing caveats remain. Hotels
+provider-policy rejection unresolved; no automatic retry/bypass/model switch.
+Original malformed-handoff recovery remains confirmed in42; repeated-invocation
+feature unexercised. Repeatability unmet. No push,MR,merge,reset,evidence deletion.
+
+
+## Previous continuation — 2026-09-14 01:25 PDT: Complete four tools and start independent audit
 
 Flights43 completed in84.1385448667minutes on implementationa283cd2, within
 the90-minute deadline and beyond the30-minute target. PID35614 ended. Journal

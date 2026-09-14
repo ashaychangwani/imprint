@@ -28,7 +28,7 @@ const pipeline = [
   {
     step: '02',
     title: 'Compile state',
-    body: 'Turn recorded actions into API tools, with browser playbooks as the final fallback. Agents inspect fresh responses and failure evidence, verify that core results finished rendering after navigation or actions, and compare initial setup with warm calls when timing is uncertain. They check that input restrictions match the advertised contract, distinguish whole-group properties from member properties, and verify that dependent results preserve every selected member. Agents can call the same tool again using its fresh output, with each dependency checked. Useful core tools come first; optional features follow.',
+    body: 'Turn recorded actions into API tools, with browser playbooks as the final fallback. Agents inspect how current results arrive, verify readiness after navigation or actions, and compare initial setup with warm calls when timing is uncertain. A different passing input does not erase a failed valid case. Reviewers check metadata against its source context, input restrictions against the advertised contract, and dependent results against every selected member. Agents can call the same tool again using its fresh output, with each dependency checked. Useful core tools come first; optional features follow.',
     artifact: '~/.imprint/<site>/<toolName>/{workflow.json,playbook.yaml}',
   },
   {
