@@ -13740,3 +13740,30 @@ andSeptember15 00:12:57UTC harddeadline unchanged. No codechange/concurrentlivew
 Accounting remains throughaudit51;active52excluded. Failed observations preserved.
 No push,MR,merge,reset,evidence deletion or repeatabilityclaim. Hotels policyblock
 remains unresolved.
+
+
+## 2026-09-14 16:42 PDT — One-hour assessment: lookup ready, search live capture failed
+
+Flights52 remains active on2d57e13 near the one-hour checkpoint. Master planned
+fourtools in two waves at23:36:58UTC after the fresh booking URL research repair.
+Lookup published after0.219-second fetch,5results,contract/live/core review passed.
+Search andcalendar compiled with contract passes. Search's first generated live
+check failed:96.733seconds including pacing/setup,backend reportedNETWORK after
+92.250seconds,zeroresults. Calendar livecheck is underway; booking has not compiled.
+Do not label the search failure a provider-capacity outage without its actual cause.
+
+Continue within the original remaining~30minutes: allfourresearchplans exist,
+compilers retained their drafts/history, and master can repair the failed live
+capture using its recorded evidence. The90-minute harddeadline remainsSeptember15
+00:12:57UTC. No freshrestart,codechange,deadlineextension or concurrentliveaudit.
+Search's planned descriptions now correctly restrict inputs to three-letterairport
+codes. Its current booking_url builder uses only the firstsegment of each returned
+itinerary; this remains a concrete independent connecting-coverage check, not yet
+a demonstrated live failure. Currentparser reads arrivaldate from its own source
+field rather than copyingdeparturedate; actual overnight correctness remains unaudited.
+Calendar source-count/classification semantics also remain unverified independently.
+
+Collector6440HTTP200,lasttracewrite23:40UTC;new74790active,old54899paused. Free9.59GiB,
+battery42%estimated2h52m at23:41:50UTC. Evidence and unchangedimplementation retained.
+Accounting throughaudit51 unchanged,active52excluded. Hotels policyblock unresolved.
+No push,MR,merge,reset,evidence deletion or repeatabilityclaim.
