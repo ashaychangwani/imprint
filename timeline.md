@@ -13834,3 +13834,33 @@ recovered 105 provider turns; do not double count its partial trace.
 Use new Node collector 74790 at http://127.0.0.1:6440/v1/traces. Old collector
 54899 remains paused with memory retained. No evidence deleted. Hotels' provider
 policy rejection remains unresolved. No full repeatability claim, push, MR or merge.
+
+
+## 2026-09-14 17:12 PDT — Audit threshold passes despite a broken search result
+
+Audit 52 ended in 8.082951 minutes, PID 6685 exited. Original report says
+PASS 20/21 graded (95.24%): 14 actual calls, 11 correct, one broken search call,
+two capture timeouts excluded, and nine parameters labeled working. Preserve
+that report, but this is not a reliable success or grounds for an unchanged repeat.
+OAK–LAX search returned records claiming the full route and zero stops while
+containing only OAK–LAS or SLC–LAX segments. Two SFO–JFK searches loaded 28 rendered
+results but captured no selected API response, including a paced retry. The audit
+labels these infrastructure; there is no evidence of an external outage. Its
+working destination verdict relies on the rendered page, not successful tool output.
+Booking exercised two fresh nonstop choices only. Calendar input contrasts passed.
+
+A sequential private diagnostic now calls untouched OAK–LAX search, saves raw
+responses/page and returned records, then selects an actual inconsistent or grouped
+record and passes its exact booking_url to the untouched consumer. It measures
+initial and warm booking with separate search/booking pools. Script/log:
+flights-52-coverage-diagnostic.ts and flights-52-coverage-diagnostic.log; results
+flights-52-diagnostic-*. No teacher input, generated edits or LLM calls. Determine
+which source fields caused component loss before any general correction.
+
+Audit trace 1TCb/14v29iLmdDBnoOiMQ==: 3 spans, one usage span, 937,122 input including
+882,560 reads, 5,729 output, zero writes, $0.6858520;
+no missing usage. Campaign 60 teaches/49 audits, 4721.203499 summed minutes,
+966,403,267 input including 806,839,808 reads, 10,184,629 output, zero emitted writes,
+$1164.6823392 base estimate. 108 completed traces/12,825 spans/4,082 usage spans,
+plus teach51 recovered105 turns. Prior missing-usage and pricing limitations remain.
+No fresh teach yet, no push/MR/merge/deletion. Hotels policy block remains unresolved.

@@ -1,6 +1,6 @@
 # Teach validation accounting — September 7, 2026
 
-These are sixty teaches and forty-eight independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are sixty teaches and forty-nine independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
@@ -116,7 +116,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights teach 51 | 4 ready; search context and booking fields repaired; fresh chain passed; usage recovered from sessions, audit pending | 85.97 | 23,770,795 | 20,126,720 | 0 | 233,207 | $27.29 |
 | Flights audit 51 | PASS30/30graded;17 correct calls,1excluded timeout,13working parameters; connecting booking passed | 7.58 | 869,632 | 810,112 | 0 | 5,675 | $0.68 |
 | Flights teach 52 | 4 ready; fresh booking URL and generated chain passed; capture retry recovered; audit pending | 68.35 | 16,532,169 | 13,143,808 | 0 | 191,051 | $22.63 |
-| **Total** | **Includes failures/cancellations; recorded usage** | **4,713.12** | **965,466,145** | **805,957,248** | **0** | **10,178,900** | **$1,164.00** |
+| Flights audit 52 | Threshold PASS 20/21; 11 correct calls, 1 malformed search, 2 capture exclusions; overall not reliable | 8.08 | 937,122 | 882,560 | 0 | 5,729 | $0.69 |
+| **Total** | **Includes failures/cancellations; recorded usage** | **4,721.20** | **966,403,267** | **806,839,808** | **0** | **10,184,629** | **$1,164.68** |
 
 ## Cost assumptions and completeness
 
@@ -2692,3 +2693,33 @@ recovered 105 provider turns; do not double count its partial trace.
 Use new Node collector 74790 at http://127.0.0.1:6440/v1/traces. Old collector
 54899 remains paused with memory retained. No evidence deleted. Hotels' provider
 policy rejection remains unresolved. No full repeatability claim, push, MR or merge.
+
+
+## 2026-09-14 17:12 PDT — Audit threshold passes despite a broken search result
+
+Audit 52 ended in 8.082951 minutes, PID 6685 exited. Original report says
+PASS 20/21 graded (95.24%): 14 actual calls, 11 correct, one broken search call,
+two capture timeouts excluded, and nine parameters labeled working. Preserve
+that report, but this is not a reliable success or grounds for an unchanged repeat.
+OAK–LAX search returned records claiming the full route and zero stops while
+containing only OAK–LAS or SLC–LAX segments. Two SFO–JFK searches loaded 28 rendered
+results but captured no selected API response, including a paced retry. The audit
+labels these infrastructure; there is no evidence of an external outage. Its
+working destination verdict relies on the rendered page, not successful tool output.
+Booking exercised two fresh nonstop choices only. Calendar input contrasts passed.
+
+A sequential private diagnostic now calls untouched OAK–LAX search, saves raw
+responses/page and returned records, then selects an actual inconsistent or grouped
+record and passes its exact booking_url to the untouched consumer. It measures
+initial and warm booking with separate search/booking pools. Script/log:
+flights-52-coverage-diagnostic.ts and flights-52-coverage-diagnostic.log; results
+flights-52-diagnostic-*. No teacher input, generated edits or LLM calls. Determine
+which source fields caused component loss before any general correction.
+
+Audit trace 1TCb/14v29iLmdDBnoOiMQ==: 3 spans, one usage span, 937,122 input including
+882,560 reads, 5,729 output, zero writes, $0.6858520;
+no missing usage. Campaign 60 teaches/49 audits, 4721.203499 summed minutes,
+966,403,267 input including 806,839,808 reads, 10,184,629 output, zero emitted writes,
+$1164.6823392 base estimate. 108 completed traces/12,825 spans/4,082 usage spans,
+plus teach51 recovered105 turns. Prior missing-usage and pricing limitations remain.
+No fresh teach yet, no push/MR/merge/deletion. Hotels policy block remains unresolved.
