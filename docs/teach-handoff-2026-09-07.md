@@ -1,5 +1,38 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 19:02 PDT — Saved search repair passes earlier raw research bodies
+
+Offline inspection found that the existing compiler prompt already says neither
+first-frame selection nor concatenating every frame is a universal rule. No new
+prompt or runtime rule is justified solely by this repeated symptom.
+
+The selected compiler fixture contains one result payload with 25 itineraries.
+Earlier retained search research bodies contain three and two copies of the
+same 31 selections, respectively. Untouched revision 3 parses those as 93 and
+62 results across invented groups. Untouched revision 4 returns 31 unique
+selections in the original two groups for both bodies, and still returns 25
+for the selected fixture. Payload bytes differ, so whole-frame byte equality
+would not establish the relationship. Private script/report
+/tmp/imprint-fresh-inputs-VYbJm1/flights-53-frame-diagnostic.ts and .json preserve
+source hashes, frame identities/counts and both parser outcomes. No browser,
+LLM, generated-file edit, published repair or new teach was involved.
+
+The exact raw body of the failed generated 75-result invocation has not been
+located; its parsed result preview and reviewer rejection are retained. These
+earlier actual research bodies reproduce the same defect, but are not that
+invocation. Revision 4's final recorded offline check passed six tests, then
+reported request-transform type errors; the agent wrote a correction before
+interruption, without a later recorded check or live validation. Do not promote
+this draft or count the teach as successful.
+
+Next inspect whether the compiler's evidence package makes earlier contrasting
+research bodies available usefully, instead of prescribing a site strategy or
+adding duplicate prose. Any justified code/prompt change still needs a new teach.
+Power at 18:57 PDT: battery 10%, discharging, estimated 63 minutes. No new
+90-minute teach until adequate power. Accounting unchanged through audit 53;
+implementation remains 81f124d. No push, MR, merge, reset or evidence deletion.
+
+
 ## 2026-09-14 18:52 PDT — Flights 53 partial audit complete; power pause
 
 Audit 53 finished in 2.661 minutes; PID 53378 exited. Both published tools passed
