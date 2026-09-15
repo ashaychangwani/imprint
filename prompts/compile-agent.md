@@ -27,6 +27,15 @@ or invent missing intermediate bodies. Older evidence may lack the array: use
 grounded recording fixtures for individual components and report any missing
 chain proof instead of manufacturing a successful fixture.
 
+When `evidenceFiles.historyFile` is present, its index links other observations
+from this tool's retained research to available full response and response-chain
+files. Match each `observationId` to `observationFile` for its inputs, request
+identity, backend and outcome. Choose relevant repeats or contrasts to test your
+parser; a failed or differently constructed request is evidence to assess, not
+an automatically valid fixture. Keep each call's chain separate. Missing paths
+mean that body was not retained; never substitute the selected call's response.
+The runtime does not choose which earlier observations apply to the current plan.
+
 Server-returned echoes are still echoes. A response field containing the user's
 query may be useful context, but extracting words or numbers from it does not
 turn them into applied settings. For example, `query: "blue large shirts"`

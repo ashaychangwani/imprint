@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'bun:test';
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -111,7 +112,7 @@ const binding = {
 };
 
 describe('focused API research', () => {
-  it('copies only the selected observation chain with distinct response slots and protected login values', async () => {
+  it('keeps selected and contrasting chains distinct with protected login values', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-chain-'));
     const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-compiler-chain-'));
     const first = apiCandidate('chain', 'fetch');
@@ -168,6 +169,60 @@ describe('focused API research', () => {
         '<main>alpha ${credential.password}</main>',
       ]);
       expect(readFileSync(join(compilerDir, files.responseFile), 'utf8')).toBe(responses[1]);
+      if (!files.historyFile) throw new Error('Missing contrast evidence index');
+      const history = JSON.parse(readFileSync(join(compilerDir, files.historyFile), 'utf8'));
+      expect(history.observations).toHaveLength(1);
+      const contrast = history.observations[0];
+      const metadata = JSON.parse(readFileSync(join(compilerDir, files.observationFile), 'utf8'));
+      expect(contrast.observationId).toBe(metadata.observations[1].id);
+      expect(JSON.parse(readFileSync(join(compilerDir, contrast.responsesFile), 'utf8'))).toEqual([
+        { items: [{ id: 'beta', password: '${credential.password}' }] },
+        '<main>beta ${credential.password}</main>',
+      ]);
+      expect(readFileSync(join(compilerDir, contrast.responseFile), 'utf8')).toBe(
+        '<main>beta ${credential.password}</main>',
+      );
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+      rmSync(compilerDir, { recursive: true, force: true });
+    }
+  });
+  it('indexes only listed observations and preserves missing or failed evidence without substitution', () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-history-'));
+    const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-compiler-history-'));
+    const stem = (id: string) => createHash('sha256').update(id).digest('hex');
+    try {
+      mkdirSync(join(toolDir, 'live-results'));
+      writeFileSync(
+        join(toolDir, 'api-research.json'),
+        JSON.stringify({
+          observation: { id: 'selected' },
+          observations: [{ id: 'selected' }, { id: 'failed' }, { id: 'missing' }, { id: 'failed' }],
+        }),
+      );
+      for (const [id, body] of [
+        ['selected', 'selected-result'],
+        ['failed', 'failure-body'],
+        ['unlisted', 'unrelated'],
+      ] as const) {
+        writeFileSync(join(toolDir, 'live-results', `${stem(id)}.txt`), body);
+      }
+      const files = copyApiResearchEvidence(toolDir, compilerDir);
+      if (!files?.historyFile) throw new Error('Missing history index');
+      const { observations } = JSON.parse(
+        readFileSync(join(compilerDir, files.historyFile), 'utf8'),
+      );
+      expect(observations).toHaveLength(2);
+      expect(observations[0].observationId).toBe('failed');
+      expect(readFileSync(join(compilerDir, observations[0].responseFile), 'utf8')).toBe(
+        'failure-body',
+      );
+      expect(observations[0].responsesFile).toBeUndefined();
+      expect(observations[1]).toEqual({ observationId: 'missing' });
+      expect(existsSync(join(compilerDir, 'api-research-history', `${stem('unlisted')}.txt`))).toBe(
+        false,
+      );
+      expect(readFileSync(join(compilerDir, files.responseFile), 'utf8')).toBe('selected-result');
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
       rmSync(compilerDir, { recursive: true, force: true });

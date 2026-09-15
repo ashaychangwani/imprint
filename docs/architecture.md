@@ -785,6 +785,14 @@ retain corroborating observations while testing a smaller workflow when the
 core response is sufficient. Optional parser metadata is omitted when its
 meaning is unsupported, rather than filled from an unrelated numeric pair or
 other matching shape. The runtime does not choose which requests or fields matter.
+Compiler evidence keeps the selected observation in its existing fixture files.
+An optional `api-research-history.json` indexes other observation IDs listed in
+that tool's research handoff, with relative paths to each available retained
+result and ordered response array. Bodies remain separate files, not inline
+prompt content. Missing bodies have no path and are not replaced by the selected
+result. Unlisted files are not copied. Agents match IDs to the complete research
+metadata and choose which earlier calls apply to the current plan; failed and
+changed-request observations are not automatically accepted parser fixtures.
 Before live validation, compilers test the complete supplied research response
 as well as relevant recording examples. They preserve response framing and
 determine which envelopes contain metadata, records, or updates; a successful

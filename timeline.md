@@ -14099,3 +14099,43 @@ adding duplicate prose. Any justified code/prompt change still needs a new teach
 Power at 18:57 PDT: battery 10%, discharging, estimated 63 minutes. No new
 90-minute teach until adequate power. Accounting unchanged through audit 53;
 implementation remains 81f124d. No push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-14 19:10 PDT — Expose earlier research responses to the compiler
+
+The compiler previously received all observation summaries but full bodies only
+for the selected observation. Its read_file tool is scoped to the generated tool
+directory; no explicit path index exposed earlier raw research bodies. This
+explains a concrete evidence gap in 53: the selected single-frame fixture passed
+while earlier retained multi-frame responses already reproduced duplication.
+
+copyApiResearchEvidence now retains the selected fixture and creates a separate
+index of other observation IDs listed in this tool's current research history.
+It copies available result/ordered response-chain files without changing bytes,
+keeps calls separate, and records unavailable bodies with absent paths. It does
+not scan unrelated files or decide whether a failed or changed-request observation
+is valid for the current plan. The compiler chooses relevant cases using existing
+input/request/backend/outcome metadata. Prompt, README, architecture and website
+are aligned. No site-specific rule, prior generated tool or private diagnosis is
+supplied to teachers.
+
+69 focused research/controller tests pass, including protected credential values,
+distinct selected/contrast chains, missing bodies, duplicate observation IDs and
+unlisted-file exclusion. Lint (214 files), type checking and diff check pass.
+Web build passes with the existing bundle-size warning; its first invocation
+failed because bunx was absent from PATH, then passed with the correct PATH.
+Desktop/mobile full pages and detail crops inspected; no page errors or horizontal
+overflow. Sticky navigation overlaps part of the detail crops; full pages are
+retained. Preview PID 56607 stopped; research-history-* local artifacts retained.
+
+A private copy diagnostic against untouched 53 research indexed 11 other
+observations, with five retained result files and five response arrays. All
+8,809,192 copied history bytes match their originals. Missing files were not
+substituted. Script/report/directory: /tmp/imprint-fresh-inputs-VYbJm1/
+flights-53-handoff-diagnostic*. No live calls or LLM usage; this does not validate
+agent use of the new package. Accounting remains unchanged through audit 53.
+
+Fresh teach 54 is required and NOT started: battery 7%, discharging, estimated
+35 minutes; disk 9.0 GiB. Wait for external power or verified adequate battery.
+Use a fresh unused home and original recording/four-operation scope, then audit.
+Never resume 53 or promote its draft. No push, MR, merge, reset or evidence deletion.

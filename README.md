@@ -116,6 +116,9 @@ reviews the complete plan before normal verification and publication; only an
 exactly matching draft is reused. Declared consumers retain producer-first ordering.
 Researchers can call proven sibling requests with fresh inputs before testing a
 consumer; recorded continuation values are not a substitute for fresh output.
+Compilers can inspect full retained responses from that tool's earlier research
+through a local index, then choose relevant repeat and contrast cases for offline
+checks. Each observation keeps its own inputs, outcome and response chain.
 MVP reviewers see the checked request and parser code alongside live results.
 Publication retains the backend from that exact reviewed passing call in
 `backends.json`, so a fresh MCP process starts on the tested path. This records

@@ -176,7 +176,7 @@ function retainedResponsesPath(toolDir: string, observationId: string): string {
   return `${retainedResultPath(toolDir, observationId)}.responses.json`;
 }
 
-/** Copy only the selected observation, not another tool's or attempt's evidence. */
+/** Keep the selected fixture distinct from this tool's other retained observations. */
 export function copyApiResearchEvidence(
   researchDir: string,
   compilerDir: string,
@@ -185,12 +185,14 @@ export function copyApiResearchEvidence(
       observationFile: string;
       responseFile: string;
       responsesFile?: string;
+      historyFile?: string;
     }
   | undefined {
   const observationPath = pathJoin(researchDir, 'api-research.json');
   if (!existsSync(observationPath)) return undefined;
-  const { observation } = JSON.parse(readFileSync(observationPath, 'utf8')) as {
+  const { observation, observations = [] } = JSON.parse(readFileSync(observationPath, 'utf8')) as {
     observation: ApiResearchObservation;
+    observations?: ApiResearchObservation[];
   };
   const responsePath = retainedResultPath(researchDir, observation.id);
   if (!existsSync(responsePath)) return undefined;
@@ -209,7 +211,34 @@ export function copyApiResearchEvidence(
       pathJoin(compilerDir, files.responsesFile),
     );
   }
-  return files;
+  const otherIds = [...new Set(observations.map(({ id }) => id))].filter(
+    (id) => id !== observation.id,
+  );
+  if (!otherIds.length) return files;
+  const historyDir = 'api-research-history';
+  mkdirSync(pathJoin(compilerDir, historyDir), { recursive: true });
+  const history = otherIds.map((id) => {
+    const stem = createHash('sha256').update(id).digest('hex');
+    const entry: { observationId: string; responseFile?: string; responsesFile?: string } = {
+      observationId: id,
+    };
+    for (const [key, source, name] of [
+      ['responseFile', retainedResultPath(researchDir, id), `${stem}.txt`],
+      ['responsesFile', retainedResponsesPath(researchDir, id), `${stem}.responses.json`],
+    ] as const) {
+      if (!existsSync(source)) continue;
+      const relativePath = pathJoin(historyDir, name);
+      copyFileSync(source, pathJoin(compilerDir, relativePath));
+      entry[key] = relativePath;
+    }
+    return entry;
+  });
+  const historyFile = 'api-research-history.json';
+  writeFileSync(
+    pathJoin(compilerDir, historyFile),
+    JSON.stringify({ observations: history }, null, 2),
+  );
+  return { ...files, historyFile };
 }
 
 function resultFact(
