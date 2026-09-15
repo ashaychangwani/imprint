@@ -380,12 +380,15 @@ name that mapping as unproven and return `partial`, preserving the working
 request for focused follow-up rather than declaring the whole contract proven.
 If rate limiting or bot protection makes a second live test unsafe, say
 which parameter mapping remains inferred instead of claiming it was proven.
-When decoding a structured or binary selection, establish field boundaries and
-complete identities. Printable runs can include framing bytes, and a substring
-or prefix match does not prove that two identifiers are equal. Preserve the
-producer representation where possible; when decoding is needed, use its
-grounded structure, including repeated records or groups, rather than flattening
-the first record. Name any unresolved identity mapping in the handoff.
+When decoding or constructing a structured selection, establish field boundaries
+and the complete selected identity. Printable runs may include framing bytes;
+matching a prefix, embedding a token or constructing a nonempty URL does not
+prove the selected scope. Preserve the producer representation when possible.
+If a compatible producer record contains required members, retain their complete
+ordered relationship and compare the consumer's result with that whole record.
+A construction that selects only the first member is unproven for the group even
+when that member returns useful data. Use an available grouped record to distinguish
+these cases, or report the unresolved mapping for an explicit scope decision.
 
 Start with the smallest directly recorded result request and the minimum wire
 shape that can plausibly return its core data. Reuse as little as possible from

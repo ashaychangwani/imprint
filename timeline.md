@@ -13864,3 +13864,41 @@ no missing usage. Campaign 60 teaches/49 audits, 4721.203499 summed minutes,
 $1164.6823392 base estimate. 108 completed traces/12,825 spans/4,082 usage spans,
 plus teach51 recovered105 turns. Prior missing-usage and pricing limitations remain.
 No fresh teach yet, no push/MR/merge/deletion. Hotels policy block remains unresolved.
+
+
+## 2026-09-14 17:16 PDT — Required members lost during parsing and booking construction
+
+The untouched private diagnostic completed; all pools closed, no LLM calls.
+Fresh OAK–LAX October15 search took35.607seconds and returned9records. Two have
+truncated member lists. Raw Southwest WN3170 OAK–LAS plus WN2318 LAS–LAX contains
+arrival time [null,10] on the second segment; the page says12:10AM nextday.
+Raw Delta DL4061 OAK–SLC has departure [6]; the page says6:00AM. The strict time
+parser rejects both encodings and flatMap silently drops their whole segments.
+It then recomputes zero stops from the survivors despite parent OAK–LAX identity.
+The actual source includes both required segments in each case. Private
+flights-52-private-segment-source.json preserves source paths and values.
+
+Taking the exact returned Southwest booking_url independently exposed the
+constructed-selection defect: booking returns only WN3170 OAK–LAS and127USD,
+while the selected producer record is OAK–LAX viaLAS,168USD. Its rendered booking
+page confirms OAK–LAS, so this is not only a consumer parser omission. The URL
+builder encodes the first raw segment and loses the complete selected itinerary.
+Initial32.683seconds and same-tool/same-rung warm2.709seconds both return3offers
+for that wrong destination. Separate search/booking pools; original generated
+files unchanged. Evidence flights-52-diagnostic-* and diagnostic script/log retained.
+
+General guidance correction replaces the dense compiler verification paragraph
+with source coverage, missing-field and grouped-selection checks. Optional field
+conversion must not silently delete a required member and recompute a plausible
+summary. Agents establish omitted defaults from evidence or omit an unsupported
+optional detail; required identity gaps remain explicit. Research and review
+compare constructed selections with the complete chosen record and consumer
+result, including compatible grouped records. No site-specific time default,
+selector, protocol rule, runtime code or private teacher fixture added.
+README, architecture and website aligned. Lint214files,typecheck,diffcheck andweb
+build pass(existingbundlewarning). Desktop/mobile fullpages and detail crops
+inspected; no page errors or horizontaloverflow. Mobile detail crop crosses the
+sticky header; fullpage retained. Preview9234stopped. No prompt-mirroring tests.
+Effectiveness requires a NEWteach, not a resumed52. Accounting unchanged through
+audit52 at1164.6823392baseestimate. Battery34%,2h11mestimated; recheck during53.
+No push,MR,merge,reset,evidence deletion or repeatability claim. Hotels block persists.

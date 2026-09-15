@@ -31,8 +31,12 @@ Keep group-level fields and constraints distinct from member-level ones in
 validation, request construction, and parsing. Establish from the complete
 structure which properties are shared and which describe the group collectively.
 A group's identity, extent, or total need not describe each member individually.
-Report a concrete mismatch or a guard that rejects a contract-compatible group,
-not inheritance alone or an assumed restriction.
+Check required members as well as top-level records: an optional-field parse failure
+must not remove a member while leaving a complete-looking parent or recomputed
+summary. A constructed selection must resolve the complete selected record, not
+merely a useful first member. Report a concrete omitted member, contradictory
+summary or selection mismatch when the supplied evidence establishes it; do not
+infer a failure from inheritance alone or an assumed restriction.
 Check whether returned alternatives are complete source records or required
 components of one record. A parent may lack action fields found only on its
 children; omitting it must not turn its components into independent alternatives

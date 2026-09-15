@@ -61,7 +61,11 @@ eligible source records with the parsed collection, including differently marked
 records. It checks each attribute against its own evidence, using a contrasting
 record when related attributes coincide in the baseline. Reviewers report concrete
 extraction loss or contradictions; unavailable source coverage remains a stated
-limit, not an invented failure or an assumed complete result.
+limit, not an invented failure or an assumed complete result. Optional-attribute
+conversion failures must not silently remove required members or produce summaries
+of a shortened record. Agents verify omitted defaults from evidence, preserve core
+identity, and check constructed selections against the complete consumer result;
+a useful first-member result does not prove the whole selected group.
 Semantic review also reports concrete rejection guards in supplied parser/request
 source that contradict the declared core input domain, even if the sampled
 baseline passes. This is evidence-based contract review, not an exhaustive

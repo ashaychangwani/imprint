@@ -244,6 +244,8 @@ member. Parsers preserve the distinction between alternatives and required
 components, including when action links exist only on components. Verification
 compares eligible source records with the output and checks each attribute against
 its own evidence; a plausible subset or matching sibling value is insufficient.
+Missing optional details must not erase required members, and constructed
+selections must preserve the complete selected record through the consumer result.
 Reviewers also report
 explicit parser or request guards that reject inputs allowed by the public contract;
 a fixture's shape must not silently become a restriction on callers.
