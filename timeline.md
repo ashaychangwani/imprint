@@ -13902,3 +13902,30 @@ sticky header; fullpage retained. Preview9234stopped. No prompt-mirroring tests.
 Effectiveness requires a NEWteach, not a resumed52. Accounting unchanged through
 audit52 at1164.6823392baseestimate. Battery34%,2h11mestimated; recheck during53.
 No push,MR,merge,reset,evidence deletion or repeatability claim. Hotels block persists.
+
+
+## 2026-09-14 17:15 PDT — Launch fresh required-member validation
+
+Flights53 started 2026-09-15T00:14:29.387154+00:00, PID 9533, on implementation81f124d.
+Unused home /tmp/imprint-fresh-inputs-VYbJm1/home-53; exclusive flights-teach-53.log and manifest.
+Original recording and exact four-operation guidance; configured two workers.
+Target00:44:29UTC, assess01:14:29UTC, harddeadline01:44:29UTC September15.
+Previous teach/audit/private diagnostic/preview ended. Clean correct branch,
+source ancestry, both recordings intact, collector6440 healthy,9.43GiBfree.
+Battery33%,estimated2h01m; check power at one hour and before the following audit.
+New collector74790 active; old54899 paused with memory retained.
+
+Latest correction81f124d strengthens existing evidence checks for required members
+and constructed selections. No site-specific protocol/default rule or runtime
+change. Lint/typecheck/webbuild/visual checks passed; effectiveness unproven.
+Private52diagnostic proved omitted-time defaults dropped source segments and a
+first-segment booking URL changed OAK–LAX into OAK–LAS. No private values, mappings
+or previous generated tools were supplied to the fresh teaching agents.
+
+52 remains threshold auditPASS20/21 with a real broken search call and two capture
+exclusions, plus the separately confirmed wrong-destination booking; not reliable.
+Accounting throughaudit52:60teaches49audits,4721.203498915417summedminutes,
+966403267input806839808cache reads10184629output0emittedwrites,
+1164.6823392USDbaseestimate. Active53excluded; previous missingusage and pricing
+limitations remain. Hotels policyblock unresolved. No push,MR,merge,reset,
+evidence deletion or repeatabilityclaim. Keep implementationfixedthrough53audit.
