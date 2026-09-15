@@ -1,6 +1,6 @@
 # Teach validation accounting — September 7, 2026
 
-These are sixty-one teaches and forty-nine independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are sixty-one teaches and fifty independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
@@ -118,7 +118,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights teach 52 | 4 ready; fresh booking URL and generated chain passed; capture retry recovered; audit pending | 68.35 | 16,532,169 | 13,143,808 | 0 | 191,051 | $22.63 |
 | Flights audit 52 | Threshold PASS 20/21; 11 correct calls, 1 malformed search, 2 capture exclusions; overall not reliable | 8.08 | 937,122 | 882,560 | 0 | 5,729 | $0.69 |
 | Flights teach 53 | Deadline: lookup/calendar ready; search duplicates rejected, final repair interrupted; booking unpublished | 90.00 | 19,948,929 | 17,099,520 | 0 | 221,239 | $22.66 |
-| **Total** | **Includes failures/cancellations; recorded usage** | **4,811.21** | **986,352,196** | **823,939,328** | **0** | **10,405,868** | **$1,187.34** |
+| Flights audit 53 | Partial PASS 10/10 graded; seven correct calls, three working inputs, four coupled date bounds; search/booking absent | 2.66 | 322,988 | 264,832 | 0 | 3,129 | $0.40 |
+| **Total** | **Includes failures/cancellations; recorded usage** | **4,813.87** | **986,675,184** | **824,204,160** | **0** | **10,408,997** | **$1,187.75** |
 
 ## Cost assumptions and completeness
 
@@ -2766,3 +2767,40 @@ Campaign61teaches49audits,4811.205671summedminutes,986,352,196input,
 analysiscalls/interruptedCLI and pricing/recoverylimits remain. Activeaudit53excluded.
 No freshteach,codechange,push,MR,merge,reset,evidence deletion orrepeatabilityclaim.
 Hotels providerpolicyblock unresolved.
+
+
+## 2026-09-14 18:52 PDT — Flights 53 partial audit complete; power pause
+
+Audit 53 finished in 2.661 minutes; PID 53378 exited. Both published tools passed
+all seven actual calls: two location queries and five calendar calls. The report
+scores 10/10 by including three working parameter checks. Four date-bound
+parameters are coupled by the seven-day contract; each coherent pair worked,
+but their individual effects were not isolated. No failed calls or infrastructure
+exclusions. Search and booking remain unpublished, so this is a partial pass only.
+Original report and transcript remain in home-53/google-flights.
+
+Audit trace cqUfW/T2dyfGxT11XK4Usw== has 3 spans and one usage span: 322,988 input
+including 264,832 cache reads, 3,129 output, zero emitted writes, $0.4011368 base
+API estimate. Campaign: 61 teaches and 50 audits, 4813.866365 summed minutes,
+986,675,184 input including 824,204,160 reads, 10,408,997 output, zero writes,
+$1187.7457000 base estimate. 110 completed traces / 13,122 spans / 4,168 usage
+spans plus teach 51's recovered 105 turns. Prior missing and interrupted usage,
+cache-write normalization and pricing limitations remain; this is not an invoice.
+
+Last-20-hour status checked at September 14 18:49 PDT: Flights 42–53 ended in
+that window (42 began at 22:04 PDT, about 45 minutes before the window), with
+12 completed independent audits. Eleven teaches started within the window.
+Eight teaches produced all four tools; none established reliable repeatability.
+Full-tool audits 49 and 51 passed, but private checks found real defects; 52's
+threshold pass included a broken search and subsequent wrong-destination booking.
+Whole-run accounting for those 12 teaches and 12 audits is $290.6337376,
+247,212,630 input including 208,208,384 reads, 2,566,670 output, zero emitted
+writes. This includes the pre-window portion of 42 and all failed attempts.
+
+Battery 12%, estimated 48 minutes at 18:49 PDT; disk 9.0 GiB. No new teach until
+external power or a later verified adequate estimate. Offline next step: inspect
+53's repeated response-frame evidence and parser, determine whether a small
+general correction is justified, then validate any change with a new teach.
+No new implementation change or live process; collector 74790 remains active,
+old collector 54899 remains paused with memory retained. Hotels policy block
+unresolved. No push, MR, merge, reset, or evidence deletion.
