@@ -13929,3 +13929,31 @@ Accounting throughaudit52:60teaches49audits,4721.203498915417summedminutes,
 1164.6823392USDbaseestimate. Active53excluded; previous missingusage and pricing
 limitations remain. Hotels policyblock unresolved. No push,MR,merge,reset,
 evidence deletion or repeatabilityclaim. Keep implementationfixedthrough53audit.
+
+
+## 2026-09-14 17:45 PDT — Flights 53 misses target with booking dependency unresolved
+
+Flights53 active after30minutes, runbe8068ab-4140-4900-8432-5382c36d5fe8,
+unchanged81f124d. No focusedjournal or publishedtools. Lookup research proved
+Paris city/airport records via0.388-second fetch. Search retained8observations,
+including repeated~76-second capture failures, and returned a partial candidate:
+rendered LAX–NewYork October20 one-way search with31results in4.467seconds. Core
+search attributes are present, but the short DOM data-id has no proven mapping
+to the complete opaque selection promised for booking. This is renderedHTML,
+not API-response capture;4.467seconds is the observed research request timing,
+not an independently controlled warm-call benchmark.
+
+Booking retained honest blocked handoffs. Its coherent stale diagnostic returned
+null/protocol13, while the public selected_flight boundary lacks proven fresh
+selection context. Only lookup is available as a producer; it cannot supply
+booking state. The master must repair that boundary/dependency using retained
+research. No invalid proof accepted and no additional stale-token permutations
+required. Calendar research remains testing: several capture failures followed
+by32.473/35.396-second completed requests, not yet a proven handoff. No inference
+of API impossibility or provider outage from these transport labels alone.
+
+Keep original01:14:29UTC assessment and01:44:29UTC harddeadline September15.
+No codechange, restart, deadlineextension or concurrentlivework. Collector6440
+healthy and writing;9.16GiBfree. Battery26%,estimated1h50m at00:43UTC; checkagain
+atonehour and before audit. Accounting unchanged throughaudit52;active53excluded.
+No push,MR,merge,reset,evidence deletion or repeatabilityclaim. Hotels block persists.
