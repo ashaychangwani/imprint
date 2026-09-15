@@ -1,5 +1,47 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-14 18:47 PDT — Flights 53 reaches deadline; partial audit started
+
+Flights53 stopped at90.002172minutes,01:44:30UTC,PID9533exited,journalfailed,
+revision4. Two tools published: resolve_flight_location (0.259s,5results) and
+get_date_grid_prices (35.383s,49pairs). Search/booking remain unpublished.
+All work used81f124d. Original failed observations/drafts/conversations retained.
+
+Booking research eventually proved two non-first positional selections, DL3991
+andUA1007 rather thanAS620, with10observations. Its proposed selected_flight
+holds fresh token, every ordered segment descriptor, and raw group/item indices.
+Research proof did not reach generated consumer/chain validation. It remains
+unproven that positions stay stable across independent search/browser sessions.
+Master planned at01:25UTC, leaving under20minutes for compilation and live checks.
+
+Search first returned meaningful itineraries but omitted promisedcurrency,
+emissions/ranking and some times. The reviewer rejected it; retainedcompiler
+repairedfields, then encountered metadata-only initial response frames. A later
+parser scanned framed payloads but concatenated repeated complete resultsets,
+inflating25pageitineraries to75 and assigning false group/rankingpositions.
+Reviewer rejected those duplicates. Master sent this factual defect back to the
+same compiler; its final repair was interrupted at the harddeadline. Do not
+claim required-member/selection fixes independently validated by this partialrun.
+
+Audit53 started01:45:13.398299UTC,PID53378,samehome-53/code,exclusive
+flights-audit-53.log/manifest. Deadline02:30:13UTC September15. Only the two
+publishedtools can establish coverage. Prior teachended,cleanbranch,collector6440
+healthy,9.01GiBfree. Battery13%,56minutesestimated; usernotified. Finish bounded
+partialaudit/evidencework, but do NOT start another90-minteach without external
+power or a later verified adequate battery estimate. No concurrentlivework.
+
+Teach traceesdEh7sprFH+aKVLGfgQ8Q==:294spans85usage,allanalysiscallsreportusage.
+Recorded19,948,929input including17,099,520cache reads,221,239output,
+0emittedwrites,$22.6622240baseestimate. Interrupted compiler
+work can have uncaptured usage even though no llm.analyze span lacks usage.
+Campaign61teaches49audits,4811.205671summedminutes,986,352,196input,
+823,939,328reads,10,405,868output,0writes,$1187.3445632baseestimate.
+109completedtraces13119spans4167usage plus51recovered105turns;prior36missing
+analysiscalls/interruptedCLI and pricing/recoverylimits remain. Activeaudit53excluded.
+No freshteach,codechange,push,MR,merge,reset,evidence deletion orrepeatabilityclaim.
+Hotels providerpolicyblock unresolved.
+
+
 ## 2026-09-14 17:15 PDT — Launch fresh required-member validation
 
 Flights53 started 2026-09-15T00:14:29.387154+00:00, PID 9533, on implementation81f124d.
