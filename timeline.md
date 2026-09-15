@@ -13957,3 +13957,33 @@ No codechange, restart, deadlineextension or concurrentlivework. Collector6440
 healthy and writing;9.16GiBfree. Battery26%,estimated1h50m at00:43UTC; checkagain
 atonehour and before audit. Accounting unchanged throughaudit52;active53excluded.
 No push,MR,merge,reset,evidence deletion or repeatabilityclaim. Hotels block persists.
+
+
+## 2026-09-14 18:15 PDT — One-hour assessment retains an honest exact-selection gap
+
+Flights53 active at60minutes on81f124d, no focusedjournal or publishedtools.
+Lookup remainsproven. Calendar has13researchobservations and a proven APIcapture
+for SFO–Paris, with repeated valid inputs and shifted seven-day outbound bounds;
+its draft compiled. Search recovered APIcapture with12observations: repeated
+LAX–JFK and changed SFO–SEA October22 results. Its proposed scalar selected_flight
+combines each same-record token with every ordered segment descriptor. Repeated
+LAX results include B61488+B61017; no first-member truncation is prescribed.
+This research evidence has not yet passed generated-parser or consumer validation.
+
+Booking has7observations and partial proof. Its38.866-second navigation captured
+AS620SFO–SEA October22,Alaska options,89USD,fare details andhandoff. The researcher
+explicitly refuses exact-selection proof: the click selector always chooses the
+first card, which happens to match AS620. The token is validated but not used to
+select the card. Missing proof requires a contrasting non-first choice or a tested
+producer handle. Direct fresh-token and bootstrap tests returnedprotocol13;
+that does not establish session-binding necessity across all strategies. All
+failures retained. Master resumed the same researcher and requested fresh producer
+values again at01:14UTC. No manual strategy or private fixture was supplied.
+
+Continue within the original remaining30minutes: three research plans and retained
+drafts exist, booking has a populated candidate and a specific falsifiable gap.
+No deadline extension, restart, codechange or concurrentlivework. Harddeadline
+01:44:29UTC September15. Collector6440healthy/writing,9.02GiBfree. Battery19%,
+estimated1h26m at01:13UTC. User was asked to connectpower; check again beforeaudit
+or anotherteach. Accounting unchangedthroughaudit52;active53excluded. No push,
+MR,merge,reset,evidence deletion or repeatabilityclaim. Hotels policyblock persists.
