@@ -1,6 +1,6 @@
 # Teach validation accounting — September 7, 2026
 
-These are sixty-one teaches and fifty independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
+These are sixty-two teaches and fifty independent audits, including the failed fresh validation of implementation `60392ef` (Flights attempt 5). Failed and cancelled attempts remain in the totals. Raw recordings, transcripts, and traces stay outside the repository.
 
 ## Recorded results and usage
 
@@ -119,7 +119,8 @@ Elapsed time normally comes from each completed `cli.teach` or `cli.audit` root 
 | Flights audit 52 | Threshold PASS 20/21; 11 correct calls, 1 malformed search, 2 capture exclusions; overall not reliable | 8.08 | 937,122 | 882,560 | 0 | 5,729 | $0.69 |
 | Flights teach 53 | Deadline: lookup/calendar ready; search duplicates rejected, final repair interrupted; booking unpublished | 90.00 | 19,948,929 | 17,099,520 | 0 | 221,239 | $22.66 |
 | Flights audit 53 | Partial PASS 10/10 graded; seven correct calls, three working inputs, four coupled date bounds; search/booking absent | 2.66 | 322,988 | 264,832 | 0 | 3,129 | $0.40 |
-| **Total** | **Includes failures/cancellations; recorded usage** | **4,813.87** | **986,675,184** | **824,204,160** | **0** | **10,408,997** | **$1,187.75** |
+| Flights teach 54 | User cancelled; 0 published, 4 unfinished; no audit | 17.02 | 3,725,908 | 2,844,800 | 0 | 56,509 | $5.79 |
+| **Total** | **Includes failures/cancellations; recorded usage** | **4,830.89** | **990,401,092** | **827,048,960** | **0** | **10,465,506** | **$1,193.54** |
 
 ## Cost assumptions and completeness
 
@@ -2804,3 +2805,51 @@ general correction is justified, then validate any change with a new teach.
 No new implementation change or live process; collector 74790 remains active,
 old collector 54899 remains paused with memory retained. Hotels policy block
 unresolved. No push, MR, merge, reset, or evidence deletion.
+
+
+## 2026-09-17 14:01 PDT — User stops experiment; no convergence claim
+
+User requested the recurring job be killed and an assessment of why more than
+50 attempts had not converged. Deleted automation imprint-fresh-validation via
+the app API; its automation.toml is absent. Sent SIGINT to Flights 54's owned
+process group and verified all 14 snapshotted process IDs exited. The CLI reports
+cancellation with zero ready tools and four unfinished. No audit was started.
+Stopped active trace collector 74790 after confirming the flushed root span.
+Old collector 54899 remains suspended with its memory retained; it does not run.
+Do not restart any teach, collector or automation without a new user instruction.
+
+Flights 54 ended after 17.023584 minutes on fb9f477. Location and calendar
+research had proven candidates; search research became proven just before the
+cancellation and booking research had begun. No generated tool was published.
+The latest evidence-packaging correction has not passed fresh live validation.
+All failed evidence and generated drafts are preserved in home-54 and prior homes.
+Private flights-54-user-stop.json records the stop time and owned process snapshot.
+
+Trace 6j2uaoHAGEpiramoNTq1Yg== has 59 spans, 26 usage spans and one analysis span
+without usage. Recorded 3,725,908 input including 2,844,800 cache reads, 56,509
+output, zero emitted writes, $5.792532 base API equivalent. Interrupted provider
+usage may be absent. The former accounting helper was no longer present, so this
+trace was read directly with trace/span deduplication and token-ancestor checks;
+no helper or evidence was deleted by this task. Private flights-teach-54-accounting.json.
+
+Campaign totals: 62 teaches (54 Flights, 8 Hotels), 50 independent audits,
+4830.889948 summed minutes, 990,401,092 input including 827,048,960 cache reads,
+10,465,506 output, zero emitted writes, $1193.538232 base estimate. This is about
+80.5 summed teach/audit hours, not calendar duration or an invoice. There are
+111 completed traces / 13,181 spans / 4,194 usage spans plus teach 51's recovered
+105 provider turns. At least 37 analysis calls lack usage and interrupted CLI
+work remains unknown; pricing and recovery caveats still apply.
+
+Assessment: working individual tool suites establish feasibility of useful tools,
+but no reliable fresh-teach result and unchanged-code repeat have converged.
+Failures alternate among response capture, incomplete/duplicated parsing and
+incorrect producer-to-booking identity. Independent audits have missed meaningful
+cases or passed the percentage threshold despite a real broken call. Private
+checks then disqualified apparent successes. Repeated 60–90 minute full teaches
+after narrow corrections consumed substantial time without demonstrating stable
+improvement. The experimental loop needed an earlier stop and reassessment,
+a fixed independently grounded acceptance suite and cheaper failure reproduction;
+continuing indefinite full reruns was not justified by convergence evidence.
+Hotels has no recent validation and its earlier provider policy rejection remains
+unresolved. No impossibility result, working-MVP delivery or repeatability claim.
+Branch remains locally committed; no push, MR, merge, reset or evidence deletion.

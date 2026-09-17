@@ -1,5 +1,53 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-17 14:01 PDT — User stops experiment; no convergence claim
+
+User requested the recurring job be killed and an assessment of why more than
+50 attempts had not converged. Deleted automation imprint-fresh-validation via
+the app API; its automation.toml is absent. Sent SIGINT to Flights 54's owned
+process group and verified all 14 snapshotted process IDs exited. The CLI reports
+cancellation with zero ready tools and four unfinished. No audit was started.
+Stopped active trace collector 74790 after confirming the flushed root span.
+Old collector 54899 remains suspended with its memory retained; it does not run.
+Do not restart any teach, collector or automation without a new user instruction.
+
+Flights 54 ended after 17.023584 minutes on fb9f477. Location and calendar
+research had proven candidates; search research became proven just before the
+cancellation and booking research had begun. No generated tool was published.
+The latest evidence-packaging correction has not passed fresh live validation.
+All failed evidence and generated drafts are preserved in home-54 and prior homes.
+Private flights-54-user-stop.json records the stop time and owned process snapshot.
+
+Trace 6j2uaoHAGEpiramoNTq1Yg== has 59 spans, 26 usage spans and one analysis span
+without usage. Recorded 3,725,908 input including 2,844,800 cache reads, 56,509
+output, zero emitted writes, $5.792532 base API equivalent. Interrupted provider
+usage may be absent. The former accounting helper was no longer present, so this
+trace was read directly with trace/span deduplication and token-ancestor checks;
+no helper or evidence was deleted by this task. Private flights-teach-54-accounting.json.
+
+Campaign totals: 62 teaches (54 Flights, 8 Hotels), 50 independent audits,
+4830.889948 summed minutes, 990,401,092 input including 827,048,960 cache reads,
+10,465,506 output, zero emitted writes, $1193.538232 base estimate. This is about
+80.5 summed teach/audit hours, not calendar duration or an invoice. There are
+111 completed traces / 13,181 spans / 4,194 usage spans plus teach 51's recovered
+105 provider turns. At least 37 analysis calls lack usage and interrupted CLI
+work remains unknown; pricing and recovery caveats still apply.
+
+Assessment: working individual tool suites establish feasibility of useful tools,
+but no reliable fresh-teach result and unchanged-code repeat have converged.
+Failures alternate among response capture, incomplete/duplicated parsing and
+incorrect producer-to-booking identity. Independent audits have missed meaningful
+cases or passed the percentage threshold despite a real broken call. Private
+checks then disqualified apparent successes. Repeated 60–90 minute full teaches
+after narrow corrections consumed substantial time without demonstrating stable
+improvement. The experimental loop needed an earlier stop and reassessment,
+a fixed independently grounded acceptance suite and cheaper failure reproduction;
+continuing indefinite full reruns was not justified by convergence evidence.
+Hotels has no recent validation and its earlier provider policy rejection remains
+unresolved. No impossibility result, working-MVP delivery or repeatability claim.
+Branch remains locally committed; no push, MR, merge, reset or evidence deletion.
+
+
 ## 2026-09-17 13:43 PDT — Fresh Flights 54 starts after power returns
 
 External power is connected. Fresh Flights 54 started at
