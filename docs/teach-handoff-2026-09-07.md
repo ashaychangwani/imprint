@@ -1,5 +1,33 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-17 13:43 PDT — Fresh Flights 54 starts after power returns
+
+External power is connected. Fresh Flights 54 started at
+2026-09-17T20:42:41.758329UTC, PID 61942, on implementation fb9f477.
+Unused home /tmp/imprint-fresh-inputs-VYbJm1/home-54; exclusive
+flights-teach-54.log and flights-teach-54-manifest.json. Original recording and
+exact four-operation guidance, two workers. Target 21:12:41UTC, assessment
+21:42:41UTC, hard deadline 22:12:41UTC (14:12/14:42/15:12 PDT).
+Startup reached triage of 78 candidates. No resumed failed teach or old tools.
+
+Preflight: clean correct branch, source origin/codex/imprint-master-v066 still
+34a6235 and ancestor, both original recording sizes intact, no earlier live
+teach/audit processes, 24.41 GiB free. Battery 10%, charging on AC. Collector
+74790/6440 passed an actual protobuf export/decode/append probe; its synthetic
+preflight span is excluded from run accounting. Old collector 54899 remains
+paused with memory retained. Existing evidence directory, prior homes and
+345 MB trace file survived the power pause; no evidence deleted by this task.
+
+Validate whether compilers use earlier same-run research response files for
+meaningful repeat/contrast cases, keep response chains separate, and preserve
+fresh complete producer selections through booking. Latest fix gives access
+without runtime semantic filtering; no previous private diagnosis is a teacher
+fixture. Keep code unchanged through this teach and independent audit. Any
+later correction requires another fresh run. Prior failures remain failures.
+Accounting unchanged through audit 53; active 54 excluded. Hotels policy block
+unresolved. No push, MR, merge, reset or deletion.
+
+
 ## 2026-09-14 19:10 PDT — Expose earlier research responses to the compiler
 
 The compiler previously received all observation summaries but full bodies only
