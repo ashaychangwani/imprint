@@ -2148,6 +2148,12 @@ describe('prompts and pre-plan discovery', () => {
     expect(() => parseFocusedPlannerOutput(JSON.stringify(unpaired), input)).toThrow(
       'matched live case',
     );
+    const mixedDocuments = structuredClone(output);
+    for (const test of mixedDocuments.implementationPlan.verificationCases)
+      test.recordedCall = { requestSeqs: [12, 18], freshnessChanges: 'none' };
+    expect(() => parseFocusedPlannerOutput(JSON.stringify(mixedDocuments), input)).toThrow(
+      'cannot exceed',
+    );
   });
 
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {

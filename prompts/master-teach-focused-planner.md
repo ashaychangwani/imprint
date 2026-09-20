@@ -190,6 +190,12 @@ whose response the workflow returns. Replay provenance lists the navigation
 sequence followed by the distinct response sequence. Do not substitute one for
 the other.
 
+`recordedCall.requestSeqs` is different: it lists only the bodies returned to
+the parser, one per executed artifact request. For a captured API response,
+include its response sequence and exclude the navigation document. A two-request
+artifact has at most two raw response entries even when its provenance cites
+four recording rows. Several frames in one response body remain one entry.
+
 The document reference grounds the page, not every literal future URL. A
 parameterized destination may be derived from recorded Referers, navigation
 events, links, or request data and proved live without an exact Document row.

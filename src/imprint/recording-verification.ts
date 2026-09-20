@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { Script } from 'node:vm';
 import { z } from 'zod';
+import { decodeBodyStructure } from './body-structure.ts';
 import { importModuleFresh } from './import-module-fresh.ts';
 import { resolveProvider } from './llm.ts';
 import {
@@ -21,6 +22,7 @@ export interface RecordingFixture {
   requestSeqs: number[];
   parameters: Params;
   responses: unknown[];
+  recordedRequests?: Array<{ seq: number; method: string; url: string; body?: string }>;
   actual: unknown;
   freshnessChanges?: string;
 }
@@ -38,6 +40,9 @@ const FactsSchema = z
       .max(12),
   })
   .strict();
+const ComparabilitySchema = z
+  .object({ status: z.enum(['matched', 'unverified']), reason: z.string().min(1) })
+  .strict();
 const StepSchema = z
   .object({
     action: z.enum(['inspect', 'finish']),
@@ -45,7 +50,11 @@ const StepSchema = z
     offset: z.number().int().nonnegative().optional(),
     search: z.string().min(1).optional(),
     project: z.string().min(1).max(8_000).optional(),
+    decode: z
+      .union([z.boolean(), z.enum(['json', 'form-urlencoded', 'decimal-framed-json'])])
+      .optional(),
     expectations: z.array(FactsSchema).max(16).optional(),
+    comparability: ComparabilitySchema.optional(),
     status: z.enum(['passed', 'failed', 'unverified']).optional(),
     reason: z.string().min(1),
   })
@@ -64,6 +73,17 @@ export function projectEvidence(value: unknown, source: string): string {
       { timeout: 1_000, contextCodeGeneration: { strings: false, wasm: false } },
     ) ?? 'null',
   );
+}
+
+/** Reuse the mechanical wire decoder; expose limits instead of guessing semantics. */
+export function decodeEvidenceResponses(responses: unknown[], format: unknown = 'auto'): unknown[] {
+  return responses.map((response, index) => {
+    if (typeof response !== 'string') return { index, format: 'native', value: response };
+    const decoded = decodeBodyStructure(response, format);
+    if (!decoded.ok) return { index, error: decoded.error, code: decoded.code };
+    const { sourceValue: _sourceValue, ...structure } = decoded.structure;
+    return { index, ...structure };
+  });
 }
 
 /** Run exactly the parser entrypoint used by runtime, without network requests. */
@@ -122,6 +142,11 @@ export async function recordingFixtures(input: {
       id: verification.id,
       origin: 'recording',
       requestSeqs: seqs,
+      recordedRequests: seqs.map((seq) => {
+        const request = input.session.requests.find((request) => request.seq === seq);
+        if (!request) throw new Error(`Recording request ${seq} is unavailable`);
+        return { seq, method: request.method, url: request.url, body: request.body };
+      }),
       parameters,
       responses,
       actual,
@@ -143,7 +168,11 @@ export async function verifyRecordingEvidence(input: {
   const request = input.requestStep ?? requestRecordingEvidenceStep;
   mkdirSync(input.directory, { recursive: true, mode: 0o700 });
   const sources = input.fixtures.map(({ actual: _actual, ...fixture }) => fixture);
-  const sourceKey = hash({ operation: input.operation, sources });
+  const sourceKey = hash({
+    contract: 'recording-evidence-v2',
+    operation: input.operation,
+    sources,
+  });
   const actualOutputs = input.fixtures.map(({ id, actual }) => ({ id, actual }));
   const actualKey = hash(actualOutputs);
   writeFileSync(
@@ -196,6 +225,7 @@ export async function verifyRecordingEvidence(input: {
         : new Map(input.fixtures.map(({ id, actual }) => [id, text(actual)]));
     let payload: unknown = {
       phase,
+      currentDate: new Date().toISOString().slice(0, 10),
       operation: input.operation,
       ...(phase === 'evaluation' ? { expectations } : {}),
       sources: sources.map(({ responses: _responses, ...fixture }) => ({
@@ -209,7 +239,8 @@ export async function verifyRecordingEvidence(input: {
     const initialPayload = payload;
     const inspections: unknown[] = [];
     let finished = false;
-    for (let turn = 0; turn < 6; turn++) {
+    // Six inspections/repairs, then one final decision using the last result.
+    for (let turn = 0; turn < 7; turn++) {
       const decision = await request(
         payload,
         StepSchema,
@@ -221,6 +252,7 @@ export async function verifyRecordingEvidence(input: {
         JSON.stringify({ payload, decision }),
       );
       if (decision.action === 'inspect') {
+        if (turn === 6) break;
         const body = texts.get(decision.sourceId ?? '');
         if (body === undefined)
           return finish({
@@ -231,7 +263,14 @@ export async function verifyRecordingEvidence(input: {
           const fixture = input.fixtures.find(({ id }) => id === decision.sourceId);
           try {
             const projected = projectEvidence(
-              phase === 'expectations' ? fixture?.responses : fixture?.actual,
+              phase === 'expectations'
+                ? decision.decode
+                  ? decodeEvidenceResponses(
+                      fixture?.responses ?? [],
+                      typeof decision.decode === 'string' ? decision.decode : 'auto',
+                    )
+                  : fixture?.responses
+                : fixture?.actual,
               decision.project,
             );
             payload = {
@@ -271,21 +310,42 @@ export async function verifyRecordingEvidence(input: {
       if (phase === 'expectations') {
         if (decision.status === 'unverified' || !decision.expectations)
           return finish({ status: 'unverified', reason: decision.reason });
-        expectations = decision.expectations;
-        const ids = expectations.map(({ sourceId }) => sourceId);
+        if (decision.comparability?.status === 'unverified')
+          return finish({ status: 'unverified', reason: decision.comparability.reason });
+        const proposed = decision.expectations;
+        const ids = proposed.map(({ sourceId }) => sourceId);
+        const invalidCitations = proposed.flatMap(({ sourceId, facts }) =>
+          facts.flatMap(({ quote }, index) =>
+            sourceTexts.get(sourceId)?.includes(quote)
+              ? []
+              : [{ sourceId, factIndex: index, quote }],
+          ),
+        );
         if (
           ids.length !== sources.length ||
           new Set(ids).size !== ids.length ||
           sources.some(({ id }) => !ids.includes(id)) ||
-          expectations.some(({ sourceId, facts }) =>
-            facts.some(({ quote }) => !sourceTexts.get(sourceId)?.includes(quote)),
-          )
+          invalidCitations.length ||
+          !decision.comparability
         ) {
-          return finish({
-            status: 'unverified',
-            reason: 'Independent expectations must cover each source and cite exact raw evidence.',
-          });
+          payload = {
+            phase,
+            validationError:
+              'Independent expectations must cover each source once, cite literal raw evidence, and include an explicit comparability assessment. Decoded projections may use different escaping. Repair the proof against existing evidence; parser output is still hidden.',
+            requiredSourceIds: sources.map(({ id }) => id),
+            invalidCitations,
+            remainingInspections: Math.max(0, 5 - turn),
+          };
+          inspections.push(payload);
+          if (input.agent.provider !== 'codex-cli')
+            payload = { initial: initialPayload, inspections };
+          continue;
         }
+        expectations = proposed;
+        writeFileSync(
+          join(input.directory, `${sourceKey}.comparability.json`),
+          JSON.stringify(decision.comparability, null, 2),
+        );
         writeFileSync(factsPath, JSON.stringify(expectations, null, 2));
         finished = true;
         break;

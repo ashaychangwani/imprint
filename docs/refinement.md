@@ -21,3 +21,5 @@ The changes add stronger checks; they do not themselves prove repeatable teachin
 Fresh teaches retain their selected live inputs and producer bindings in `.verification-plan.json`. Independent audits use that fixed case list, refresh only expired values, and report each `caseId`. Strict audits remain inconclusive when any selected case lacks a correct invocation. The sidecar contains inputs and provenance, not the evidence reader's expected answers.
 
 Refinement keeps the previously retained cases and adds the repair or extension cases to that strict audit. This preserves the existing recorded acceptance coverage alongside the requested change. New API plans must declare paired recording/live response chains before compilation starts.
+
+The evidence reader explicitly checks recording/live input comparability before seeing parser output. Necessary refreshes retain the request's meaning; an unexplained change to still-valid dates or other filters leaves verification unverified. Raw citation repairs and protocol decoding use the existing evidence within the same bounded review, without new live requests.

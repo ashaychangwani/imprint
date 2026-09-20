@@ -14283,3 +14283,43 @@ smokes plus this attempt total $12.5239976 reported. No push, MR or merge.
 The corrected checkpoint passes the full suite: 1,980 tests, lint and type
 checking. Next is fresh Flights attempt 2 in a new durable home. Stop the teach
 campaign if its core requirements fail, under the two-consecutive-failure limit.
+
+
+## 2026-09-20 — Two failed teaches close the bounded campaign
+
+Flights 2 ran on f1a0b6a for 64.243 minutes and was assessed at 60 minutes.
+Research repaired partial/blocked handoffs, used fresh search output for booking,
+and narrowed unsupported calendar parameters. Four research successes did not
+become a working teach: location/calendar evidence citations were malformed,
+and search evidence inspection ran out of turns while decoding framing. Stopped
+with all three first-wave reviews unverified. All owned teach processes exited.
+This is the second consecutive failure, so the campaign is closed. No tools
+published, no site audit, no Hotels repeat, and no reliability claim. Cron stays
+off; no fresh teach may start under the exhausted campaign budget.
+
+General corrections now expose the existing wire decoder to the evidence reader,
+allow bounded citation repair before showing parser output, reserve a final
+response after inspections, provide original request inputs, and reject parser
+response chains inflated with navigation documents. Saved-response checks accept
+complete location results and reject an omitted location; reparsed search outputs
+omit recorded/live result groups. A calendar parser pass concealed an unnecessary
+live date change. Requiring an explicit comparability assessment now rejects that
+pair and accepts the unchanged location query. No site-specific rules or new live
+challenge cases were added; cold-start behavior is unchanged.
+
+Original bodies and failed observer probes are preserved. A probe fixture initially
+corrected the response chain without recomputing parser output; it was corrected
+and the earlier result is not treated as evidence of failure on the corrected chain.
+An isolated refinement repair and final checks are recorded in
+`docs/teach-reliability-validation-2026-09-20.md`. No push, MR or merge.
+
+
+The final verifier checkpoint passes 1,983 tests, lint and type checking. One
+preceding full run hit the existing hostile-process cleanup assertion; its 15-test
+suite and then the complete suite passed on rerun, with no lingering matching child.
+The first isolated refine repair fixed the deliberate missing result, passed raw
+and live verification, and got two correct audit calls. Strict audit remained
+inconclusive because both selected queries were identical. Originals stayed intact.
+The refinement planner now selects contrasting values already in the recording
+when needed for parameter coverage, within its fixed three-case budget. Fresh
+repair and extension checks are recorded separately; no teach campaign restart.

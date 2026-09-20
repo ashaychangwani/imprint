@@ -198,6 +198,11 @@ async function refineStage(config: z.infer<typeof Config>): Promise<string[]> {
         requestSeqs,
         parameters: test.recordedParameters,
         responses,
+        recordedRequests: requestSeqs.map((seq) => {
+          const request = session.requests.find((request) => request.seq === seq);
+          if (!request) throw new Error(`Recording request ${seq} is unavailable`);
+          return { seq, method: request.method, url: request.url, body: request.body };
+        }),
         actual: await parseRecordedResponses(
           generated.workflowPath,
           generated.workflow,

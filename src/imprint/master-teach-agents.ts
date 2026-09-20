@@ -723,6 +723,14 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
           return;
         }
         if (
+          test.recordedCall.requestSeqs.length > output.implementationPlan.requestProvenance.length
+        )
+          issue(
+            ctx,
+            [...path, 'recordedCall'],
+            'A recorded response chain cannot exceed the artifact request count. A captured API response replaces its navigation document; cite the response sequence, not both.',
+          );
+        if (
           !cases.some(
             (paired) =>
               paired.check !== test.check &&

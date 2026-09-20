@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   type RecordingFixture,
+  decodeEvidenceResponses,
   parseRecordedResponses,
   verifyRecordingEvidence,
 } from '../src/imprint/recording-verification.ts';
@@ -32,6 +33,7 @@ const fixtures = (): [RecordingFixture, RecordingFixture] => [
     actual: { items: [{ id: 'new-a' }] },
   },
 ];
+const comparability = { status: 'matched', reason: 'Identical empty request parameters' };
 const expectations = [
   {
     sourceId: 'recorded',
@@ -40,6 +42,83 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('keeps unrelated recording/live requests unverified before revealing parser output', async () => {
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-test-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        calls++;
+        expect(payload).toHaveProperty('currentDate');
+        expect(JSON.stringify(payload)).not.toContain('parser_output');
+        return schema.parse({
+          action: 'finish',
+          expectations,
+          reason: 'Bodies are readable',
+          comparability: {
+            status: 'unverified',
+            reason: 'Live request changed a still-valid recorded input',
+          },
+        });
+      },
+    });
+    expect(result.status).toBe('unverified');
+    expect(result.reason).toContain('still-valid');
+    expect(calls).toBe(1);
+  });
+
+  it('decodes byte-framed Unicode evidence without interpreting its fields', () => {
+    const frame = JSON.stringify([['envelope', JSON.stringify({ label: 'Café', rows: [1, 2] })]]);
+    const decoded = decodeEvidenceResponses(
+      [`)]}'\n\n${Buffer.byteLength(frame)}\n${frame}\n`],
+      'decimal-framed-json',
+    );
+    expect(decoded[0]).toMatchObject({
+      index: 0,
+      format: 'decimal-framed-json',
+      value: [[['envelope', { label: 'Café', rows: [1, 2] }]]],
+    });
+    expect(decodeEvidenceResponses(['opaque body'])[0]).toHaveProperty('error');
+  });
+
+  it('repairs malformed citations without revealing parser output or accepting invalid proof', async () => {
+    let turn = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-test-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        turn++;
+        if (turn === 1)
+          return schema.parse({
+            action: 'finish',
+            reason: 'bad citation encoding',
+            comparability,
+            expectations: expectations.map((e) => ({
+              ...e,
+              facts: e.facts.map((f) => ({ ...f, quote: 'missing-quote' })),
+            })),
+          });
+        if (turn === 2) {
+          expect(payload).toHaveProperty('validationError');
+          expect(JSON.stringify(payload)).not.toContain('actual');
+          return schema.parse({
+            action: 'finish',
+            reason: 'Correct exact citations',
+            comparability,
+            expectations,
+          });
+        }
+        expect(payload).toHaveProperty('expectations', expectations);
+        return schema.parse({ action: 'finish', status: 'passed', reason: 'Membership matches' });
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(turn).toBe(3);
+  });
   it('freezes independent expectations before revealing output, caches them across a parser repair', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-test-'));
     const data = fixtures();
@@ -56,6 +135,7 @@ describe('recording evidence verification', () => {
         return schema.parse({
           action: 'finish',
           reason: 'Raw membership established',
+          comparability,
           expectations,
         });
       }
@@ -109,7 +189,12 @@ describe('recording evidence verification', () => {
         directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-test-')),
         agent: {},
         requestStep: async (_input, schema) =>
-          schema.parse({ action: 'finish', expectations: invalid, reason: 'claimed coverage' }),
+          schema.parse({
+            action: 'finish',
+            comparability,
+            expectations: invalid,
+            reason: 'claimed coverage',
+          }),
       });
       expect(result.status).toBe('unverified');
     }
