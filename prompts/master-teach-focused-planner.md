@@ -322,18 +322,22 @@ states where its parameter values came from, states the expected result in
 plain language, and cites only the focused tool's exact evidence refs and known
 recording request/event sequences.
 
-An API plan may optionally include one `replay` case when exact recorded public
-parameter values are available. It is diagnostic context for the compiler and
-master, not required proof and not an automatic runtime check. Never invent a
-plausible value for it. Exact request equality can expose a construction bug,
-but differences may also be legitimate because the recording is old or the API
-uses current dates, rotating state, authentication, nonces, or signatures.
+Every new API plan must pair each selected `replay` case with a `live` case.
+Both declare `recordedCall` with the same exact ordered response sequences.
+The host validates this pairing before compilation, runs the parser against
+the recorded and live responses, and requires independent evidence review.
+Use exact recorded public values for replay; never invent them. Keep the live
+inputs comparable and describe necessary freshness changes. Exact request
+equality can expose a construction bug, but differences may be legitimate
+because of current dates, rotating state, authentication, nonces, or signatures.
 
-For live verification, use `parameterValueOrigin:"synthetic_live"` and supply
-one safe executable scalar value of the declared type for every parameter in
-the proposed core MVP contract. Live cases may cite the particular recorded
-requests or events that support their inputs and expectation. Never reproduce
-a credential, cookie, token, or other secret. These cases are the
+For live verification, the existing wire label `parameterValueOrigin:"synthetic_live"`
+means executable current inputs, not permission to invent challenge cases.
+Supply one scalar value of the declared type for every public parameter,
+preserving the selected recording's inputs except necessary freshness changes.
+Live cases cite the particular recorded requests or events that support their
+inputs and expectation. Never reproduce a credential, cookie, token, or other
+secret; dependent inputs come from fresh producer calls. These cases are the
 compiler/verifier's declared core inputs—the runtime must not invent additional
 semantic cases or force deferred breadth into the MVP.
 When a live case changes a date, route, locale, or other value that appears in
@@ -441,6 +445,7 @@ Exact output schema (all objects reject extra fields):
       parameterValueOrigin:"recorded_baseline"|"synthetic_live"|"unavailable",
       parameterValues:Array<{parameterName,value:string|number|boolean}>,
       expectedResult:string,
+      recordedCall:{requestSeqs:integer[],freshnessChanges:string},
       provenance:{
         recordingRequestSeqs:integer[], recordingEventSeqs:integer[],
         evidenceRefs:content-addressed refs[]
@@ -454,81 +459,153 @@ Exact output schema (all objects reject extra fields):
 <!-- BEGIN IMPRINT CANONICAL OUTPUT EXAMPLE -->
 
 {
-"binding": {
-"runId": "run-fixture-1",
-"site": "fixture.invalid",
-"recordingSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
-"toolId": "search_catalog"
-},
-"tool": {
-"id": "search_catalog",
-"candidate": {
-"toolName": "search_catalog",
-"description": "Search a fixture catalog",
-"rationale": "Request 12 records the search operation.",
-"confidence": 0.96,
-"requestSeqs": [12],
-"representativeSeqs": [12],
-"eventSeqs": [4],
-"expectedOutput": "Catalog matches with identifiers",
-"likelyParams": [
-{"name":"query","type":"string","description":"Catalog search text"}
-],
-"dependencySeqs": [],
-"dependsOnTools": []
-},
-"compileContext": {
-"loginRequestSeqs": [],
-"credentialNames": [],
-"tokenExtractionNotes": "",
-"sharedHelperNotes": "",
-"authRequestSeqs": [],
-"authNotes": ""
-},
-"evidenceRefs": [{
-"path": "runs/run-fixture-1/evidence/recording.json",
-"sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-}],
-"strategy": {
-"kind": "api",
-"reason": "The focused evidence contains a replayable request."
-}
-},
-"chainEdges": [],
-"implementationPlan": {
-"version": 1,
-"toolId": "search_catalog",
-"strategyKind": "api",
-"requestProvenance": [
-{"artifactRequestIndex":0,"recordingRequestSeq":12}
-],
-"parameterMappings": [{
-"parameterName": "query",
-"artifactRequestIndices": [0],
-"guidance": "Interpolate the public query at the recorded request location."
-}],
-"responseDependencies": [],
-"resultSources": [{
-"artifactRequestIndex": 0,
-"source": "Return normalized catalog entries from the recorded response body."
-}],
-"outputGuidance": "Return a stable array of catalog entries and their identifiers.",
-"verificationCases": [{
-"id": "live_search_catalog",
-"check": "live",
-"parameterValueOrigin": "synthetic_live",
-"parameterValues": [{"parameterName":"query","value":"fixture query"}],
-"expectedResult": "Return current catalog entries matching the supplied search text.",
-"provenance": {
-"recordingRequestSeqs": [12],
-"recordingEventSeqs": [4],
-"evidenceRefs": [{
-"path": "runs/run-fixture-1/evidence/recording.json",
-"sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-}]
-}
-}]
-},
-"reason": "One recorded API request supports the focused search tool."
+  "binding": {
+    "runId": "run-fixture-1",
+    "site": "fixture.invalid",
+    "recordingSha256": "sha256:1111111111111111111111111111111111111111111111111111111111111111",
+    "toolId": "search_catalog"
+  },
+  "tool": {
+    "id": "search_catalog",
+    "candidate": {
+      "toolName": "search_catalog",
+      "description": "Search a fixture catalog",
+      "rationale": "Request 12 records the search operation.",
+      "confidence": 0.96,
+      "requestSeqs": [
+        12
+      ],
+      "representativeSeqs": [
+        12
+      ],
+      "eventSeqs": [
+        4
+      ],
+      "expectedOutput": "Catalog matches with identifiers",
+      "likelyParams": [
+        {
+          "name": "query",
+          "type": "string",
+          "description": "Catalog search text"
+        }
+      ],
+      "dependencySeqs": [],
+      "dependsOnTools": []
+    },
+    "compileContext": {
+      "loginRequestSeqs": [],
+      "credentialNames": [],
+      "tokenExtractionNotes": "",
+      "sharedHelperNotes": "",
+      "authRequestSeqs": [],
+      "authNotes": ""
+    },
+    "evidenceRefs": [
+      {
+        "path": "runs/run-fixture-1/evidence/recording.json",
+        "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+      }
+    ],
+    "strategy": {
+      "kind": "api",
+      "reason": "The focused evidence contains a replayable request."
+    }
+  },
+  "chainEdges": [],
+  "implementationPlan": {
+    "version": 1,
+    "toolId": "search_catalog",
+    "strategyKind": "api",
+    "requestProvenance": [
+      {
+        "artifactRequestIndex": 0,
+        "recordingRequestSeq": 12
+      }
+    ],
+    "parameterMappings": [
+      {
+        "parameterName": "query",
+        "artifactRequestIndices": [
+          0
+        ],
+        "guidance": "Interpolate the public query at the recorded request location."
+      }
+    ],
+    "responseDependencies": [],
+    "resultSources": [
+      {
+        "artifactRequestIndex": 0,
+        "source": "Return normalized catalog entries from the recorded response body."
+      }
+    ],
+    "outputGuidance": "Return a stable array of catalog entries and their identifiers.",
+    "verificationCases": [
+      {
+        "id": "replay_search_catalog",
+        "check": "replay",
+        "parameterValueOrigin": "recorded_baseline",
+        "parameterValues": [
+          {
+            "parameterName": "query",
+            "value": "fixture query"
+          }
+        ],
+        "expectedResult": "Return the recorded catalog entries matching the recorded search text.",
+        "provenance": {
+          "recordingRequestSeqs": [
+            12
+          ],
+          "recordingEventSeqs": [
+            4
+          ],
+          "evidenceRefs": [
+            {
+              "path": "runs/run-fixture-1/evidence/recording.json",
+              "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ]
+        },
+        "recordedCall": {
+          "requestSeqs": [
+            12
+          ],
+          "freshnessChanges": "none"
+        }
+      },
+      {
+        "id": "live_search_catalog",
+        "check": "live",
+        "parameterValueOrigin": "synthetic_live",
+        "parameterValues": [
+          {
+            "parameterName": "query",
+            "value": "fixture query"
+          }
+        ],
+        "expectedResult": "Return current catalog entries matching the supplied search text.",
+        "provenance": {
+          "recordingRequestSeqs": [
+            12
+          ],
+          "recordingEventSeqs": [
+            4
+          ],
+          "evidenceRefs": [
+            {
+              "path": "runs/run-fixture-1/evidence/recording.json",
+              "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ]
+        },
+        "recordedCall": {
+          "requestSeqs": [
+            12
+          ],
+          "freshnessChanges": "none; the recorded query remains usable"
+        }
+      }
+    ]
+  },
+  "reason": "One recorded API request supports the focused search tool."
 }
 <!-- END IMPRINT CANONICAL OUTPUT EXAMPLE -->

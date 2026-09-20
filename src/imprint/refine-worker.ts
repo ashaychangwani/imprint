@@ -1,6 +1,6 @@
 /** Runs only in the isolated IMPRINT_HOME created by `imprint refine`. */
 import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { z } from 'zod';
 import { runAudit } from './audit.ts';
 import { runWorkflowWithLadder } from './backend-ladder.ts';
@@ -18,7 +18,7 @@ import {
   verifyRecordingEvidence,
 } from './recording-verification.ts';
 import { redactSession } from './redact.ts';
-import { assertRefinementContract } from './refine.ts';
+import { assertRefinementContract, mergeRefinementVerificationPlan } from './refine.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { shutdownTracing, traced } from './tracing.ts';
 import { SessionSchema, WorkflowSchema } from './types.ts';
@@ -99,6 +99,9 @@ async function refineStage(config: z.infer<typeof Config>): Promise<string[]> {
     .filter((name) => existsSync(join(siteDir, name, 'workflow.json')))
     .map((name) => ({
       name,
+      verificationPlan: existsSync(join(siteDir, name, '.verification-plan.json'))
+        ? JSON.parse(readFileSync(join(siteDir, name, '.verification-plan.json'), 'utf8'))
+        : {},
       workflow: WorkflowSchema.parse(
         JSON.parse(readFileSync(join(siteDir, name, 'workflow.json'), 'utf8')),
       ),
@@ -242,6 +245,35 @@ async function refineStage(config: z.infer<typeof Config>): Promise<string[]> {
       agent,
     });
     if (reviewed.status !== 'passed') throw new Error(reviewed.reason);
+    writeFileSync(
+      join(toolDir, '.verification-plan.json'),
+      JSON.stringify(
+        mergeRefinementVerificationPlan(
+          installed.find(({ name }) => name === tool.name)?.verificationPlan ?? {},
+          {
+            recordingPath: sessionPath,
+            cases: tool.cases.map((test) => ({
+              id: `refine_${basename(config.runRoot)}_${test.id}`,
+              parameters: test.liveParameters,
+              recordedCall: {
+                requestSeqs: test.requestSeqs ?? tool.requestSeqs,
+                freshnessChanges: test.freshnessChanges,
+              },
+              bindings: test.bindings,
+            })),
+            dependencies: tool.cases.flatMap(({ bindings }) =>
+              bindings.map((binding) => ({
+                producerTool: binding.producerTool,
+                producerResultPath: binding.path,
+                consumerParameter: binding.parameter,
+              })),
+            ),
+          },
+        ),
+        null,
+        2,
+      ),
+    );
   }
   const audit = await runAudit({
     site: config.site,

@@ -6434,6 +6434,7 @@ export async function runFreshMasterTeach(
                 dependencies: plan.chainEdges
                   .filter(({ consumerToolId }) => consumerToolId === tool.id)
                   .map((edge) => ({
+                    ...edge,
                     producerTool: plan.tools.find(({ id }) => id === edge.producerToolId)?.candidate
                       .toolName,
                     producerResultPath: edge.producerResultPath,

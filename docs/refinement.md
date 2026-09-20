@@ -19,3 +19,5 @@ Only verified replacements are installed. A concurrent edit to an original artif
 The changes add stronger checks; they do not themselves prove repeatable teaching. Record fresh teach results, independent audit counts, supported scope, failures, timings and usage before claiming an improvement.
 
 Fresh teaches retain their selected live inputs and producer bindings in `.verification-plan.json`. Independent audits use that fixed case list, refresh only expired values, and report each `caseId`. Strict audits remain inconclusive when any selected case lacks a correct invocation. The sidecar contains inputs and provenance, not the evidence reader's expected answers.
+
+Refinement keeps the previously retained cases and adds the repair or extension cases to that strict audit. This preserves the existing recorded acceptance coverage alongside the requested change. New API plans must declare paired recording/live response chains before compilation starts.

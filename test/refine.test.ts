@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   assertRefinementContract,
+  mergeRefinementVerificationPlan,
   promoteRefinement,
   refinementArtifactHash,
 } from '../src/imprint/refine.ts';
@@ -18,6 +19,20 @@ const workflow = () =>
     requests: [],
   });
 describe('targeted refinement', () => {
+  it('keeps prior regression cases and adds refinement cases to the strict audit', () => {
+    const oldCase = { id: 'old', parameters: { query: 'recorded' } };
+    const added = { id: 'extension', parameters: { query: 'recorded', limit: 2 } };
+    const plan = mergeRefinementVerificationPlan(
+      { recordingPath: '/original.json', cases: [oldCase], dependencies: [{ id: 'chain-1' }] },
+      { recordingPath: '/additional.json', cases: [added], dependencies: [{ id: 'chain-2' }] },
+    );
+    expect(plan.cases).toEqual([{ recordingPath: '/original.json', ...oldCase }, added]);
+    expect(plan.dependencies).toEqual([{ id: 'chain-1' }, { id: 'chain-2' }]);
+    expect(oldCase).not.toHaveProperty('recordingPath');
+    expect(() =>
+      mergeRefinementVerificationPlan({ cases: [oldCase] }, { cases: [oldCase] }),
+    ).toThrow('unique');
+  });
   it('allows additive defaults and rejects deleted/retyped/new required parameters', () => {
     const before = workflow();
     const after = workflow();

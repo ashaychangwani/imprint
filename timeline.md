@@ -14253,3 +14253,33 @@ stopped. No live teach has validated this checkpoint yet. The next campaign has
 at most four fresh teaches, stopping after two consecutive failures (including
 core audit failures), with 30-minute target / 60-minute assessment / 90-minute
 hard teach deadline. No push, MR, merge or old-vnext changes.
+
+
+## 2026-09-20 — First bounded teach stopped for a planner contract defect
+
+Flights 1 of the new campaign ran on 1073ceb for 39.916 minutes. All four research
+steps reported success after about 33 minutes, but the focused plans omitted the
+new recordedCall response-chain metadata. The planner prompt's exact schema and
+example still described the old contract. Stopped before spending more time on
+compilation that could not pass the new gate; all owned processes exited. This
+counts as failed attempt 1. Zero tools published; no audit or repeatability claim.
+No recording, log, draft or failed response was deleted. The old cron stays off.
+
+Location/search/calendar/booking retained 2/3/8/14 observations. Browser reuse
+worked, but request construction, fresh selection handling and guessed capture
+readiness still consumed time. Booking's final research proof used CDP navigation
+with rendered offers; direct booking RPC remained unproven. No invalid researcher
+handoff repair was exercised. Complete results and caveats are in
+docs/teach-reliability-validation-2026-09-20.md.
+
+Corrected the planner's prose/schema/example and moved missing/pairing metadata
+validation before compilation. Durable legacy plans remain readable. Retained
+full dependency identifiers in audit metadata and prior/new refinement cases in
+strict audits. A fresh teach is required; do not resume Flights 1. Accounting:
+9,224,402 input (7,595,520 cache reads), 135,423 output, zero emitted writes,
+$12.262196 base API equivalent; two analysis spans have unreported usage. Both
+smokes plus this attempt total $12.5239976 reported. No push, MR or merge.
+
+The corrected checkpoint passes the full suite: 1,980 tests, lint and type
+checking. Next is fresh Flights attempt 2 in a new durable home. Stop the teach
+campaign if its core requirements fail, under the two-consecutive-failure limit.

@@ -708,6 +708,34 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
         );
     });
     validateFocusedPlannerEdges(output.tool, output.chainEdges, producers, ctx, ['chainEdges']);
+    // New API plans need usable recording/live pairs before compilation starts.
+    // Durable plan parsing remains compatible with older saved plans.
+    if (output.implementationPlan.strategyKind === 'api') {
+      const cases = output.implementationPlan.verificationCases;
+      cases.forEach((test, index) => {
+        const path = ['implementationPlan', 'verificationCases', index];
+        if (!test.recordedCall) {
+          issue(
+            ctx,
+            [...path, 'recordedCall'],
+            'recordedCall is required for new API verification cases',
+          );
+          return;
+        }
+        if (
+          !cases.some(
+            (paired) =>
+              paired.check !== test.check &&
+              same(paired.recordedCall?.requestSeqs, test.recordedCall?.requestSeqs),
+          )
+        )
+          issue(
+            ctx,
+            path,
+            'Each recording case needs a matched live case with the same ordered recordedCall.requestSeqs',
+          );
+      });
+    }
     try {
       validateImplementationPlanForTool(
         output.implementationPlan,

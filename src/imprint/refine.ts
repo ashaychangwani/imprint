@@ -26,6 +26,31 @@ export interface RefineOptions {
   timeoutMs?: number;
   json?: boolean;
 }
+export interface RefinementVerificationPlan {
+  recordingPath?: string;
+  cases?: Array<{ id: string; [key: string]: unknown }>;
+  dependencies?: unknown[];
+}
+/** Keep previously passing cases visible to the strict audit after refinement. */
+export function mergeRefinementVerificationPlan(
+  previous: RefinementVerificationPlan,
+  added: RefinementVerificationPlan,
+): RefinementVerificationPlan {
+  const cases = [
+    ...(previous.cases ?? []).map((test) => ({
+      recordingPath: previous.recordingPath,
+      ...test,
+    })),
+    ...(added.cases ?? []),
+  ];
+  if (new Set(cases.map(({ id }) => id)).size !== cases.length)
+    throw new Error('Refinement verification case IDs must be unique');
+  return {
+    ...added,
+    cases,
+    dependencies: [...(previous.dependencies ?? []), ...(added.dependencies ?? [])],
+  };
+}
 export function assertRefinementContract(before: Workflow, after: Workflow): void {
   if (before.site !== after.site || before.toolName !== after.toolName)
     throw new Error('Refinement changed the installed tool identity');

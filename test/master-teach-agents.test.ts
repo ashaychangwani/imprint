@@ -363,6 +363,7 @@ function implementationPayload(tool: EditableTeachingTool) {
                 value: fixtureParameterValue(type),
               })),
               expectedResult: `Return the recorded ${tool.candidate.toolName} result shape.`,
+              recordedCall: { requestSeqs: tool.candidate.requestSeqs, freshnessChanges: 'none' },
               provenance: {
                 recordingRequestSeqs: requestProvenance.map(
                   ({ recordingRequestSeq }) => recordingRequestSeq,
@@ -381,6 +382,7 @@ function implementationPayload(tool: EditableTeachingTool) {
           value: fixtureParameterValue(type),
         })),
         expectedResult: `Return the recorded ${tool.candidate.toolName} result shape.`,
+        recordedCall: { requestSeqs: tool.candidate.requestSeqs, freshnessChanges: 'none' },
         provenance: {
           recordingRequestSeqs: tool.candidate.requestSeqs,
           recordingEventSeqs: tool.candidate.eventSeqs,
@@ -2104,6 +2106,48 @@ describe('prompts and pre-plan discovery', () => {
         input,
       ),
     ).toThrow('API research response request is absent from the selected recording');
+  });
+
+  it('accepts the actual planner example with paired recording-backed cases', () => {
+    const output = JSON.parse(marked(prompt('master-teach-focused-planner.md')));
+    const input = {
+      ...focusedInput(),
+      tool: output.tool,
+      incomingChainEdges: [],
+      outgoingChainEdges: [],
+      availableProducers: [],
+    };
+    expect(parseFocusedPlannerOutput(JSON.stringify(output), input)).toEqual(output);
+  });
+
+  it('repairs missing recording links before accepting a focused plan', async () => {
+    const input = focusedInput();
+    const output = focusedOutput(input);
+    const missing = structuredClone(output);
+    for (const test of missing.implementationPlan.verificationCases) test.recordedCall = undefined;
+    const seen: unknown[] = [];
+    const keys: Array<string | undefined> = [];
+    const result = await requestFocusedPlan(input, {
+      provider: 'codex-cli',
+      analyzer: {
+        async analyze(_system, payload, options) {
+          seen.push(payload);
+          keys.push(options?.conversationKey);
+          return { text: JSON.stringify(seen.length === 1 ? missing : output) };
+        },
+      },
+    });
+    expect(result).toEqual(output);
+    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(seen[1])).toContain('recordedCall is required');
+    expect(keys[0]).toBe(keys[1]);
+
+    const unpaired = structuredClone(output);
+    unpaired.implementationPlan.verificationCases =
+      unpaired.implementationPlan.verificationCases.filter(({ check }) => check === 'live');
+    expect(() => parseFocusedPlannerOutput(JSON.stringify(unpaired), input)).toThrow(
+      'matched live case',
+    );
   });
 
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
