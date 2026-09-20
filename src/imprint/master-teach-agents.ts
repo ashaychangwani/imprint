@@ -330,6 +330,23 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
   return ApiResearchOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, apiResearchBinding(input)))
       issue(ctx, ['binding'], 'stale API-research binding');
+    if (output.testCases) {
+      if (output.action !== 'test' || !output.candidate)
+        issue(ctx, ['testCases'], 'batches require a test candidate');
+      else
+        for (const [index, test] of output.testCases.entries()) {
+          if (
+            test.recordingRequestSeqs.some((seq) => !input.recordingIndex.requestSeqs.includes(seq))
+          )
+            issue(ctx, ['testCases', index], 'batch case must cite the supplied recording');
+          const checked = apiResearchOutputSchema(input).safeParse({
+            ...output,
+            testCases: undefined,
+            candidate: { ...output.candidate, parameterValues: test.parameterValues },
+          });
+          if (!checked.success) issue(ctx, ['testCases', index], checked.error.message);
+        }
+    }
     if (output.action === 'call_producer') {
       if (
         !output.producerCall ||
@@ -1910,7 +1927,9 @@ type Role =
   | 'master decision'
   | 'baseline MVP reviewer'
   | 'parameter advisor'
-  | 'completion reviewer';
+  | 'completion reviewer'
+  | 'recording evidence verifier'
+  | 'refinement planner';
 export interface MasterTeachAgentOptions {
   provider?: ProviderName;
   model?: string;
@@ -1936,6 +1955,7 @@ export type ApiResearchRetainedTurnDelta =
     }
   | {
       kind: 'observation';
+      batchObservations?: ApiResearchInput['observations'];
       latestObservation: ApiResearchInput['observations'][number];
     }
   | {
@@ -2400,6 +2420,39 @@ export async function requestCompletionReview(
       knownToolIds: checked.currentPlan.payload.tools.map(({ id }) => id),
     },
     schema: completionOutputSchema(checked),
+    agent,
+  });
+}
+
+export async function requestRecordingEvidenceStep<S extends z.ZodTypeAny>(
+  input: unknown,
+  schema: S,
+  agent: MasterTeachAgentOptions,
+  conversationKey: string,
+): Promise<z.output<S>> {
+  return request({
+    role: 'recording evidence verifier',
+    conversationKey,
+    prompt: 'master-teach-recording-evidence.md',
+    input,
+    validation: {},
+    schema,
+    agent,
+  });
+}
+
+export async function requestRefinementPlan<S extends z.ZodTypeAny>(
+  input: unknown,
+  schema: S,
+  agent: MasterTeachAgentOptions,
+): Promise<z.output<S>> {
+  return request({
+    role: 'refinement planner',
+    conversationKey: 'refinement-planner',
+    prompt: 'master-teach-refine-plan.md',
+    input,
+    validation: {},
+    schema,
     agent,
   });
 }

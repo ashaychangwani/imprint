@@ -863,3 +863,14 @@ return to the retained agent, alongside the current validation context. This is
 factual schema information, not coercion: strings do not become proof lists and
 invalid output still fails validation. The existing single repair attempt and
 shared deadline remain unchanged.
+
+
+### Recording-backed verification and refinement
+
+The focused planner chooses a small fixed set of recording examples. A verification case may carry `recordedCall.requestSeqs`, the exact ordered raw response chain, and `freshnessChanges`, describing only necessary date/state changes for its paired live call. This is distinct from broad evidence provenance. Multiple explicit recording fixtures are allowed; legacy replay diagnostic plans remain readable.
+
+The host executes all selected live cases, stores complete outputs and response chains under the draft's `.live-checks/`, and checks parser output against recorded responses offline. An independent evidence reader sees raw responses before parser output, establishes source-cited expectations, then evaluates outputs in a separate conversation. Its inspections only read existing bytes, are bounded to five minutes and six turns per phase, and make no network calls. A pure-data JavaScript projection can inspect an entire saved response with a one-second CPU bound, returning compact counts/identities without filesystem, network, or parser access. Expectations and failed reports persist in `.recording-verification/` and travel with same-run repair drafts. Unavailable or insufficient evidence is not a pass. Declared chain checks precede publication.
+
+Research may batch up to three agent-selected recording-backed inputs for one request candidate. Calls remain sequential and paced, with an observation for each. A caller-owned browser pool survives researcher thinking time, closes on exit/cancellation, and is discarded on changed authentication/setup context. Tools and execution rungs remain separate. Cold-start sleeps and readiness behavior are unchanged.
+
+`refine` stages installed tools in a separate IMPRINT_HOME and lets an agent select the target and necessary existing dependencies. It does not enter discovery or seed a fresh teach. Publication follows independent recording/live verification and a strict staged audit, checks for concurrent original-artifact changes, and keeps recoverable backups. See refinement.md for current limits.

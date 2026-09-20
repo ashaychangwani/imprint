@@ -34,7 +34,7 @@ import {
 } from '../src/imprint/master-teach-agents.ts';
 import {
   API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
-  runFreshMasterTeach,
+  runFreshMasterTeach as runFreshMasterTeachImpl,
   verificationForResearchParameters,
 } from '../src/imprint/master-teach-controller.ts';
 import {
@@ -48,6 +48,12 @@ import {
   validateToolCandidateDetection,
 } from '../src/imprint/tool-candidates.ts';
 import { type Session, SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
+
+const runFreshMasterTeach: typeof runFreshMasterTeachImpl = (options, overrides) =>
+  runFreshMasterTeachImpl(options, {
+    verifyRecordingMvp: async () => ({ status: 'passed', reason: 'fixture evidence review' }),
+    ...overrides,
+  });
 
 const SITE = 'foreground-e2e-fixture';
 const PRODUCER_NAME = 'search_items';
@@ -3744,7 +3750,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('keeps the standalone consumer result canonical and reviews its chain independently', async () => {
+  it('preserves the standalone result but does not publish a rejected chain', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];
       const promotionBatches: string[][] = [];
@@ -3786,9 +3792,9 @@ describe('fresh foreground master controller end to end', () => {
 
       expect(terminal.status).toBe('provider_unavailable');
       expect(chainPreview).toBe('[]');
-      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `review:${CONSUMER_ID}`)).toHaveLength(1);
       expect(events.filter((event) => event === `compile:${CONSUMER_ID}`)).toHaveLength(1);
-      expect(promotionBatches).toEqual([[PRODUCER_NAME], [CONSUMER_NAME]]);
+      expect(promotionBatches).toEqual([[PRODUCER_NAME]]);
     });
   });
 
@@ -6327,5 +6333,58 @@ describe('fresh foreground master controller end to end', () => {
         expect(detectorCalled).toBe(false);
       }
     });
+  });
+});
+
+it('does not publish a tool whose second selected live case fails', async () => {
+  await withTemporaryImprintHome(async (root) => {
+    const promotionBatches: string[][] = [];
+    const base = lifecycleFailureFixture({
+      runId: 'all-live-cases',
+      events: [],
+      promotionBatches,
+      requestBaselineMvpReview: credibleBaselineMvpReview,
+    });
+    const called: string[] = [];
+    await runFreshMasterTeach(
+      {
+        site: SITE,
+        fromSession: syntheticSessionPath(root),
+        noInteractive: true,
+        provider: 'codex-cli',
+      },
+      {
+        ...base,
+        requestFocusedPlan: async (input, agent) => {
+          if (!base.requestFocusedPlan) throw new Error('Missing fixture planner');
+          const plan = await base.requestFocusedPlan(input, agent);
+          if (input.tool.id === CONSUMER_ID) {
+            const first = plan.implementationPlan.verificationCases.find(
+              ({ check }) => check === 'live',
+            );
+            if (!first) throw new Error('Missing fixture live case');
+            plan.implementationPlan.verificationCases.push({
+              ...first,
+              id: 'second_recorded_case',
+              parameterValues: [{ parameterName: 'item_id', value: 'item-2' }],
+            });
+          }
+          return plan;
+        },
+        runApiTool: async (input) => {
+          if (!base.runApiTool) throw new Error('Missing fixture runner');
+          if (input.workflowPath.includes(`/${CONSUMER_ID}/`))
+            called.push(String(input.parameters.item_id));
+          if (input.parameters.item_id === 'item-2')
+            return {
+              result: { ok: false, error: 'BAD_RESPONSE', message: 'Second case fails' },
+              executionMechanism: 'fixture-api',
+            };
+          return base.runApiTool(input);
+        },
+      },
+    );
+    expect(called).toContain('item-2');
+    expect(promotionBatches.flat()).not.toContain(CONSUMER_ID);
   });
 });

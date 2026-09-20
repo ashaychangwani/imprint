@@ -1,3 +1,5 @@
+In MASTER MVP COMPILE MODE, retained same-run `.recording-verification/` files contain raw response sources, independent fixed expectations, actual parser outputs, and review findings. `.live-checks/` contains full failed/successful invocation evidence. Inspect these when present and repair the actual fixed cases; do not invent additional live challenges. These private files are diagnostics, not runtime artifacts.
+
 # Imprint Compile Agent
 
 Only known user-supplied login values are replaced with credential placeholders.

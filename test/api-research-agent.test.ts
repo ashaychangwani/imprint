@@ -1503,3 +1503,75 @@ describe('focused API research', () => {
     }
   });
 });
+
+it('batches recorded cases without extra agent turns and closes the owned browser after research', async () => {
+  const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-batch-'));
+  const candidate = apiCandidate('batch');
+  let turns = 0;
+  let closed = 0;
+  const pools: unknown[] = [];
+  const outcome = await researchApiMvpCall({
+    run,
+    recordingIndex,
+    tool,
+    evidence,
+    toolDir,
+    agent: {},
+    runDeadline: new RunDeadline(Date.now() + 60_000),
+    dependencies: {
+      requestStep: async (input, _agent, delta) => {
+        turns++;
+        if (turns === 1)
+          return {
+            binding,
+            action: 'test',
+            candidate,
+            testCases: [
+              {
+                parameterValues: { query: 'first' },
+                recordingRequestSeqs: [12],
+                freshnessChanges: 'none',
+              },
+              {
+                parameterValues: { query: 'second' },
+                recordingRequestSeqs: [12],
+                freshnessChanges: 'none',
+              },
+            ],
+            reason: 'Two fixture cases',
+          };
+        expect(input.observations).toHaveLength(2);
+        expect(input.observations[0]?.result.ok).toBe(false);
+        expect(delta?.kind === 'observation' && delta.batchObservations?.length).toBe(2);
+        return {
+          binding,
+          action: 'proven',
+          candidate: { ...candidate, parameterValues: { query: 'second' } },
+          basedOnObservationId: input.observations[1]?.id,
+          reason: 'Selected the successful call; earlier failure retained',
+        };
+      },
+      runApiTool: async ({ cdpPool, parameters, onRawResponses }) => {
+        pools.push(cdpPool);
+        if (!cdpPool?.size)
+          cdpPool?.set('fixture', {
+            close: async () => {
+              closed++;
+            },
+          } as never);
+        onRawResponses?.([{ query: parameters.query }]);
+        return {
+          executionMechanism: 'cdp-replay',
+          result:
+            parameters.query === 'first'
+              ? { ok: false, error: 'BAD_RESPONSE', message: 'fixture failure' }
+              : { ok: true, data: { query: parameters.query } },
+        };
+      },
+    },
+  });
+  expect(turns).toBe(2);
+  expect(pools[0]).toBe(pools[1]);
+  expect(closed).toBe(1);
+  expect(outcome.observations).toHaveLength(2);
+});

@@ -1105,3 +1105,60 @@ then revised:
     expect(extractReport('')).toBeUndefined();
   });
 });
+
+describe('strict audit gate', () => {
+  it('rejects a real broken call even when a blended score exceeds the legacy threshold', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'fixture',
+          invocations: [
+            ...Array.from({ length: 30 }, () => ({ ok: true, verdict: 'correct' })),
+            { ok: false, verdict: 'tool_broken' },
+          ],
+        },
+      ],
+    });
+    const expected = [{ name: 'fixture', parameters: [] }];
+    expect(evaluateAuditReport(report, 95, expected).score.verdict).toBe('pass');
+    expect(evaluateAuditReport(report, 95, expected, false, true).score.verdict).toBe('fail');
+    expect(evaluateAuditReport(report, 95, expected, true, true).score.verdict).toBe('timeout');
+  });
+  it('keeps unavailable core evidence unverified', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'fixture',
+          invocations: [
+            { ok: true, verdict: 'correct' },
+            { ok: false, verdict: 'infra' },
+          ],
+        },
+      ],
+    });
+    expect(
+      evaluateAuditReport(report, 95, [{ name: 'fixture', parameters: [] }], false, true).score
+        .verdict,
+    ).toBe('inconclusive');
+  });
+});
+
+it('requires each retained recording-backed case in a strict audit', () => {
+  const expected = [{ name: 'fixture', parameters: [], caseIds: ['baseline', 'recorded_variant'] }];
+  const report = AuditReportSchema.parse({
+    tools: [
+      { name: 'fixture', invocations: [{ ok: true, verdict: 'correct', caseId: 'baseline' }] },
+    ],
+  });
+  const incomplete = evaluateAuditReport(report, 95, expected, false, true);
+  expect(incomplete.score.verdict).toBe('inconclusive');
+  expect(incomplete.missingCases).toEqual([{ tool: 'fixture', caseId: 'recorded_variant' }]);
+  report.tools[0]?.invocations.push({
+    ok: true,
+    verdict: 'correct',
+    caseId: 'recorded_variant',
+    params: {},
+    reason: 'Matched recorded case',
+  });
+  expect(evaluateAuditReport(report, 95, expected, false, true).score.verdict).toBe('pass');
+});

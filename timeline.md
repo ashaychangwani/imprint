@@ -14215,3 +14215,41 @@ continuing indefinite full reruns was not justified by convergence evidence.
 Hotels has no recent validation and its earlier provider policy rejection remains
 unresolved. No impossibility result, working-MVP delivery or repeatability claim.
 Branch remains locally committed; no push, MR, merge, reset or evidence deletion.
+
+
+## 2026-09-20 — Recording-backed verification and targeted refinement
+
+Implemented the revised plan on the existing origin/codex/imprint-master-v066
+validation branch. Teaching uses a fixed recording-backed case set with matched
+live inputs. All selected live cases execute, and declared chain checks and
+reviews precede publication. An independent reader derives expectations from
+raw saved responses before seeing parser output; offline parser checks cover
+the recording as well as live responses. Bounded pure-data projections inspect
+large bodies without extra network calls. Raw failures and expectations stay
+with same-run repair drafts. Independent audits receive the selected case list;
+strict audits reject broken calls and missing/unverified cases.
+
+Research can batch up to three selected calls sequentially and retain isolated
+browser sessions across agent thinking time. Authentication/setup changes expire
+only that tool's session. Cold-start waits and readiness behavior are unchanged.
+Added imprint refine for staged data-tool repairs and additive extensions,
+recording/live evidence checks, strict staged audit, contract preservation,
+concurrent-change detection and recoverable replacement. It is not live-proven.
+
+The full suite passed 1,975 tests. Subsequent focused suites passed 180 checks,
+then 52 controller checks after per-case receipt binding. Lint and type checking
+pass; website build passes with the existing size warning. Desktop/mobile views
+were inspected with no horizontal overflow. The first real-agent evidence smoke
+rejected a dropped row but lost context on a repair inspection. Sharing the
+provider within the verifier corrected that issue; a new smoke rejected the bad
+output and accepted its repair against the same frozen expectations. Both smoke
+attempts and their traces are retained and count toward accounting.
+
+New durable evidence directory: ~/.imprint/experiments/reliability-2026-09-20.
+Both original recordings exist; old /tmp experiment homes remain, but some old
+standalone logs/collector scripts are absent. Nothing was deleted by this task.
+About 24 GiB free. New local collector listens on 127.0.0.1:6442; old cron stays
+stopped. No live teach has validated this checkpoint yet. The next campaign has
+at most four fresh teaches, stopping after two consecutive failures (including
+core audit failures), with 30-minute target / 60-minute assessment / 90-minute
+hard teach deadline. No push, MR, merge or old-vnext changes.

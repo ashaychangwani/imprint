@@ -339,6 +339,17 @@ export const ApiResearchOutputSchema = strictObject({
     search: utf8Text(1, 256).optional(),
   }).optional(),
   candidate: ApiResearchCandidateSchema.optional(),
+  testCases: z
+    .array(
+      strictObject({
+        parameterValues: ScalarParameterValuesSchema,
+        recordingRequestSeqs: z.array(z.number().int().nonnegative()).min(1).max(32),
+        freshnessChanges: utf8Text(1, 2_000),
+      }),
+    )
+    .min(1)
+    .max(3)
+    .optional(),
   basedOnObservationId: PromptIdSchema.optional(),
   missingProof: ApiResearchMissingProofSchema.optional(),
   requestedRequestSeqs: ApiResearchRequestedSeqsSchema.optional(),

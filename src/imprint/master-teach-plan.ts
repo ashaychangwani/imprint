@@ -282,6 +282,13 @@ const ImplementationVerificationCaseSchema = z
       )
       .max(64),
     expectedResult: canonicalText(1, 2_000),
+    recordedCall: z
+      .object({
+        requestSeqs: z.array(z.number().int().nonnegative()).min(1).max(32),
+        freshnessChanges: canonicalText(1, 2_000),
+      })
+      .strict()
+      .optional(),
     provenance: z
       .object({
         recordingRequestSeqs: VerificationRequestSeqListSchema,
@@ -487,8 +494,9 @@ export const ImplementationPlanPayloadSchema = z
         });
       }
       if (
+        !verificationCase.recordedCall &&
         canonicalTeachingPlanJson(verificationCase.provenance.recordingRequestSeqs) !==
-        exactReplayProvenance
+          exactReplayProvenance
       ) {
         ctx.addIssue({
           code: z.ZodIssueCode.custom,
@@ -504,7 +512,11 @@ export const ImplementationPlanPayloadSchema = z
         message: 'implementation plans require at least one live verification case',
       });
     }
-    if (plan.strategyKind === 'api' && replayCaseCount > 1) {
+    if (
+      plan.strategyKind === 'api' &&
+      replayCaseCount > 1 &&
+      plan.verificationCases.some((test) => test.check === 'replay' && !test.recordedCall)
+    ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['verificationCases'],
@@ -1138,7 +1150,10 @@ export function validateImplementationPlanForTool(
         );
       }
     }
-    for (const seq of verificationCase.provenance.recordingRequestSeqs) {
+    for (const seq of [
+      ...verificationCase.provenance.recordingRequestSeqs,
+      ...(verificationCase.recordedCall?.requestSeqs ?? []),
+    ]) {
       if (!knownRecordingRequestSeqs.has(seq)) {
         throw new TeachingPlanValidationError(
           `verification case "${verificationCase.id}" references unknown recording request seq ${seq}`,

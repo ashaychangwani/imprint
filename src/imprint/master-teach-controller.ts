@@ -9,6 +9,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -32,6 +33,7 @@ import {
   resolveWorkflowTool,
   runWorkflowWithLadder,
 } from './backend-ladder.ts';
+import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import type { CompileAgentProgress } from './compile-agent-types.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
 import {
@@ -135,6 +137,11 @@ import {
   providerControlError,
 } from './provider-retry.ts';
 import { record } from './record.ts';
+import {
+  type RecordingEvidenceReview,
+  recordingFixtures,
+  verifyRecordingEvidence,
+} from './recording-verification.ts';
 import { redactSession } from './redact.ts';
 import {
   type FocusedEvidenceDocument,
@@ -144,6 +151,7 @@ import {
   focusedEvidenceDocuments,
   observeIndependentExecution,
 } from './replay-evidence.ts';
+import { loadCredentialStore } from './runtime.ts';
 import { resolveExplicitTeachingRecordings, resolveTeachingRecording } from './session-merge.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -165,6 +173,7 @@ export const FOCUSED_EVIDENCE_CHARACTER_BUDGET = 700_000;
  * headroom in the current 258k model window for output and tokenization variance. */
 export const API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET = 300_000;
 const PROMOTED_FILES = [
+  '.verification-plan.json',
   'workflow.json',
   'parser.ts',
   'request-transform.ts',
@@ -427,6 +436,7 @@ interface CompiledFocusedTool {
 }
 
 interface LiveCheckResult {
+  rawResponses?: unknown[];
   result: ToolResult<unknown>;
   durationMs: number;
   executionMechanism: string;
@@ -470,6 +480,7 @@ interface CandidateSelectionCheckpoint {
 }
 
 type ApiToolRunner = (input: {
+  cdpPool?: Map<string, CdpBrowserFetch>;
   workflowPath: string;
   parameters: Record<string, string | number | boolean>;
   backend?: ReplayBackend;
@@ -541,6 +552,7 @@ interface FreshTeachControllerDependencies {
   requestApiResearchStep: typeof requestApiResearchStep;
   requestMasterDecision: typeof requestMasterDecision;
   requestBaselineMvpReview: typeof requestBaselineMvpReview;
+  verifyRecordingMvp: typeof verifyRecordingMvp;
   requestParameterSelectionAdvice: typeof requestParameterSelectionAdvice;
   requestCompletionReview: typeof requestCompletionReview;
   compileFocusedTool: (input: {
@@ -582,7 +594,9 @@ interface FreshTeachControllerDependencies {
   }) => Promise<void>;
 }
 
+const researchPoolContexts = new WeakMap<Map<string, CdpBrowserFetch>, Map<string, string>>();
 const runApiToolWithLadder: ApiToolRunner = async ({
+  cdpPool,
   workflowPath,
   parameters,
   backend,
@@ -590,7 +604,27 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   onPreparedRequest,
   onRawResponses,
 }) => {
+  if (cdpPool) {
+    const tool = resolveWorkflowTool(workflowPath);
+    const context = teachingPlanContentSha256({
+      credentials: await loadCredentialStore(tool.site),
+      bootstrap: tool.workflow.bootstrap,
+      site: tool.site,
+      tool: tool.workflow.toolName,
+    });
+    const contexts = researchPoolContexts.get(cdpPool) ?? new Map<string, string>();
+    const prefix = `${tool.site}\u0000${tool.workflow.toolName}\u0000`;
+    const previous = contexts.get(prefix);
+    if (previous && previous !== context) {
+      const browsers = [...cdpPool.entries()].filter(([key]) => key.startsWith(prefix));
+      for (const [key] of browsers) cdpPool.delete(key);
+      await Promise.allSettled(browsers.map(([, browser]) => browser.close()));
+    }
+    contexts.set(prefix, context);
+    researchPoolContexts.set(cdpPool, contexts);
+  }
   const run = await runWorkflowWithLadder({
+    cdpPool,
     workflowPath,
     params: parameters,
     ...(backend && backend !== 'auto' ? { forceBackend: backend } : {}),
@@ -606,6 +640,77 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   };
 };
 
+async function verifyRecordingMvp(input: {
+  tool: EditableTeachingTool;
+  compiled: CompiledFocusedTool;
+  live: LiveCheckResult;
+  implementation: ImplementationPlanPayload;
+  session: Session;
+  directory: string;
+  agent: MasterTeachAgentOptions;
+}): Promise<RecordingEvidenceReview> {
+  if (input.tool.strategy?.kind === 'playbook_fallback')
+    return {
+      status: 'passed',
+      reason:
+        'Parser fixture review does not apply to a playbook; live semantic review is still required.',
+    };
+  const verification =
+    input.implementation.verificationCases.find(({ id }) => id === input.live.verificationCaseId) ??
+    (input.live.chainInvocationSha256
+      ? input.implementation.verificationCases.find(({ check }) => check === 'live')
+      : undefined);
+  const recordedCall = verification?.recordedCall;
+  if (!recordedCall || !input.live.rawResponses || !input.live.result.ok)
+    return {
+      status: 'unverified',
+      reason:
+        'A matched recordedCall and retained live raw responses are required for parser verification.',
+    };
+  try {
+    const fixtures = await recordingFixtures({
+      ...input,
+      workflow: input.compiled.workflow,
+      workflowPath: input.compiled.workflowPath,
+    });
+    if (
+      !fixtures.some(
+        ({ requestSeqs }) =>
+          JSON.stringify(requestSeqs) === JSON.stringify(recordedCall.requestSeqs),
+      )
+    )
+      return {
+        status: 'unverified',
+        reason: 'Live case has no matching selected replay response chain.',
+      };
+    fixtures.push({
+      id: `live_${verification.id}`,
+      origin: 'live',
+      freshnessChanges: recordedCall.freshnessChanges,
+      requestSeqs: recordedCall.requestSeqs,
+      parameters: input.live.parameters,
+      responses: input.live.rawResponses,
+      actual: input.live.result.data,
+    });
+    return await verifyRecordingEvidence({
+      operation: {
+        name: input.tool.candidate.toolName,
+        description: input.tool.candidate.description,
+        expectedOutput: input.tool.candidate.expectedOutput,
+      },
+      fixtures,
+      directory: input.directory,
+      agent: input.agent,
+    });
+  } catch (error) {
+    if (input.agent.signal?.aborted) throw error;
+    return {
+      status: 'unverified',
+      reason: `Recording evidence review could not finish: ${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
+}
+
 const defaultDependencies: FreshTeachControllerDependencies = {
   now: () => new Date(),
   runId: () => randomUUID(),
@@ -619,6 +724,7 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   requestApiResearchStep,
   requestMasterDecision,
   requestBaselineMvpReview,
+  verifyRecordingMvp,
   requestParameterSelectionAdvice,
   requestCompletionReview,
   compileFocusedTool: compileFocusedToolWithShippedAgent,
@@ -1808,6 +1914,11 @@ async function compileFocusedToolWithShippedAgent(input: {
 }): Promise<CompiledFocusedTool> {
   mkdirSync(input.stagingDir, { recursive: true, mode: 0o700 });
   if (input.priorToolDir) {
+    for (const directory of ['.recording-verification', '.live-checks']) {
+      const priorEvidence = pathJoin(input.priorToolDir, directory);
+      if (existsSync(priorEvidence))
+        cpSync(priorEvidence, pathJoin(input.stagingDir, directory), { recursive: true });
+    }
     for (const name of revisionSeedArtifactNames(input.tool.strategy?.kind ?? 'api')) {
       const prior = pathJoin(input.priorToolDir, name);
       if (existsSync(prior) && statSync(prior).isFile())
@@ -3530,9 +3641,10 @@ async function runLiveCheck(input: {
   signal?: AbortSignal;
   maxDurationMs?: number;
   apiResearch?: ApiResearchResult;
+  verification: ImplementationPlanPayload['verificationCases'][number];
 }): Promise<UnboundLiveCheckResult> {
-  const parameters = liveVerificationParameters(input.implementation);
-  const verification = input.implementation.verificationCases.find((test) => test.check === 'live');
+  const verification = input.verification;
+  const parameters = verificationParameters(verification);
   if (!verification) throw new Error('implementation plan has no live verification case');
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
@@ -3558,7 +3670,11 @@ async function runLiveCheck(input: {
       expectedResult: verification.expectedResult,
     };
   }
+  let rawResponses: unknown[] | undefined;
   const checked = await runApiToolCheck({
+    onRawResponses: (responses) => {
+      rawResponses = responses;
+    },
     deps: input.deps,
     runDeadline: input.runDeadline,
     label: `live check for "${input.tool.id}"`,
@@ -3569,6 +3685,7 @@ async function runLiveCheck(input: {
   });
   return {
     ...checked,
+    rawResponses,
     durationMs: Date.now() - startedAt,
     parameters,
     verificationCaseId: verification.id,
@@ -3739,6 +3856,8 @@ async function compileAndCheckCurrentPlan(input: {
   approveMvp?: (
     tool: EditableTeachingTool,
     resultEvidence: CompletionToolResultEvidence,
+    live: LiveCheckResult,
+    compiled: CompiledFocusedTool,
   ) => Promise<ResultDisposition>;
   /** Returns a prior disposition for an exact retained result receipt. */
   resultDisposition?: (
@@ -3998,6 +4117,14 @@ async function compileAndCheckCurrentPlan(input: {
     focused: CompiledFocusedTool,
   ): Promise<boolean> => {
     if (rejectedMvpToolIds.has(tool.id)) return false;
+    if (mechanicalProofFailures(plan, input.journal.currentExecutionSnapshot(), tool.id).length > 0)
+      return false;
+    if (
+      incomingChainInvocationsFor(tool.id).some(
+        (invocation) => !approvedChainInvocations.has(invocation.sha256),
+      )
+    )
+      return false;
     if (attemptedMvpToolIds.has(tool.id)) {
       return approvedMvpToolIds.has(tool.id);
     }
@@ -4006,7 +4133,7 @@ async function compileAndCheckCurrentPlan(input: {
     if (!live?.result.ok) throw new Error(`MVP tool "${tool.id}" has no retained live result`);
     const resultEvidence = completionToolResultEvidenceFor(input.journal, tool, live);
     const disposition = input.approveMvp
-      ? await input.approveMvp(tool, resultEvidence)
+      ? await input.approveMvp(tool, resultEvidence, live, focused)
       : ({
           status: 'credible',
           reason: 'semantic review is not configured',
@@ -4078,12 +4205,16 @@ async function compileAndCheckCurrentPlan(input: {
     return unavailable;
   };
 
-  const runStandaloneLive = async (
+  const runStandaloneCase = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
     implementation: ImplementationPlanPayload,
     waveIndex: number,
+    verification: ImplementationPlanPayload['verificationCases'][number],
   ): Promise<LiveCheckResult | undefined> => {
+    const invocationIndex = implementation.verificationCases
+      .filter(({ check }) => check === 'live')
+      .findIndex(({ id }) => id === verification.id);
     let observed: UnboundLiveCheckResult;
     const apiResearch = input.apiResearchByToolId?.get(tool.id);
     try {
@@ -4096,11 +4227,12 @@ async function compileAndCheckCurrentPlan(input: {
         signal: input.signal,
         maxDurationMs: input.maxDurationMs,
         apiResearch,
+        verification,
       });
     } catch (error) {
       const check = invocationOutcomeCheck({
         subject: 'live',
-        invocationIndex: 0,
+        invocationIndex,
         outcome: { kind: 'host_error', error },
         executionMechanism: 'host',
       });
@@ -4119,9 +4251,13 @@ async function compileAndCheckCurrentPlan(input: {
       return undefined;
     }
 
+    const liveEvidenceDir = pathJoin(focused.toolDir, '.live-checks');
+    mkdirSync(liveEvidenceDir, { recursive: true });
+    writeJsonAtomic(pathJoin(liveEvidenceDir, `${verification.id}-${randomUUID()}.json`), observed);
+
     const check = invocationOutcomeCheck({
       subject: 'live',
-      invocationIndex: 0,
+      invocationIndex,
       outcome: { kind: 'returned', result: observed.result },
       durationMs: observed.durationMs,
       executionMechanism: observed.executionMechanism,
@@ -4161,12 +4297,47 @@ async function compileAndCheckCurrentPlan(input: {
     return live;
   };
 
+  const runStandaloneLive = async (
+    tool: EditableTeachingTool,
+    focused: CompiledFocusedTool,
+    implementation: ImplementationPlanPayload,
+    waveIndex: number,
+  ): Promise<LiveCheckResult | undefined> => {
+    const cases = implementation.verificationCases.filter(({ check }) => check === 'live');
+    const primary = cases[0];
+    if (!primary) throw new Error('implementation plan has no live verification case');
+    // Preserve the primary result for declared producer bindings. Each other
+    // required case is checked and reviewed first, without publishing a draft.
+    for (const verification of [...cases.slice(1), primary]) {
+      const live = await runStandaloneCase(tool, focused, implementation, waveIndex, verification);
+      if (!live) return undefined;
+      if (verification === primary) return live;
+      const evidence = completionToolResultEvidenceFor(input.journal, tool, live);
+      const disposition = await input.approveMvp?.(tool, evidence, live, focused);
+      if (disposition?.status === 'revision_required') {
+        failures.push(
+          checkFailure(
+            tool,
+            waveIndex,
+            'proof',
+            rejectedResultError(disposition.reason, evidence),
+            { receiptRef: live.resultReceiptRef },
+          ),
+        );
+        liveByToolId.delete(tool.id);
+        return undefined;
+      }
+    }
+    return undefined;
+  };
+
   const incomingChainInvocationsFor = (toolId: string): ChainInvocation[] =>
     chainInvocationsInOrder(plan.chainEdges).filter(
       (invocation) => invocation.edges[0]?.consumerToolId === toolId,
     );
 
   const rejectedChainInvocations = new Set<string>();
+  const approvedChainInvocations = new Set<string>();
   const runChainCheck = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
@@ -4191,6 +4362,7 @@ async function compileAndCheckCurrentPlan(input: {
           mechanism: string;
           backendAttempts?: BackendAttemptFact[];
           responseObservations?: BackendResponseObservation[];
+          rawResponses?: unknown[];
           parameters: Record<string, string | number | boolean>;
         }
       | { kind: 'artifact_error'; error: Error }
@@ -4272,6 +4444,7 @@ async function compileAndCheckCurrentPlan(input: {
       try {
         const startedAt = Date.now();
         const apiResearch = input.apiResearchByToolId?.get(tool.id);
+        let rawResponses: unknown[] | undefined;
         const chained =
           tool.strategy?.kind === 'playbook_fallback'
             ? await runPlaybookToolCheck({
@@ -4289,12 +4462,16 @@ async function compileAndCheckCurrentPlan(input: {
                 runDeadline: input.runDeadline,
                 label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
                 workflowPath: focused.workflowPath,
+                onRawResponses: (responses) => {
+                  rawResponses = responses;
+                },
                 parameters,
                 ...(apiResearch?.backend ? { backend: apiResearch.backend } : {}),
                 signal: input.signal,
               });
         outcome = {
           kind: 'returned',
+          rawResponses,
           result: chained.result,
           durationMs: Date.now() - startedAt,
           mechanism: chained.executionMechanism,
@@ -4309,6 +4486,10 @@ async function compileAndCheckCurrentPlan(input: {
         outcome = { kind: 'host_error', error };
       }
     }
+
+    const chainEvidenceDir = pathJoin(focused.toolDir, '.live-checks');
+    mkdirSync(chainEvidenceDir, { recursive: true });
+    writeJsonAtomic(pathJoin(chainEvidenceDir, `chain-${randomUUID()}.json`), outcome);
 
     const check = invocationOutcomeCheck({
       subject: 'chain',
@@ -4382,6 +4563,7 @@ async function compileAndCheckCurrentPlan(input: {
     };
     const shared = {
       result: outcome.result,
+      rawResponses: outcome.rawResponses,
       durationMs: outcome.durationMs,
       executionMechanism: outcome.mechanism,
       responseObservations: outcome.responseObservations,
@@ -4407,13 +4589,21 @@ async function compileAndCheckCurrentPlan(input: {
     if (!edge) throw new Error(`chain result review for "${tool.id}" has no edges`);
     const resultEvidence = completionToolResultEvidenceFor(input.journal, tool, result, edge);
     const disposition = input.approveMvp
-      ? await input.approveMvp(tool, resultEvidence)
+      ? await input.approveMvp(
+          tool,
+          resultEvidence,
+          result,
+          compiledByToolId.get(tool.id) as CompiledFocusedTool,
+        )
       : ({
           status: 'credible',
           reason: 'semantic review is not configured',
           evidenceRefs: [],
         } as const);
-    if (disposition.status === 'credible') return true;
+    if (disposition.status === 'credible') {
+      approvedChainInvocations.add(invocation.sha256);
+      return true;
+    }
     rejectedChainInvocations.add(invocation.sha256);
     failures.push(
       checkFailure(
@@ -4452,16 +4642,21 @@ async function compileAndCheckCurrentPlan(input: {
     ) as ImplementationPlanPayload;
 
     const live = await runStandaloneLive(tool, focused, implementation, waveIndex);
-    const standaloneApproved = live ? await approveAndPublishMvp(tool, waveIndex, focused) : false;
+    let standaloneApproved = false;
     let chainReviewFailed = false;
     for (const invocation of incomingChainInvocationsFor(tool.id)) {
       const chained = await runChainCheck(tool, focused, implementation, invocation, waveIndex);
-      if (!chained) continue;
+      if (!chained) {
+        chainReviewFailed = true;
+        continue;
+      }
       if (!(await reviewChainResult(tool, invocation, chained, waveIndex))) {
         chainReviewFailed = true;
       }
     }
 
+    if (live && !chainReviewFailed)
+      standaloneApproved = await approveAndPublishMvp(tool, waveIndex, focused);
     const proofFailures = mechanicalProofFailures(
       plan,
       input.journal.currentExecutionSnapshot(),
@@ -4648,9 +4843,7 @@ async function compileAndCheckCurrentPlan(input: {
       if (!hasReceipt(tool.id, 'live') || !hasCurrentLiveResult) {
         live = await runExistingLive(tool, focused, implementation);
       }
-      const standaloneApproved = live?.result.ok
-        ? hasUsableProducer(tool.id) || (await approveAndPublishMvp(tool, waveIndex, focused))
-        : false;
+      let standaloneApproved = false;
       let chainReviewFailed = false;
       for (const invocation of incomingChainInvocationsFor(tool.id)) {
         const retained = invocation.edges.map((edge) => chainByEdgeId.get(edge.id));
@@ -4672,11 +4865,17 @@ async function compileAndCheckCurrentPlan(input: {
           }
           chained = await runChainCheck(tool, focused, implementation, invocation, waveIndex);
         }
-        if (!chained) continue;
+        if (!chained) {
+          chainReviewFailed = true;
+          continue;
+        }
         if (!(await reviewChainResult(tool, invocation, chained, waveIndex))) {
           chainReviewFailed = true;
         }
       }
+      if (live?.result.ok && !chainReviewFailed)
+        standaloneApproved =
+          hasUsableProducer(tool.id) || (await approveAndPublishMvp(tool, waveIndex, focused));
       if (
         live?.result.ok &&
         standaloneApproved &&
@@ -6045,13 +6244,34 @@ export async function runFreshMasterTeach(
             publishedMvpBuilds.has(`${toolId}:${buildRef.sha256}`),
           resultDisposition: (toolId, resultReceiptRef) =>
             mvpDispositionByResult.get(`${toolId}:${resultReceiptRef.sha256}`),
-          approveMvp: async (tool, resultEvidence) => {
+          approveMvp: async (tool, resultEvidence, live, compiled) => {
             const key = `${tool.id}:${resultEvidence.payload.resultReceiptRef.sha256}`;
             // The disposition is bound to the content-addressed implementation,
             // live receipt, and result. Reuse only those semantic facts across
             // explanation-only plan revisions; never reuse the old plan binding.
             let disposition = mvpDispositionByResult.get(key);
             if (!disposition) {
+              if (!tool.implementationPlan) throw new Error('MVP review lost implementation plan');
+              const independent = await deps.verifyRecordingMvp({
+                tool,
+                compiled,
+                live,
+                implementation: activeJournal.readJson(
+                  tool.implementationPlan,
+                ) as ImplementationPlanPayload,
+                session: fullScope.session,
+                directory: pathJoin(compiled.toolDir, '.recording-verification'),
+                agent: agents,
+              });
+              if (independent.status !== 'passed') {
+                const rejected: ResultDisposition = {
+                  status: 'revision_required',
+                  reason: `${independent.reason} Saved source responses and fixed expectations are in .recording-verification/ beside this draft.`,
+                  evidenceRefs: [resultEvidence.ref],
+                };
+                mvpDispositionByResult.set(key, rejected);
+                return rejected;
+              }
               reportProgress(opts, `reviewing the core result for ${tool.candidate.toolName}`);
               const current = currentPlanProjection(activeJournal);
               const proof = activeJournal
@@ -6197,6 +6417,30 @@ export async function runFreshMasterTeach(
             const key = `${tool.id}:${buildRef.sha256}`;
             if (publishedMvpBuilds.has(key)) return;
             reportProgress(opts, `publishing usable MVP ${tool.candidate.toolName}`);
+            if (tool.implementationPlan) {
+              const implementation = activeJournal.readJson(
+                tool.implementationPlan,
+              ) as ImplementationPlanPayload;
+              const plan = activeJournal.currentPlan();
+              writeJsonAtomic(pathJoin(compiled.toolDir, '.verification-plan.json'), {
+                recordingPath: redacted.path,
+                cases: implementation.verificationCases
+                  .filter(({ check }) => check === 'live')
+                  .map((test) => ({
+                    id: test.id,
+                    parameters: verificationParameters(test),
+                    recordedCall: test.recordedCall,
+                  })),
+                dependencies: plan.chainEdges
+                  .filter(({ consumerToolId }) => consumerToolId === tool.id)
+                  .map((edge) => ({
+                    producerTool: plan.tools.find(({ id }) => id === edge.producerToolId)?.candidate
+                      .toolName,
+                    producerResultPath: edge.producerResultPath,
+                    consumerParameter: edge.consumerParameter,
+                  })),
+              });
+            }
             await deps.promote({ site, runId, runRoot, tools: [compiled] });
             publishedMvpBuilds.add(key);
           },

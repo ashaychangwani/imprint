@@ -14,6 +14,7 @@ import {
   type BackendResponseObservation,
   rememberProvenCompileBackend,
 } from './backend-ladder.ts';
+import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
@@ -88,6 +89,7 @@ export class ApiResearchBlockedError extends Error {
 interface ApiResearchDependencies {
   requestStep: typeof requestApiResearchStep;
   runApiTool(input: {
+    cdpPool?: Map<string, CdpBrowserFetch>;
     workflowPath: string;
     parameters: Record<string, string | number | boolean>;
     backend?: 'auto' | 'fetch' | 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch';
@@ -467,248 +469,272 @@ export async function researchApiMvpCall(input: {
           : {}),
       }
     : undefined;
-  while (true) {
-    if (input.signal?.aborted) throw abortSignalError(input.signal);
-    if (Date.now() >= input.runDeadline.deadlineMs) {
-      throw new ApiResearchBlockedError(
-        'API research reached the shared teach deadline',
-        observations,
-      );
-    }
-    const researchInput: ApiResearchInput = {
-      run: input.run,
-      recordingIndex: input.recordingIndex,
-      tool: input.tool,
-      evidence,
-      observations,
-      availableProducers: (input.producers?.() ?? []).map(({ toolName, candidate, summary }) => ({
-        toolName,
-        parameters: candidate.workflow.parameters,
-        summary,
-      })),
-      ...(resultInspection ? { resultInspection } : {}),
-      requestCatalog,
-      requestCatalogTruncated:
-        requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
-      ...(requestCatalogPage ? { requestCatalogPage } : {}),
-      requiredLinks: [...(input.requiredLinks ?? [])],
-      ...(inspectedRequestSeqs.size > 0 ? { inspectedRequestSeqs: [...inspectedRequestSeqs] } : {}),
-      researchPhase: input.followUp ? 'follow_up' : 'mvp',
-      ...(input.followUp ? { followUp: input.followUp } : {}),
-      ...(input.previousProgress ? { previousProgress: input.previousProgress } : {}),
-      ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
-    };
-    let decision: Awaited<ReturnType<typeof requestApiResearchStep>>;
-    try {
-      decision = await input.dependencies.requestStep(
-        researchInput,
-        input.agent,
-        retainedTurnDelta,
-      );
-    } catch (error) {
-      if (!(error instanceof SemanticAgentOutputError)) throw error;
-      // A malformed advisory handoff is not evidence that the API is impossible.
-      // Preserve the actual tests and let the master resume this researcher.
-      throw new ApiResearchBlockedError(
-        `Research handoff needs correction; this is not an API failure. ${error.message}`,
-        observations,
-      );
-    }
-    retainedTurnDelta = undefined;
-    resultInspection = undefined;
-    if (decision.action === 'inspect_result') {
-      const query = decision.resultQuery;
-      if (!query) throw new Error('API researcher returned no result query');
-      const observation = observations.find(({ id }) => id === query.observationId);
-      if (observation?.resultTextLength === undefined)
-        throw new Error('API researcher requested unavailable result text');
-      const text = readFileSync(retainedResultPath(input.toolDir, observation.id), 'utf8');
-      const match =
-        query.search === undefined ? query.offset : text.indexOf(query.search, query.offset);
-      const offset = match < 0 ? query.offset : match;
-      const slice = match < 0 ? '' : text.slice(offset, offset + query.length);
-      resultInspection = {
-        observationId: observation.id,
-        offset,
-        totalCharacters: text.length,
-        text: slice,
-        nextOffset:
-          match < 0 || offset + slice.length >= text.length ? null : offset + slice.length,
-        ...(query.search === undefined ? {} : { matchFound: match >= 0 }),
-      };
-      retainedTurnDelta = { kind: 'result_inspection', resultInspection };
-      if (slice.length)
-        observation.resultInspections = [
-          ...(observation.resultInspections ?? []).filter((entry) => entry.offset !== offset),
-          { offset, text: slice },
-        ].slice(-8);
-      continue;
-    }
-    if (decision.action === 'catalog') {
-      if (!requestCatalogPage?.hasMore || !input.loadNextRequestCatalogPage) {
-        throw new Error('API researcher requested another catalog page when none is available');
-      }
-      const nextOffset = requestCatalogPage.offset + requestCatalog.length;
-      const next = input.loadNextRequestCatalogPage(nextOffset);
-      if (next.page.offset !== nextOffset || next.entries.length === 0) {
-        throw new Error('API research catalog pagination did not advance');
-      }
-      requestCatalog = [...next.entries];
-      requestCatalogPage = next.page;
-      retainedTurnDelta = {
-        kind: 'catalog_page',
-        requestCatalog,
-        requestCatalogTruncated: requestCatalogPage.hasMore,
-        requestCatalogPage,
-      };
-      input.report?.(`${input.tool.candidate.toolName}: reading the next request catalog page`);
-      continue;
-    }
-    if (decision.action === 'inspect') {
-      if (!input.inspectRequests || !decision.requestedRequestSeqs) {
-        throw new Error('API researcher requested evidence inspection without exact request seqs');
-      }
-      const requestedRequestSeqs = [...decision.requestedRequestSeqs].sort(
-        (left, right) => left - right,
-      );
-      const inspectionStateSha256 = teachingPlanContentSha256({
-        evidenceSha256: evidence.ref.sha256,
-        requestedRequestSeqs,
-      });
-      const newRequestSeqs = requestedRequestSeqs.filter((seq) => !inspectedRequestSeqs.has(seq));
-      if (newRequestSeqs.length === 0 || completedInspectionStates.has(inspectionStateSha256)) {
+  const pendingTests: Awaited<ReturnType<typeof requestApiResearchStep>>[] = [];
+  let batchStart: number | undefined;
+  const cdpPool = new Map<string, CdpBrowserFetch>();
+  try {
+    while (true) {
+      if (input.signal?.aborted) throw abortSignalError(input.signal);
+      if (Date.now() >= input.runDeadline.deadlineMs) {
         throw new ApiResearchBlockedError(
-          'API research requested the exact recording evidence it had already inspected; return this no-progress fact to the master for a different direction or boundary',
+          'API research reached the shared teach deadline',
           observations,
         );
       }
-      completedInspectionStates.add(inspectionStateSha256);
-      input.report?.(`${input.tool.candidate.toolName}: inspecting selected recorded requests`);
-      for (const seq of newRequestSeqs) inspectedRequestSeqs.add(seq);
-      const inspectedEvidence = input.inspectRequests(newRequestSeqs);
-      evidence = inspectedEvidence.accumulated;
-      retainedTurnDelta = {
-        kind: 'inspection',
-        inspectedRequestSeqs: newRequestSeqs,
-        relevantEvidence: inspectedEvidence.delta,
+      const researchInput: ApiResearchInput = {
+        run: input.run,
+        recordingIndex: input.recordingIndex,
+        tool: input.tool,
+        evidence,
+        observations,
+        availableProducers: (input.producers?.() ?? []).map(({ toolName, candidate, summary }) => ({
+          toolName,
+          parameters: candidate.workflow.parameters,
+          summary,
+        })),
+        ...(resultInspection ? { resultInspection } : {}),
+        requestCatalog,
+        requestCatalogTruncated:
+          requestCatalogPage?.hasMore ?? input.requestCatalogTruncated ?? false,
+        ...(requestCatalogPage ? { requestCatalogPage } : {}),
+        requiredLinks: [...(input.requiredLinks ?? [])],
+        ...(inspectedRequestSeqs.size > 0
+          ? { inspectedRequestSeqs: [...inspectedRequestSeqs] }
+          : {}),
+        researchPhase: input.followUp ? 'follow_up' : 'mvp',
+        ...(input.followUp ? { followUp: input.followUp } : {}),
+        ...(input.previousProgress ? { previousProgress: input.previousProgress } : {}),
+        ...(proposedBlockReason ? { blockReview: { proposedReason: proposedBlockReason } } : {}),
       };
-      proposedBlockReason = undefined;
-      continue;
-    }
-    if (decision.action === 'blocked') {
-      if (!proposedBlockReason) {
-        proposedBlockReason = decision.reason;
-        retainedTurnDelta = {
-          kind: 'block_review',
-          blockReview: { proposedReason: proposedBlockReason },
+      let decision: Awaited<ReturnType<typeof requestApiResearchStep>>;
+      try {
+        const pending = pendingTests.shift();
+        decision =
+          pending ??
+          (await input.dependencies.requestStep(researchInput, input.agent, retainedTurnDelta));
+        if (!pending && decision.action === 'test' && decision.testCases && decision.candidate) {
+          const candidate = decision.candidate;
+          pendingTests.push(
+            ...decision.testCases.map((test) => ({
+              ...decision,
+              testCases: undefined,
+              candidate: { ...candidate, parameterValues: test.parameterValues },
+            })),
+          );
+          batchStart = observations.length;
+          const firstTest = pendingTests.shift();
+          if (!firstTest) throw new Error('Research batch contains no cases');
+          decision = firstTest;
+        }
+      } catch (error) {
+        if (!(error instanceof SemanticAgentOutputError)) throw error;
+        // A malformed advisory handoff is not evidence that the API is impossible.
+        // Preserve the actual tests and let the master resume this researcher.
+        throw new ApiResearchBlockedError(
+          `Research handoff needs correction; this is not an API failure. ${error.message}`,
+          observations,
+        );
+      }
+      retainedTurnDelta = undefined;
+      resultInspection = undefined;
+      if (decision.action === 'inspect_result') {
+        const query = decision.resultQuery;
+        if (!query) throw new Error('API researcher returned no result query');
+        const observation = observations.find(({ id }) => id === query.observationId);
+        if (observation?.resultTextLength === undefined)
+          throw new Error('API researcher requested unavailable result text');
+        const text = readFileSync(retainedResultPath(input.toolDir, observation.id), 'utf8');
+        const match =
+          query.search === undefined ? query.offset : text.indexOf(query.search, query.offset);
+        const offset = match < 0 ? query.offset : match;
+        const slice = match < 0 ? '' : text.slice(offset, offset + query.length);
+        resultInspection = {
+          observationId: observation.id,
+          offset,
+          totalCharacters: text.length,
+          text: slice,
+          nextOffset:
+            match < 0 || offset + slice.length >= text.length ? null : offset + slice.length,
+          ...(query.search === undefined ? {} : { matchFound: match >= 0 }),
         };
+        retainedTurnDelta = { kind: 'result_inspection', resultInspection };
+        if (slice.length)
+          observation.resultInspections = [
+            ...(observation.resultInspections ?? []).filter((entry) => entry.offset !== offset),
+            { offset, text: slice },
+          ].slice(-8);
         continue;
       }
-      throw new ApiResearchBlockedError(decision.reason, observations);
-    }
-    proposedBlockReason = undefined;
-    const producer = decision.producerCall
-      ? input.producers?.().find(({ toolName }) => toolName === decision.producerCall?.toolName)
-      : undefined;
-    if (decision.action === 'call_producer' && !producer)
-      throw new Error('Requested producer is no longer available');
-    const candidate =
-      producer && decision.producerCall
-        ? { ...producer.candidate, parameterValues: decision.producerCall.parameters }
-        : decision.candidate;
-    if (!candidate) throw new Error('API researcher returned no candidate');
-    if (decision.action === 'proven' || decision.action === 'partial') {
-      const observation = observations.find(({ id }) => id === decision.basedOnObservationId);
-      if (!observation) throw new Error('API researcher cited an unavailable observation');
-      const workflowPath = writeCandidate(input.toolDir, candidate);
-      const backend = concreteBackend(observation.executionMechanism);
-      if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
-      writeFileSync(
-        pathJoin(input.toolDir, 'api-research.json'),
-        `${JSON.stringify({ decision, observation, observations: observations.slice(-64) }, null, 2)}\n`,
-        'utf8',
-      );
-      return {
-        researchInputsSha256: apiResearchInputsSha256(input.tool),
-        researchedBoundary: {
-          requestSeqs: [...input.tool.candidate.requestSeqs],
-          dependencySeqs: [...input.tool.candidate.dependencySeqs],
-          stableInputsSha256: apiResearchStableInputsSha256(input.tool),
-          dependencyToolNames: [...input.tool.candidate.dependsOnTools],
-          requiredLinks: [...(input.requiredLinks ?? [])],
-        },
-        candidate,
-        workflow: candidate.workflow,
-        toolDir: input.toolDir,
-        summary: decision.reason,
-        observation,
-        observations: observations.slice(-64),
-        parameters: candidate.parameterValues,
-        ...(backend ? { backend } : {}),
-        ...(decision.action === 'partial'
-          ? {
-              status: 'partial' as const,
-              missingProof: decision.missingProof ?? [
-                'The researcher did not state the remaining proof gap.',
-              ],
-            }
-          : {}),
-      };
-    }
-
-    input.report?.(
-      producer
-        ? `${input.tool.candidate.toolName}: calling ${producer.toolName} for fresh upstream values`
-        : `${input.tool.candidate.toolName}: testing API request`,
-    );
-    const workflowPath = writeCandidate(
-      producer ? pathJoin(producer.toolDir, 'fresh-calls') : input.toolDir,
-      candidate,
-    );
-    const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
-    try {
-      const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
-      let rawResponses: unknown[] | undefined;
-      const observed = await input.dependencies.runApiTool({
-        workflowPath,
-        parameters: candidate.parameterValues,
-        backend: candidate.testBackend,
-        signal: input.signal,
-        onRawResponses: (responses) => {
-          rawResponses = responses;
-        },
-        onPreparedRequest: (observation) => {
-          if (requestComparisons.length >= 32) requestComparisons.shift();
-          requestComparisons.push(
-            preparedRequestComparison(observation, candidate.workflow, input.session),
+      if (decision.action === 'catalog') {
+        if (!requestCatalogPage?.hasMore || !input.loadNextRequestCatalogPage) {
+          throw new Error('API researcher requested another catalog page when none is available');
+        }
+        const nextOffset = requestCatalogPage.offset + requestCatalog.length;
+        const next = input.loadNextRequestCatalogPage(nextOffset);
+        if (next.page.offset !== nextOffset || next.entries.length === 0) {
+          throw new Error('API research catalog pagination did not advance');
+        }
+        requestCatalog = [...next.entries];
+        requestCatalogPage = next.page;
+        retainedTurnDelta = {
+          kind: 'catalog_page',
+          requestCatalog,
+          requestCatalogTruncated: requestCatalogPage.hasMore,
+          requestCatalogPage,
+        };
+        input.report?.(`${input.tool.candidate.toolName}: reading the next request catalog page`);
+        continue;
+      }
+      if (decision.action === 'inspect') {
+        if (!input.inspectRequests || !decision.requestedRequestSeqs) {
+          throw new Error(
+            'API researcher requested evidence inspection without exact request seqs',
           );
-        },
-      });
-      const observation: ApiResearchObservation = {
-        id: randomUUID(),
-        ...(producer ? { producerToolName: producer.toolName } : {}),
-        invocationParameters: candidate.parameterValues,
-        candidateSha256: apiResearchCandidateSha256(candidate),
-        requestDefinitionSha256: teachingPlanContentSha256({
-          workflow: candidate.workflow,
-          requestTransformSource: candidate.requestTransformSource,
-        }),
-        executionMechanism: observed.executionMechanism,
-        backendAttempts: observed.backendAttempts ?? [],
-        responseObservations: observed.responseObservations ?? [],
-        requestComparisons,
-        result: resultFact(observed.result, observed.credentialValues),
-      };
-      if (observed.result.ok) {
-        const text = resultText(observed.result.data, observed.credentialValues);
-        const resultDir = pathJoin(input.toolDir, 'live-results');
-        mkdirSync(resultDir, { recursive: true });
-        writeFileSync(retainedResultPath(input.toolDir, observation.id), text, {
-          encoding: 'utf8',
-          flag: 'wx',
+        }
+        const requestedRequestSeqs = [...decision.requestedRequestSeqs].sort(
+          (left, right) => left - right,
+        );
+        const inspectionStateSha256 = teachingPlanContentSha256({
+          evidenceSha256: evidence.ref.sha256,
+          requestedRequestSeqs,
         });
-        observation.resultTextLength = text.length;
+        const newRequestSeqs = requestedRequestSeqs.filter((seq) => !inspectedRequestSeqs.has(seq));
+        if (newRequestSeqs.length === 0 || completedInspectionStates.has(inspectionStateSha256)) {
+          throw new ApiResearchBlockedError(
+            'API research requested the exact recording evidence it had already inspected; return this no-progress fact to the master for a different direction or boundary',
+            observations,
+          );
+        }
+        completedInspectionStates.add(inspectionStateSha256);
+        input.report?.(`${input.tool.candidate.toolName}: inspecting selected recorded requests`);
+        for (const seq of newRequestSeqs) inspectedRequestSeqs.add(seq);
+        const inspectedEvidence = input.inspectRequests(newRequestSeqs);
+        evidence = inspectedEvidence.accumulated;
+        retainedTurnDelta = {
+          kind: 'inspection',
+          inspectedRequestSeqs: newRequestSeqs,
+          relevantEvidence: inspectedEvidence.delta,
+        };
+        proposedBlockReason = undefined;
+        continue;
+      }
+      if (decision.action === 'blocked') {
+        if (!proposedBlockReason) {
+          proposedBlockReason = decision.reason;
+          retainedTurnDelta = {
+            kind: 'block_review',
+            blockReview: { proposedReason: proposedBlockReason },
+          };
+          continue;
+        }
+        throw new ApiResearchBlockedError(decision.reason, observations);
+      }
+      proposedBlockReason = undefined;
+      const producer = decision.producerCall
+        ? input.producers?.().find(({ toolName }) => toolName === decision.producerCall?.toolName)
+        : undefined;
+      if (decision.action === 'call_producer' && !producer)
+        throw new Error('Requested producer is no longer available');
+      const candidate =
+        producer && decision.producerCall
+          ? { ...producer.candidate, parameterValues: decision.producerCall.parameters }
+          : decision.candidate;
+      if (!candidate) throw new Error('API researcher returned no candidate');
+      if (decision.action === 'proven' || decision.action === 'partial') {
+        const observation = observations.find(({ id }) => id === decision.basedOnObservationId);
+        if (!observation) throw new Error('API researcher cited an unavailable observation');
+        const workflowPath = writeCandidate(input.toolDir, candidate);
+        const backend = concreteBackend(observation.executionMechanism);
+        if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
+        writeFileSync(
+          pathJoin(input.toolDir, 'api-research.json'),
+          `${JSON.stringify({ decision, observation, observations: observations.slice(-64) }, null, 2)}\n`,
+          'utf8',
+        );
+        return {
+          researchInputsSha256: apiResearchInputsSha256(input.tool),
+          researchedBoundary: {
+            requestSeqs: [...input.tool.candidate.requestSeqs],
+            dependencySeqs: [...input.tool.candidate.dependencySeqs],
+            stableInputsSha256: apiResearchStableInputsSha256(input.tool),
+            dependencyToolNames: [...input.tool.candidate.dependsOnTools],
+            requiredLinks: [...(input.requiredLinks ?? [])],
+          },
+          candidate,
+          workflow: candidate.workflow,
+          toolDir: input.toolDir,
+          summary: decision.reason,
+          observation,
+          observations: observations.slice(-64),
+          parameters: candidate.parameterValues,
+          ...(backend ? { backend } : {}),
+          ...(decision.action === 'partial'
+            ? {
+                status: 'partial' as const,
+                missingProof: decision.missingProof ?? [
+                  'The researcher did not state the remaining proof gap.',
+                ],
+              }
+            : {}),
+        };
+      }
+
+      input.report?.(
+        producer
+          ? `${input.tool.candidate.toolName}: calling ${producer.toolName} for fresh upstream values`
+          : `${input.tool.candidate.toolName}: testing API request`,
+      );
+      const workflowPath = writeCandidate(
+        producer ? pathJoin(producer.toolDir, 'fresh-calls') : input.toolDir,
+        candidate,
+      );
+      const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
+      try {
+        const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
+        let rawResponses: unknown[] | undefined;
+        const observed = await input.dependencies.runApiTool({
+          cdpPool,
+          workflowPath,
+          parameters: candidate.parameterValues,
+          backend: candidate.testBackend,
+          signal: input.signal,
+          onRawResponses: (responses) => {
+            rawResponses = responses;
+          },
+          onPreparedRequest: (observation) => {
+            if (requestComparisons.length >= 32) requestComparisons.shift();
+            requestComparisons.push(
+              preparedRequestComparison(observation, candidate.workflow, input.session),
+            );
+          },
+        });
+        const observation: ApiResearchObservation = {
+          id: randomUUID(),
+          ...(producer ? { producerToolName: producer.toolName } : {}),
+          invocationParameters: candidate.parameterValues,
+          candidateSha256: apiResearchCandidateSha256(candidate),
+          requestDefinitionSha256: teachingPlanContentSha256({
+            workflow: candidate.workflow,
+            requestTransformSource: candidate.requestTransformSource,
+          }),
+          executionMechanism: observed.executionMechanism,
+          backendAttempts: observed.backendAttempts ?? [],
+          responseObservations: observed.responseObservations ?? [],
+          requestComparisons,
+          result: resultFact(observed.result, observed.credentialValues),
+        };
+        if (observed.result.ok) {
+          const text = resultText(observed.result.data, observed.credentialValues);
+          const resultDir = pathJoin(input.toolDir, 'live-results');
+          mkdirSync(resultDir, { recursive: true });
+          writeFileSync(retainedResultPath(input.toolDir, observation.id), text, {
+            encoding: 'utf8',
+            flag: 'wx',
+          });
+          observation.resultTextLength = text.length;
+        }
         if (rawResponses) {
+          mkdirSync(pathJoin(input.toolDir, 'live-results'), { recursive: true });
           writeFileSync(
             retainedResponsesPath(input.toolDir, observation.id),
             JSON.stringify(rawResponses, (_key, value) =>
@@ -717,11 +743,22 @@ export async function researchApiMvpCall(input: {
             { encoding: 'utf8', flag: 'wx' },
           );
         }
+        observations.push(observation);
+        retainedTurnDelta = {
+          kind: 'observation',
+          latestObservation: observation,
+          ...(batchStart === undefined
+            ? {}
+            : { batchObservations: observations.slice(batchStart) }),
+        };
+        if (!pendingTests.length) batchStart = undefined;
+      } finally {
+        release();
       }
-      observations.push(observation);
-      retainedTurnDelta = { kind: 'observation', latestObservation: observation };
-    } finally {
-      release();
     }
+  } finally {
+    const browsers = [...cdpPool.values()];
+    cdpPool.clear();
+    await Promise.allSettled(browsers.map((browser) => browser.close()));
   }
 }

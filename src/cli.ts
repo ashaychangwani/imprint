@@ -207,6 +207,28 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     ],
     example: 'imprint redact ~/.imprint/acmecorp/sessions/<ts>.json',
   },
+  refine: {
+    summary: 'Repair or extend installed tools using a recording, with staged verification.',
+    usage: [
+      'imprint refine <site> --tool <name> --issue <text> [--from-session <path>] [--provider <name>] [--model <name>] [--timeout <duration>] [--json]',
+    ],
+    flags: [
+      { name: '--tool <name>', description: 'Installed tool to repair or extend (required).' },
+      { name: '--issue <text>', description: 'Defect or requested extension (required).' },
+      {
+        name: '--from-session <path>',
+        description: 'Recording evidence; otherwise use the newest retained recording.',
+      },
+      { name: '--provider <name>', description: 'codex-cli or claude-cli.' },
+      { name: '--model <name>', description: 'Override the selected provider model.' },
+      {
+        name: '--timeout <duration>',
+        description: 'Shared refinement and audit deadline (default 30m).',
+      },
+      { name: '--json', description: 'Print the result and evidence directory as JSON.' },
+    ],
+    example: 'imprint refine my-site --tool search --issue "Repair missing result entries"',
+  },
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
     usage: [
@@ -427,9 +449,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint.",
     usage: [
-      'imprint audit <site> [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
+      'imprint audit <site> [--strict] [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
     ],
     flags: [
+      {
+        name: '--strict',
+        description: 'Require zero broken calls or parameters and complete verified coverage.',
+      },
       {
         name: '--min-score <n>',
         description: 'Pass threshold as a percentage of gradeable invocations (default 95).',
@@ -1146,6 +1172,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           'min-score': { type: 'string' },
+          strict: { type: 'boolean' },
           out: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
@@ -1199,6 +1226,7 @@ async function main(argv: string[]): Promise<number> {
           runAudit({
             site,
             minScore,
+            strict: values.strict,
             outPath,
             provider,
             model: values.model,
@@ -1396,6 +1424,58 @@ async function main(argv: string[]): Promise<number> {
       }
       console.error(`[imprint] ${result.error}: ${result.message}`);
       return 1;
+    }
+
+    case 'refine': {
+      const site = requirePositional(argv, 'refine', 'a <site> argument');
+      if (site === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          tool: { type: 'string' },
+          issue: { type: 'string' },
+          'from-session': { type: 'string' },
+          provider: { type: 'string' },
+          model: { type: 'string' },
+          timeout: { type: 'string' },
+          json: { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+      if (!values.tool || !values.issue?.trim()) {
+        console.error('error: refine requires --tool and --issue');
+        return 2;
+      }
+      const { detectTeachProvider } = await import('./imprint/llm.ts');
+      const provider = values.provider ?? detectTeachProvider();
+      if (provider !== 'codex-cli' && provider !== 'claude-cli') {
+        console.error(
+          'error: refine requires codex-cli or claude-cli for staged independent audit',
+        );
+        return 2;
+      }
+      const timeoutMs = values.timeout ? parseDuration(values.timeout) : undefined;
+      if (values.timeout && (timeoutMs === null || timeoutMs === undefined || timeoutMs <= 0)) {
+        console.error('error: invalid --timeout');
+        return 2;
+      }
+      const { runRefine } = await import('./imprint/refine.ts');
+      const result = await runRefine({
+        site,
+        tool: values.tool,
+        issue: values.issue,
+        fromSession: values['from-session'],
+        provider,
+        model: values.model,
+        timeoutMs: timeoutMs ?? undefined,
+        json: values.json,
+      });
+      console.log(
+        values.json
+          ? JSON.stringify(result)
+          : `[imprint] refine ${result.status}: ${result.reason ?? 'verified replacements installed'}\nEvidence: ${result.runRoot}`,
+      );
+      return result.status === 'completed' ? 0 : 1;
     }
 
     case 'teach': {

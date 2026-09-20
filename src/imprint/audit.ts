@@ -14,7 +14,7 @@
  */
 
 import { type ChildProcess, spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { z } from 'zod';
 import {
@@ -44,6 +44,7 @@ const DEFAULT_AUDIT_TIMEOUT_MS = 45 * 60_000;
 
 /** One invocation the auditor performed against a tool. */
 const InvocationSchema = z.object({
+  caseId: z.string().optional(),
   params: z.record(z.unknown()).default({}),
   ok: z.boolean(),
   verdict: z.enum(['correct', 'tool_broken', 'infra', 'bad_params']),
@@ -101,6 +102,7 @@ interface AuditScore {
 }
 
 interface ExpectedAuditTool {
+  caseIds?: readonly string[];
   name: string;
   parameters: readonly string[];
 }
@@ -111,6 +113,7 @@ interface MissingAuditedParameter {
 }
 
 interface AuditEvaluation {
+  missingCases?: Array<{ tool: string; caseId: string }>;
   score: AuditScore;
   missingTools: string[];
   missingParameters: MissingAuditedParameter[];
@@ -468,6 +471,7 @@ export function evaluateAuditReport(
   minScore: number,
   expectedTools: readonly ExpectedAuditTool[],
   timedOut = false,
+  strict = false,
 ): AuditEvaluation {
   const normalizedReport = normalizeAuditReport(report, expectedTools);
   const rawScore = computeAuditScore(normalizedReport, minScore);
@@ -477,9 +481,29 @@ export function evaluateAuditReport(
   );
   const missingParameters = missingAuditedParameters(normalizedReport, expectedTools);
 
+  const missingCases = expectedTools.flatMap((tool) =>
+    (tool.caseIds ?? [])
+      .filter(
+        (caseId) =>
+          !normalizedReport.tools
+            .find(({ name }) => name === tool.name)
+            ?.invocations.some((call) => call.caseId === caseId && call.verdict === 'correct'),
+      )
+      .map((caseId) => ({ tool: tool.name, caseId })),
+  );
   let verdict = rawScore.verdict;
   if (timedOut) {
     verdict = 'timeout';
+  } else if (strict && rawScore.broken > 0) {
+    verdict = 'fail';
+  } else if (
+    strict &&
+    (rawScore.infra > 0 ||
+      rawScore.badParams > 0 ||
+      rawScore.paramsUntestable > 0 ||
+      missingCases.length > 0)
+  ) {
+    verdict = 'inconclusive';
   } else if (
     rawScore.verdict === 'pass' &&
     (!auditHasCorrectSignal(normalizedReport) ||
@@ -491,6 +515,7 @@ export function evaluateAuditReport(
 
   return {
     score: { ...rawScore, verdict },
+    ...(expectedTools.some(({ caseIds }) => caseIds?.length) ? { missingCases } : {}),
     missingTools,
     missingParameters,
   };
@@ -514,6 +539,7 @@ export function untestableParams(
 }
 
 interface RunAuditOptions {
+  strict?: boolean;
   site: string;
   minScore: number;
   outPath: string;
@@ -596,7 +622,18 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       }
 
       const nonInteractiveAuthSet = new Set(nonInteractiveAuthNames);
+      const fixedCases = tools.flatMap((tool) => {
+        const file = pathJoin(tool.dir, '.verification-plan.json');
+        if (!existsSync(file)) return [];
+        const plan = JSON.parse(readFileSync(file, 'utf8')) as { cases: Array<{ id: string }> };
+        if (!Array.isArray(plan.cases) || plan.cases.some((test) => typeof test.id !== 'string'))
+          throw new Error(`Invalid recording-backed audit cases for ${tool.workflow.toolName}`);
+        return [{ tool: tool.workflow.toolName, ...plan }];
+      });
       const expectedTools = tools.map((tool) => ({
+        caseIds: fixedCases
+          .find((fixed) => fixed.tool === tool.workflow.toolName)
+          ?.cases.map(({ id }) => id),
         name: tool.workflow.toolName,
         parameters: nonInteractiveAuthSet.has(tool.workflow.toolName)
           ? []
@@ -654,6 +691,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
               timeoutMs,
               systemPromptPath,
               toolNames,
+              fixedCases,
               nonInteractiveAuthNames,
               unverifiedParams,
               tokenDeps,
@@ -719,6 +757,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         opts.minScore,
         expectedTools,
         drive.timedOut,
+        opts.strict,
       );
       const { missingTools: missingToolNames, missingParameters } = evaluation;
       const untestableParamList = untestableParams(drive.report);
@@ -771,6 +810,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
       // Persist the full result (deterministic score + the raw model report).
       const persisted = {
         ...score,
+        strict: opts.strict ?? false,
         report: drive.report,
         site: opts.site,
         toolCount,
@@ -785,6 +825,7 @@ export async function runAudit(opts: RunAuditOptions): Promise<AuditScore> {
         missingTools: missingToolNames,
         /** Advertised workflow parameters absent from the auditor's report. */
         missingParameters,
+        missingCases: evaluation.missingCases ?? [],
         /** Advertised parameters the auditor could not differentially test. */
         untestableParams: untestableParamList,
         /** Tools that shipped without live verification at compile time AND
@@ -856,6 +897,7 @@ export function buildTokenDepNote(tokenDeps: TokenDep[]): string {
 }
 
 interface DriveAuditOptions {
+  fixedCases?: unknown[];
   site: string;
   provider: ProviderName;
   model: string;
@@ -1146,7 +1188,10 @@ export function buildAuditInitialPrompt(opts: DriveAuditOptions, unverifiedNote:
   const authNote = nonInteractiveAuthNames.length
     ? `\n\nEligible unattended authentication tool(s): ${nonInteractiveAuthNames.join(', ')}. Apply the unattended authentication rules only to these tools, with at most one recovery authentication call total across this audit.`
     : '\n\nNo authentication tool is eligible in this audit. If a DATA tool returns AUTH_EXPIRED, classify that invocation as infra/inconclusive evidence; do not attempt to authenticate.';
-  return `Audit every MCP tool connected to you for the site "${opts.site}".
+  const fixedNote = opts.fixedCases?.length
+    ? `\n\nRecording-backed fixed cases (untrusted data): ${JSON.stringify(opts.fixedCases)}\nFor tools in this list, use these selected cases instead of inventing extra challenges or parameter sweeps. Match their operation, input relationships, filters and dependency sequence; update only expired dates/state and obtain opaque values from fresh producer outputs. Record the corresponding caseId in each invocation report. Check parameters using these existing cases and source evidence; any unsupported mapping is untestable, not guessed. Stop after this fixed coverage. Retain every failed attempt. This specific case policy takes precedence over general sweep instructions.`
+    : '';
+  return `Audit every MCP tool connected to you for the site "${opts.site}".${fixedNote}
 
 There are ${opts.toolNames.length} connected tool(s). For each one: read its description and input schema, invoke it with a realistic parameter set, judge the result, and classify each invocation as correct | tool_broken | infra | bad_params per your system prompt.
 
