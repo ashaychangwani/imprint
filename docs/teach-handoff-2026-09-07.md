@@ -1,5 +1,34 @@
 # Teach rebuild handoff — September 7, 2026
 
+## 2026-09-20 11:02 PDT — Bounded validation of recording-backed verification
+
+Implementation checkpoint **1073ceb**, same validation worktree and source branch.
+Fresh Flights 1 of the new campaign started at **18:02:40 UTC**, PID **42932**,
+original recording and four-operation scope. Durable home:
+`~/.imprint/experiments/reliability-2026-09-20/flights-1/home`; manifest and run.log
+are in its parent. Collector: 127.0.0.1:6442, durable spans.jsonl in the campaign
+root. The process wrapper holds an idle-sleep assertion while the CLI runs.
+No recurring automation. Maximum four fresh teaches; stop after two consecutive
+failed teaches, including failed core audits. Target18:32 UTC, assess19:02 UTC,
+hard deadline19:32 UTC. Keep implementation unchanged through teach/audit.
+
+The checkpoint adds fixed recording-backed cases, matched live inputs,
+independent raw-first parser evidence verification, strict per-case audits,
+research batching/session reuse without changing cold-start waits, and staged
+`imprint refine` for data tools. Full suite1975pass; later focused180pass and
+controller52pass; lint/typecheck/webbuild and desktop/mobile inspection pass.
+A real-agent smoke found and fixed verifier provider-history loss; a fresh smoke
+rejected a dropped result and accepted its repair with frozen expectations.
+Both smoke attempts are retained for accounting. Fresh teach reliability and
+live refine behavior remain unproven. No MR, push, merge, or deletion.
+
+Next: monitor matching recorded/live cases, use of full raw projections, and
+fresh producer→consumer values. Independently audit with `--strict`, retaining
+all failures. Flights twice then Hotels twice on unchanged code is the target
+within the cap. After a correction, start fresh and count it against that cap.
+Both original recordings exist. Some old /tmp standalone logs are absent;
+old experiment homes remain. New evidence lives in the durable directory above.
+
 ## 2026-09-17 14:01 PDT — User stops experiment; no convergence claim
 
 User requested the recurring job be killed and an assessment of why more than
