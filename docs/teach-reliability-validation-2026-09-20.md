@@ -1,7 +1,7 @@
 # Recording-backed teaching validation
 
 Initial implementation: `1073ceb`; planner correction: `f1a0b6a`, on `codex/imprint-master-v066-validation`, descended
-from `origin/codex/imprint-master-v066`. No old vnext changes were used.
+from `origin/codex/imprint-master-v066`. No old vnext changes were used. The final implementation checkpoint is `2647f8b`; its fresh teach validation remains outstanding because the campaign limit was reached.
 
 The change selects a fixed set of existing recorded cases and matches live
 inputs to them. An independent reader establishes facts from raw responses
@@ -88,15 +88,6 @@ surcharges, service tiers and tool fees are excluded; CLI aggregate usage does n
 reliably establish the per-request long-context surcharge. Zero emitted cache
 writes means zero reported, not necessarily zero backend writes.
 
-The two completed smoke attempts together used 118,044 input tokens (including
-63,104 cache reads), 840 output tokens and zero emitted cache writes. Their base
-API equivalent is $0.2618016. Failed attempts remain in campaign totals.
-
-Flights attempt 1 reported 9,224,402 input tokens including 7,595,520 cache reads,
-135,423 output tokens and zero emitted cache writes: $12.262196 base API
-equivalent. Two analysis spans lack usage, including interrupted work. Including
-both smoke attempts, the completed reported estimate is $12.5239976. This excludes
-any later active attempts and retains the failures.
 
 
 ## Second attempt and campaign stop
@@ -183,12 +174,79 @@ were preserved. The planner now chooses a small contrasting case already in the
 recording when needed for an advertised parameter, within the existing three-case
 limit. It does not invent searches or grow the case set after selection.
 
-A fresh isolated repair and an additive-extension check are running with the
-corrected planner. The extension requests an optional local result limit with an
-unlimited default; it uses recorded queries and preserves existing behavior.
-Neither modifies the user's default installed tools. Results remain pending.
+Fresh isolated checks on the implementation equivalent to `2647f8b` both passed:
+
+- Repair: 8.330 minutes; three recorded/live pairs passed independent raw-evidence
+  review. Strict audit passed all four retained case invocations and the query
+  parameter (five total graded checks), with no broken or missing cases.
+- Extension: 8.271 minutes; optional `max_results` defaults to 0 (unlimited), with
+  positive values limiting ordered result groups locally. Three recorded/live
+  pairs passed independent review. Strict audit passed five case invocations and
+  both parameters (seven graded checks), with no broken or missing cases.
+
+The repair used three distinct queries already in the recording. The extension
+used the recorded query for unlimited/limited output and a contrasting recorded
+query. Cases were fixed before compilation; no invented live searches were added.
+Both were promoted only inside their isolated test homes, with backup directories
+retained. All eight original parser regression tests passed against the promoted
+artifacts. The first failed refinement's original parser also matched its expected
+pre-run contents exactly. Default installed tools were not modified.
+
+Repair live transport times were 426, 187 and 193 milliseconds. Existing 25-second
+pacing remained between calls; these figures exclude pacing and model time. These
+were fetch calls and do not benchmark browser cold-start behavior. The extension
+also used fetch. Neither refinement proves a successful four-tool teach.
 
 A local setup copy initially followed dependency symlinks and was interrupted.
 The partial copy remains under `refine-repair-setup-interrupted`; no evidence was
 deleted. Setup was repeated using only the necessary artifact files. This consumed
 about 4.5 GiB of additional disk space; it was not a teach failure.
+
+
+## Final reported accounting
+
+| Attempt/check | Minutes | Input including cache | Cache reads | Output | Base API equivalent |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| evidence-smoke-1 | 0.508 | 67,225 | 29,184 | 587 | $0.1756 |
+| evidence-smoke-2 | 0.327 | 50,819 | 33,920 | 253 | $0.0862 |
+| flights-1 | 39.916 | 9,224,402 | 7,595,520 | 135,423 | $12.2622 |
+| flights-2 | 64.243 | 14,610,145 | 11,684,480 | 195,989 | $20.2962 |
+| real-evidence-search_locations | 1.613 | 59,215 | 37,760 | 4,016 | $0.1812 |
+| real-evidence-search_flights | 3.823 | 516,270 | 421,632 | 9,942 | $0.7460 |
+| real-evidence-get_date_grid | 2.720 | 267,848 | 213,248 | 6,884 | $0.4414 |
+| real-evidence-search_flights-reparsed | 0.173 | 22,021 | 7,552 | 308 | $0.0671 |
+| refine-repair | 5.993 | 1,813,511 | 996,480 | 9,804 | $3.8628 |
+| real-evidence-get_date_grid-reparsed | 0.000 | 0 | 0 | 0 | $0.0000 |
+| real-evidence-calendar-comparability | 0.286 | 30,190 | 7,552 | 359 | $0.1008 |
+| real-evidence-locations-comparability | 1.075 | 38,459 | 28,928 | 2,900 | $0.1077 |
+| refine-repair-2 | 8.330 | 1,785,149 | 962,816 | 11,438 | $3.9032 |
+| refine-extension | 8.271 | 1,874,730 | 1,024,768 | 10,063 | $4.0110 |
+
+Total reported: **30,359,984 input tokens**, including
+**23,043,840 cache reads**, **387,966 output tokens**,
+and **zero emitted cache-write tokens**: **$46.24** base API equivalent.
+Three analysis spans lack usage, so this is incomplete accounting rather than an
+exact bill. Failed teaches, failed refinement, and superseded evidence probes are
+included. The cached calendar reparse made no model call; its zero is intentional.
+An observer script failed before model startup and is retained in its error log.
+Concurrent refinements are attributed using their isolated home paths in trace
+attributes, not ambiguous launch timestamps. Their elapsed times overlap.
+
+Complete raw traces and per-phase durations remain in local `accounting.json`.
+Provider-internal retries and setup/model/parser sub-times are not consistently
+separable from CLI totals; no missing breakdown is represented as zero. No provider
+capacity failure was identified as the reason for either teach stop.
+
+All task-owned teaches, refinement workers, probes and the trace collector are
+stopped. The old recurring monitor remains off. About 18 GiB remained at the final
+check; the laptop was still on battery. No recordings or logs were deleted. No
+push, MR or merge was made.
+
+## Remaining validation
+
+A successful fresh teach and independent audit on `2647f8b`, followed by unchanged-code
+Flights and Hotels repeats, remain outstanding. A new campaign budget is required;
+do not restart the old monitor or resume a failed teach. Use the original recording
+paths and exact four-operation command in `docs/teach-handoff-2026-09-07.md`, with a
+new isolated evidence home. The malformed research-handoff recovery path, end-to-end
+booking output and Hotels guest-count support remain unproven by this campaign.

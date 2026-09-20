@@ -14323,3 +14323,28 @@ inconclusive because both selected queries were identical. Originals stayed inta
 The refinement planner now selects contrasting values already in the recording
 when needed for parameter coverage, within its fixed three-case budget. Fresh
 repair and extension checks are recorded separately; no teach campaign restart.
+
+
+## 2026-09-20 — Targeted refinement passed; teach reliability remains open
+
+Implementation checkpoint 2647f8b is committed. Fresh isolated refinement checks
+passed: repair in 8.330 minutes (four correct audit calls plus one working parameter),
+and an optional local result limit in 8.271 minutes (five correct calls plus two
+working parameters). Both passed independent recorded/live evidence review and
+strict audit, then promoted within isolated homes with backups retained. All eight
+original parser regression tests passed against the replacements. The earlier
+inconclusive refinement preserved its original parser exactly.
+
+Final checks: 1,983 full-suite tests passed; lint and types passed; final focused
+checks passed 140 tests. A preceding intermittent process-cleanup test failure and
+all experiment failures are retained. Two failed teaches exhausted the campaign;
+no further Flights or Hotels teach was started. This establishes useful refinement
+and stronger rejection of bad evidence, not repeatable fresh teaching.
+
+Total reported experiment usage: 30,359,984 input including 23,043,840
+cache reads, 387,966 output, zero emitted cache writes; $46.24 base API
+equivalent. Three analysis spans have unreported usage. See the validation report
+for every attempt, timings, cost caveats and local evidence paths. All task-owned
+processes and the collector stopped; old cron remains off. About 18 GiB free.
+No data deleted, no push, no MR and no merge. Further fresh teaches need a new
+campaign budget and new evidence homes.
