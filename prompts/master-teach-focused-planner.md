@@ -13,17 +13,17 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
-The MVP runner executes the first `live` verification case you select, using
-its exact inputs and expected result. Additional live cases are not executed
-by this path; do not present them as completed coverage. Choose that first case
-to challenge the weakest core mapping in the research evidence instead of
-automatically repeating its baseline. Prefer coherent values that distinguish
-the intended effect from defaults or coincidental matches, with observable
-response evidence rather than input echoes. Challenge the advertised meaning,
-not just whether results change: for a range, varying its width can distinguish
-actual bounds from a fixed neighborhood that only shifts position. Several core
-inputs may change together; optional breadth can wait. If one case cannot settle a required gap,
-state what remains unproven for the master instead of claiming full coverage.
+The MVP runner executes and reviews every selected `live` verification case,
+using its exact inputs and expected result. The first case supplies the primary
+result for dependent tools; the runner checks other cases before that primary.
+Select at most three distinct recorded cases for the core scope, once. Strict
+audit uses this same fixed set to assess the advertised parameters. Where the
+recording provides contrasting values, choose cases that establish those core
+mappings; repeating identical inputs does not establish a parameter's effect.
+Do not invent new challenges or demand an exhaustive matrix. If the supplied
+recording evidence cannot settle a required gap, state what remains unproven
+for the master and request the missing recorded evidence or a narrower supported
+contract. Optional breadth can wait.
 
 Request research for every selected operation has already finished. Read the
 complete `apiResearch` handoff list before proposing this tool. A proven handoff
@@ -476,13 +476,15 @@ Exact output schema (all objects reject extra fields):
     "candidate": {
       "toolName": "search_catalog",
       "description": "Search a fixture catalog",
-      "rationale": "Request 12 records the search operation.",
+      "rationale": "Requests 12 and 18 record the same catalog operation with distinct search texts.",
       "confidence": 0.96,
       "requestSeqs": [
-        12
+        12,
+        18
       ],
       "representativeSeqs": [
-        12
+        12,
+        18
       ],
       "eventSeqs": [
         4
@@ -609,9 +611,73 @@ Exact output schema (all objects reject extra fields):
           ],
           "freshnessChanges": "none; the recorded query remains usable"
         }
+      },
+      {
+        "id": "replay_search_catalog__alternate_recorded_query",
+        "check": "replay",
+        "parameterValueOrigin": "recorded_baseline",
+        "parameterValues": [
+          {
+            "parameterName": "query",
+            "value": "alternate recorded query"
+          }
+        ],
+        "expectedResult": "Return the recorded catalog entries matching the recorded search text.",
+        "provenance": {
+          "recordingRequestSeqs": [
+            18
+          ],
+          "recordingEventSeqs": [
+            4
+          ],
+          "evidenceRefs": [
+            {
+              "path": "runs/run-fixture-1/evidence/recording.json",
+              "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ]
+        },
+        "recordedCall": {
+          "requestSeqs": [
+            18
+          ],
+          "freshnessChanges": "none"
+        }
+      },
+      {
+        "id": "live_search_catalog__alternate_recorded_query",
+        "check": "live",
+        "parameterValueOrigin": "synthetic_live",
+        "parameterValues": [
+          {
+            "parameterName": "query",
+            "value": "alternate recorded query"
+          }
+        ],
+        "expectedResult": "Return current catalog entries matching the supplied search text.",
+        "provenance": {
+          "recordingRequestSeqs": [
+            18
+          ],
+          "recordingEventSeqs": [
+            4
+          ],
+          "evidenceRefs": [
+            {
+              "path": "runs/run-fixture-1/evidence/recording.json",
+              "sha256": "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+            }
+          ]
+        },
+        "recordedCall": {
+          "requestSeqs": [
+            18
+          ],
+          "freshnessChanges": "none; the recorded query remains usable"
+        }
       }
     ]
   },
-  "reason": "One recorded API request supports the focused search tool."
+  "reason": "Two distinct recorded queries support the search operation and query mapping without inventing additional challenges."
 }
 <!-- END IMPRINT CANONICAL OUTPUT EXAMPLE -->

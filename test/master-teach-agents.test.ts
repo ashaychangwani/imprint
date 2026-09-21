@@ -1411,10 +1411,14 @@ describe('prompts and pre-plan discovery', () => {
   });
 
   it('explains the executed live case so the planner can choose useful evidence', () => {
+    const master = prompt('master-teach-decision.md');
+    expect(master).toContain('recorded evidence pool, not an ordered execution');
+    expect(master).toContain('useful contrasts in `representativeSeqs`');
     const planner = prompt('master-teach-focused-planner.md');
-    expect(planner).toContain('executes the first `live` verification case');
-    expect(planner).toContain('challenge the weakest core mapping');
-    expect(planner).toContain('do not present them as completed coverage');
+    expect(planner).toContain('executes and reviews every selected `live` verification case');
+    expect(planner).toContain('at most three distinct recorded cases');
+    expect(planner).toContain('Strict\naudit uses this same fixed set');
+    expect(planner).not.toContain('Additional live cases are not executed');
     expect(planner).toContain('state what remains unproven');
   });
 
@@ -2118,6 +2122,15 @@ describe('prompts and pre-plan discovery', () => {
       availableProducers: [],
     };
     expect(parseFocusedPlannerOutput(JSON.stringify(output), input)).toEqual(output);
+    const liveCases = output.implementationPlan.verificationCases.filter(
+      (test: { check: string }) => test.check === 'live',
+    );
+    expect(liveCases).toHaveLength(2);
+    expect(
+      new Set(
+        liveCases.map((test: { parameterValues: unknown }) => JSON.stringify(test.parameterValues)),
+      ),
+    ).toHaveLength(2);
   });
 
   it('repairs missing recording links before accepting a focused plan', async () => {

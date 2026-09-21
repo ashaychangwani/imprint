@@ -14365,3 +14365,24 @@ Code and prompts stay unchanged through this teach/audit. The new ledger
 `docs/teach-systemic-failures-2026-09-21.md` separates confirmed recurring failures
 from architectural hypotheses and records the evidence needed for each small fix.
 No site-specific guidance, old generated tools, push, MR, merge or data deletion.
+
+
+## 2026-09-21 — Preserve recorded contrasts for fixed verification
+
+Stopped fresh Flights 1 after 14.834 minutes on unchanged implementation 2647f8b
+(run ba57f44f-90dc-44c9-a453-5635419c97dc). It selected one location query despite
+advertising a variable query. All owned processes exited; failed evidence is kept
+under `~/.imprint/experiments/reteach-systemic-2026-09-21/flights-1`.
+
+Inspection found a planner paragraph claiming extra live cases never run, although
+the runner executes all of them. Its test asserted the stale wording. Also, the
+master reduced ten discovered location requests to two before focused planning,
+so the planner lacked the recorded contrasts. Corrected both prompts, expanded the
+canonical example to two recorded/live pairs, and updated the contract test. No
+runtime changes, new exploratory cases or relaxed audit requirements. Fresh
+validation is required; no complete teach or audit success is claimed.
+
+Accounting for the stopped attempt: 2,546,811 input tokens (1,609,728 cached),
+46,340 output, zero reported writes, $5.3190232 estimated base cost; two analysis
+spans have missing usage. See the systemic failure ledger for mechanisms and
+follow-up evidence, rather than treating all unsuccessful attempts as one bug.

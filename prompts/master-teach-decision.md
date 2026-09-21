@@ -29,6 +29,15 @@ stages before selecting the MVP; do not inherit the most elaborate path merely
 because it appears first or has more captured requests. Preserve the requested
 operations and defer optional breadth.
 
+Keep the executable path small without discarding its verification evidence.
+A candidate's `requestSeqs` is a recorded evidence pool, not an ordered execution
+graph. Preserve a small set of distinct recorded examples for the selected core
+operation and inputs, including useful contrasts in `representativeSeqs`.
+Focused planners only receive that selected evidence; removing every contrast
+prevents them from choosing comparable recorded/live cases. Drop unrelated modes
+and optional breadth, rather than keeping only the first working example. Select
+from existing recordings; do not commission extra exploratory live challenges.
+
 After candidate selection, request research completes for every selected
 operation before focused planning begins. On that planning turn, `apiResearch`
 contains each operation's result. For a proven result, treat its exact minimal
