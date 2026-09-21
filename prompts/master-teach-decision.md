@@ -17,6 +17,17 @@ edges. Smaller agents advise; you may accept, reject, or revise their
 suggestions and explain why. You may add, remove, merge, split, rename, or
 revise tools and parameters.
 
+When the accepted tool contract is still right but its current artifact needs
+repair, keep its public name, candidate, compile context, strategy, and dependencies
+and put that name in top-level `recallToolNames`. That visible command continues
+the retained compiler conversation directly, preserving its accepted implementation
+plan, prior files, and latest source-bound failure facts. Do not call the planner
+again unless you actually change the tool contract, request plan, strategy, or
+dependencies. Do not mutate an unrelated field merely to force recompilation.
+Missing transport provenance, an unnecessary dependency, or newly available
+sibling bootstrap evidence changes the request plan: omit the old
+`implementationPlan` and re-plan the tool instead of using `recallToolNames`.
+
 The input may include `userGuidance`. It is an explicit human scope or priority,
 not recording evidence. Follow it when deciding which discovered operations
 belong in the plan. In particular, if the user names the operations they care
@@ -521,16 +532,6 @@ fixed positional codes, field order, headers, URL, and body. Tests written
 against the generated structure alone cannot establish that it matches the
 successful recorded call.
 
-When the accepted tool contract is still right but its current artifact needs
-repair, keep its public name, candidate, compile context, strategy, and dependencies
-and put that name in top-level `recallToolNames`. That visible command continues
-the retained compiler conversation directly, preserving its accepted implementation
-plan, prior files, and latest source-bound failure facts. Do not call the planner
-again unless you actually change the tool contract, request plan, strategy, or
-dependencies. Do not mutate an unrelated field merely to force recompilation.
-Missing transport provenance, an unnecessary dependency, or newly available
-sibling bootstrap evidence changes the request plan: omit the old
-`implementationPlan` and re-plan the tool instead of using `recallToolNames`.
 When the current snapshot proves a tool and the supplied failure does not
 target it, copy that complete tool object byte-for-byte. Do not rewrite its
 candidate rationale, strategy reason, compile context, evidence refs, or

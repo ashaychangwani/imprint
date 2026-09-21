@@ -2,13 +2,15 @@ import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { ImplementationPlanPayload } from '../src/imprint/master-teach-plan.ts';
 import {
   type RecordingFixture,
   decodeEvidenceResponses,
   parseRecordedResponses,
+  recordingFixtures,
   verifyRecordingEvidence,
 } from '../src/imprint/recording-verification.ts';
-import { WorkflowSchema } from '../src/imprint/types.ts';
+import { SessionSchema, WorkflowSchema } from '../src/imprint/types.ts';
 
 const operation = {
   name: 'list_items',
@@ -303,4 +305,65 @@ it('projects full raw evidence without depending on a truncated preview', async 
   ).toBe('{"count":500,"last":499}');
   expect(() => projectEvidence(rows, '() => process.env')).toThrow();
   expect(() => projectEvidence(rows, '() => { while (true) {} }')).toThrow('timed out');
+});
+
+it('prepares only the exact paired response chain and retains its complete order', async () => {
+  const workflow = WorkflowSchema.parse({
+    site: 'fixture',
+    toolName: 'list_items',
+    intent: { description: 'Fixture' },
+    parameters: [],
+    requests: [],
+  });
+  const session = SessionSchema.parse({
+    site: 'fixture',
+    startedAt: '2026-01-01',
+    url: 'https://fixture.invalid',
+    imprintVersion: '0.6.6',
+    events: [],
+    narration: [],
+    requests: [1, 2, 3].map((seq) => ({
+      seq,
+      timestamp: seq,
+      method: 'GET',
+      url: `https://fixture.invalid/${seq}`,
+      headers: {},
+      resourceType: 'Fetch',
+      response: { status: 200, headers: {}, body: JSON.stringify({ id: seq }) },
+    })),
+  });
+  const implementation: ImplementationPlanPayload = {
+    version: 1,
+    toolId: 'list_items',
+    strategyKind: 'api',
+    requestProvenance: [],
+    parameterMappings: [],
+    responseDependencies: [],
+    resultSources: [],
+    outputGuidance: 'Items',
+    verificationCases: [[1, 2], [2, 1], [3]].map((requestSeqs, index) => ({
+      id: `case_${index}`,
+      check: 'replay',
+      parameterValues: [],
+      expectedResult: 'Items',
+      recordedCall: { requestSeqs, freshnessChanges: 'none' },
+      provenance: { recordingRequestSeqs: requestSeqs, recordingEventSeqs: [], evidenceRefs: [] },
+    })),
+  };
+  const input = { workflowPath: 'unused.json', workflow, implementation, session };
+  const paired = await recordingFixtures({ ...input, matchingRequestSeqs: [1, 2] });
+  expect(paired.map(({ id }) => id)).toEqual(['case_0']);
+  expect(paired[0]?.responses).toEqual([{ id: 1 }, { id: 2 }]);
+  expect(paired[0]?.actual).toEqual({ id: 2 });
+  expect(await recordingFixtures({ ...input, matchingRequestSeqs: [99] })).toEqual([]);
+  expect((await recordingFixtures(input)).map(({ id }) => id)).toEqual([
+    'case_0',
+    'case_1',
+    'case_2',
+  ]);
+  const unrelatedResponse = session.requests[2]?.response;
+  if (!unrelatedResponse) throw new Error('fixture response missing');
+  unrelatedResponse.body = undefined;
+  expect((await recordingFixtures({ ...input, matchingRequestSeqs: [1, 2] })).length).toBe(1);
+  await expect(recordingFixtures(input)).rejects.toThrow('Recording response 3 is unavailable');
 });

@@ -655,8 +655,11 @@ async function verifyRecordingMvp(input: {
       reason:
         'Parser fixture review does not apply to a playbook; live semantic review is still required.',
     };
+  const selectedVerification = input.implementation.verificationCases.find(
+    ({ id }) => id === input.live.verificationCaseId,
+  );
   const verification =
-    input.implementation.verificationCases.find(({ id }) => id === input.live.verificationCaseId) ??
+    selectedVerification ??
     (input.live.chainInvocationSha256
       ? input.implementation.verificationCases.find(({ check }) => check === 'live')
       : undefined);
@@ -672,6 +675,9 @@ async function verifyRecordingMvp(input: {
       ...input,
       workflow: input.compiled.workflow,
       workflowPath: input.compiled.workflowPath,
+      // Every selected live case has its own review. Do not reread unrelated
+      // replay cases here. Unbound chain calls retain the full evidence set.
+      matchingRequestSeqs: selectedVerification ? recordedCall.requestSeqs : undefined,
     });
     if (
       !fixtures.some(

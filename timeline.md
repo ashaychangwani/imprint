@@ -14542,3 +14542,27 @@ Checkpoint validation: 172 focused tests passed (987 assertions), including the
 pre-action deadlock and exact schema-diagnostic regressions. Type checking, lint,
 diff whitespace, website build and 1440/390px visual inspection passed. The
 existing website bundle-size warning remains. No live pass is implied.
+
+
+## 2026-09-21 — Flights 7 reaches parser checks; reduce repeated review work
+
+Fresh Flights 7 on d131a54 proved all four research operations, including booking
+from fresh initial and return searches. Final parser checks caught two real
+artifact defects: locality IDs mislabeled as airport IDs, and search dropping
+result groups and connections. Calendar passed with 49 unique date pairs and was
+published. Retained compilers repaired location/search too late for live rechecking;
+the run ended at the 90-minute deadline with one of four tools ready. No audit.
+
+Selected-case verification unnecessarily reread every recording fixture. Match
+its fixture set to that case's ordered response chain, while preserving all
+selected live checks and the broader evidence for unbound chain calls. Move the
+existing direct compiler-recall instruction earlier in the master prompt to
+reduce replanning when only an artifact violates its accepted contract. No API,
+browser setup, proof standard, or site-specific strategy changes. Fresh Flights 8
+must validate the checkpoint; failed evidence and costs remain in the failure ledger.
+
+Validation: 234 focused tests (1,446 assertions), lint, type checking, website build
+and desktop/mobile inspection passed. The new fixture-selection regression fails
+on old code and passes after the correction. Offline retained repaired parsers
+now produce the expected 18/5/5 search counts and corrected locality labels;
+that does not substitute for fresh live verification or independent audit.

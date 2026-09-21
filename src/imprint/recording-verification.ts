@@ -105,6 +105,7 @@ export async function recordingFixtures(input: {
   workflow: Workflow;
   implementation: ImplementationPlanPayload;
   session: Session;
+  matchingRequestSeqs?: readonly number[];
 }): Promise<RecordingFixture[]> {
   const fixtures: RecordingFixture[] = [];
   for (const verification of input.implementation.verificationCases.filter(
@@ -112,6 +113,11 @@ export async function recordingFixtures(input: {
   )) {
     const seqs =
       verification.recordedCall?.requestSeqs ?? verification.provenance.recordingRequestSeqs;
+    if (
+      input.matchingRequestSeqs !== undefined &&
+      JSON.stringify(seqs) !== JSON.stringify(input.matchingRequestSeqs)
+    )
+      continue;
     if (!seqs.length)
       throw new Error(`Recording case ${verification.id} has no response sequences`);
     const responses = seqs.map((seq) => {
