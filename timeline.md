@@ -14484,3 +14484,38 @@ inspection passed without horizontal overflow. The original failed search
 review's nine quotations were checked offline: old validation accepts two, the
 corrected exact-source validation accepts all nine. No parser pass is inferred
 from citation acceptance. Fresh validation starts from this committed checkpoint.
+
+
+## 2026-09-21 — Keep bootstrap context and reusable input contracts intact
+
+Fresh Flights 5 on d424359 produced useful research results for all four
+operations, but stopped before final compilation/verification. Search found its
+booking selection, calendar repaired the recorded windows, and booking handled
+a rotating token through stable same-record identity. However, the master then
+removed all search inputs and limited grid inputs to literal recorded dates for
+lack of contrasting examples. Stop at 48.144 minutes; this does not prove the
+intended reusable MVP. No published tools or independent audit.
+
+Two repeated mechanical problems are corrected: fetch-bootstrap now separates
+its cached snapshot by requested URL, and capture diagnostics report each failed
+matcher condition without changing selection. Synthetic regressions fail before
+and pass after both fixes. The research/master guidance now distinguishes limited
+recorded coverage from an unsupported input mapping. Reusable inputs still need
+recorded meaning, real construction, and independent result evidence; known no-ops
+and ambiguous fields remain blocked. Choose a captured-response mode up front,
+instead of substituting a different mode after choosing an unavailable fixture.
+All changes were applied after the teach stopped; fresh validation follows.
+
+Flights 5 reported 11,894,681 input tokens (10,102,272 cached), 121,334 output,
+zero cache writes reported and $13.6372248 base API equivalent. One observed span
+lacks usage and the interrupted root trace has an unknown unflushed tail. Five
+campaign attempts total $76.496136 reported, before unknown usage/surcharges.
+Detailed causes, pending checks and private evidence paths remain in the ledger.
+
+Checkpoint checks: the complete suite passed 1,988 tests and found one stale
+prompt-wording assertion. After updating that assertion, all seven tests in its
+file passed; the 139 focused prompt/evidence tests also passed. Both new runtime
+regressions passed in the complete suite, including the browser-form test that
+had timed out during the scratch run. Lint, type checking, diff whitespace,
+website build and 1440/390px visual inspection passed. The existing bundle-size
+warning remains. No fresh live result is implied by these checks.

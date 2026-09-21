@@ -787,6 +787,15 @@ export class CdpNetworkResponseCapture {
         method: response.method?.slice(0, 16) ?? null,
         resourceType: response.resourceType?.slice(0, 32) ?? null,
         status: response.status,
+        matcherChecks: {
+          urlIncludes: response.url.includes(this.matcher.urlIncludes),
+          method: this.matcher.method
+            ? response.method?.toLowerCase() === this.matcher.method.toLowerCase()
+            : null,
+          resourceType: this.matcher.resourceType
+            ? response.resourceType?.toLowerCase() === this.matcher.resourceType.toLowerCase()
+            : null,
+        },
         inNavigationScope: this.navigationScopeReady ? this.matchesNavigationScope(response) : null,
       };
     });

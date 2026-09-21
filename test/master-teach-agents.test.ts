@@ -1206,7 +1206,7 @@ describe('prompts and pre-plan discovery', () => {
     expect(researchPrompt).toMatch(/as little as possible from\s+recorded headers/i);
     expect(researchPrompt).toMatch(/exact smallest workflow actually proven so far/i);
     expect(researchPrompt).toMatch(/materially different parameter set/i);
-    expect(researchPrompt).toMatch(/response\s+reflects the changed route/i);
+    expect(researchPrompt).toMatch(/response reflects the changed\s+route/i);
     expect(researchPrompt).toMatch(/blind text\s+replacement inside an encoded/i);
     expect(researchPrompt).toMatch(/winning rung/i);
     expect(researchPrompt).toContain('`requestComparisons`');
@@ -1373,7 +1373,7 @@ describe('prompts and pre-plan discovery', () => {
   it('asks research to distinguish claimed input effects from defaults', () => {
     const research = prompt('master-teach-api-researcher.md');
     expect(research).toContain('Changing one input does not prove the others');
-    expect(research).toContain('no fixed call count is required');
+    expect(research).toContain('fixed recorded cases');
     expect(research).toContain('name that mapping as unproven and return `partial`');
     for (const name of [
       'master-teach-api-researcher.md',
@@ -1415,7 +1415,7 @@ describe('prompts and pre-plan discovery', () => {
     expect(master).toContain('recorded evidence pool, not an ordered execution');
     expect(master).toContain('useful contrasts in `representativeSeqs`');
     expect(master).toContain('research follow-ups and required parameter comparisons too');
-    expect(master).toContain('do not request a newly invented route');
+    expect(master).toMatch(/do not request\s+a newly invented route/i);
     const planner = prompt('master-teach-focused-planner.md');
     expect(planner).toContain('executes and reviews every selected `live` verification case');
     expect(planner).toContain('at most three distinct recorded cases');
@@ -1519,7 +1519,13 @@ describe('prompts and pre-plan discovery', () => {
 
   it('keeps API repair and response-produced state decisions agent-owned and evidence-backed', () => {
     const researchPrompt = prompt('master-teach-api-researcher.md');
-    expect(researchPrompt).toContain('This small contrast belongs in the first proof');
+    expect(researchPrompt).toMatch(
+      /Missing additional recorded\s+contrasts alone is a coverage limit/,
+    );
+    expect(researchPrompt).toContain('Encoding or echoing an input alone is still insufficient');
+    expect(prompt('master-teach-decision.md')).toContain(
+      'Missing contrasts alone do not justify freezing it to a recorded literal',
+    );
     expect(researchPrompt).toContain('not an exhaustive parameter-by-parameter sweep');
     for (const name of [
       'master-teach-focused-planner.md',

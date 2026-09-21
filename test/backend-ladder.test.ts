@@ -1759,6 +1759,60 @@ describe('renderWorkflowRequests — offline param verification', () => {
 });
 
 describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', () => {
+  it('reuses bootstrap snapshots only for the same rendered URL context', async () => {
+    __setCdpJarMinterForTest(null);
+    const minted: string[] = [];
+    __setCdpBrowserFetchFactoryForTest((opts) => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => {
+        const url = opts.bootstrapUrl ?? opts.baseUrl;
+        minted.push(url);
+        return {
+          cookies: [],
+          ua: 'FixtureBrowser',
+          html: `<div data-context="${new URL(url).searchParams.get('selection')}"></div>`,
+          bootstrapEpoch: Date.now(),
+          abckFlag: 'unknown',
+        };
+      },
+      close: async () => {},
+    }));
+    const tool: ResolvedTool = {
+      site: 'fixture',
+      dir: pathJoin(root, 'fixture', 'lookup'),
+      workflow: {
+        site: 'fixture',
+        toolName: 'lookup',
+        intent: { description: 'Look up the selected item' },
+        parameters: [{ name: 'selection', type: 'string', description: 'Item' }],
+        bootstrap: {
+          url: 'https://fixture.example/start?selection=${param.selection}',
+          captures: [
+            {
+              source: 'html_regex',
+              name: 'context',
+              group: 1,
+              pattern: 'data-context="([^"]+)"',
+              required: true,
+              capability: 'browser_bootstrap',
+            },
+          ],
+        },
+        requests: [{ method: 'GET', url: 'https://fixture.example/api/items', headers: {} }],
+      },
+      toolFn: async (_params, opts) => ({ ok: true, data: opts?.initialState }),
+    };
+    for (const selection of ['alpha', 'alpha', 'beta', 'alpha']) {
+      const result = await runWithLadder(['fetch-bootstrap'], tool, { selection }, root, new Map());
+      expect(result.result).toMatchObject({ ok: true, data: { context: selection } });
+    }
+    expect(minted).toEqual([
+      'https://fixture.example/start?selection=alpha',
+      'https://fixture.example/start?selection=beta',
+    ]);
+  });
+
   it('threads the minted jar cookies into credentials and the jar UA into the replay fetch', async () => {
     const jar: MintedJar = {
       cookies: [

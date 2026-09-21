@@ -462,6 +462,35 @@ describe('normalizeCdpResponseHeaders', () => {
 });
 
 describe('navigation network-response capture', () => {
+  it('identifies the failing matcher predicates without choosing a replacement', () => {
+    const capture = new CdpNetworkResponseCapture({
+      urlIncludes: '/api/results',
+      recordingResponseRequestSeq: 42,
+      method: 'POST',
+      resourceType: 'XHR',
+    });
+    for (const [requestId, path, method, resourceType] of [
+      ['path', '/api.results', 'post', 'xhr'],
+      ['method', '/api/results', 'GET', 'XHR'],
+      ['type', '/api/results', 'POST', 'Fetch'],
+    ] as const) {
+      const request = { requestId, url: `https://fixture.test${path}`, method, resourceType };
+      expect(capture.observeRequest(request)).toBe(false);
+      expect(capture.observeResponse({ ...request, status: 200, headers: {} })).toBe(false);
+    }
+    const evidence = JSON.parse(
+      capture.timeoutMessage(100).split('observed network responses: ')[1] ?? '',
+    );
+    expect(evidence.matchingRequestCount).toBe(0);
+    expect(
+      evidence.recent.map((response: { matcherChecks: unknown }) => response.matcherChecks),
+    ).toEqual([
+      { urlIncludes: false, method: true, resourceType: true },
+      { urlIncludes: true, method: false, resourceType: true },
+      { urlIncludes: true, method: true, resourceType: false },
+    ]);
+  });
+
   it('reports observed response facts without selecting a mismatched response', async () => {
     const capture = new CdpNetworkResponseCapture(
       { urlIncludes: '/api/results', recordingResponseRequestSeq: 42, method: 'POST' },

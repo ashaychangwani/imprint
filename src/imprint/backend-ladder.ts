@@ -827,7 +827,7 @@ async function getOrMintCdpJar(
   }
   let cf: CdpBrowserFetch | undefined;
   try {
-    cf = createCdpBrowserFetch({ baseUrl, bootstrapUrl });
+    cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
     const jar = await cf.mintJar();
     if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
@@ -954,7 +954,12 @@ async function runFetchBootstrap(
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
   const recordingDir = pathResolve(tool.dir, '..');
-  const cacheDir = compileBackendStateDir(tool.dir, 'fetch-bootstrap');
+  const cacheDir = pathResolve(
+    compileBackendStateDir(tool.dir, 'fetch-bootstrap'),
+    createHash('sha256')
+      .update(bootstrapUrl ?? baseUrl)
+      .digest('hex'),
+  );
 
   for (let attempt = 0; attempt < 2; attempt++) {
     const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, cacheDir, recordingDir, attempt > 0);

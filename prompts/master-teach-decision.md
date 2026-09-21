@@ -27,7 +27,9 @@ Choose the smallest observed end-to-end path that covers those operations.
 When the recording contains several modes or journeys, compare their required
 stages before selecting the MVP; do not inherit the most elaborate path merely
 because it appears first or has more captured requests. Preserve the requested
-operations and defer optional breadth.
+operations and defer optional breadth. Choose a mode with comparable captured
+response bodies for parser verification; do not choose a missing-body mode and
+later substitute a different operation or mode merely because it has a body.
 
 Keep the executable path small without discarding its verification evidence.
 A candidate's `requestSeqs` is a recorded evidence pool, not an ordered execution
@@ -39,9 +41,16 @@ and optional breadth, rather than keeping only the first working example. Select
 from existing recordings; do not commission extra exploratory live challenges.
 This applies to research follow-ups and required parameter comparisons too:
 reuse the selected recorded calls, changing only expired dates, state, or fresh
-producer values while preserving the operation and coupled inputs. If those
-calls cannot settle a mapping, keep it unproven and narrow the claimed contract;
-do not request a newly invented route, query, date, or other challenge input.
+producer values while preserving the operation and coupled inputs. Distinguish
+coverage limits from unsupported mappings: recorded field meaning, actual input
+use across coupled request state, and returned record attributes or independently
+observed effective settings can ground a reusable input without a second recorded
+contrast. Missing contrasts alone do not justify freezing it to a recorded literal.
+Require that combined evidence; encoding, echoes, ambiguous numbers, and a default
+match alone are insufficient. Keep concrete unresolved mappings unproven. If a
+working method consumes different grounded inputs, reshape the public contract
+around those inputs instead of a lookup table of recorded constants. Do not request
+a newly invented route, query, date, or other challenge input.
 For API parser verification, retain a comparable call with a captured response
 body. A recorded request with a missing body cannot be its only fixture source,
 even if live research later succeeds. Preserve completed examples found by research.

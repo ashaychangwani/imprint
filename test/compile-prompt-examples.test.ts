@@ -171,10 +171,10 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('Choosing a rung is your evidence-backed decision');
   expect(apiResearchPrompt).toContain('The parser-free workflow still has the complete API');
   expect(apiResearchPrompt).toContain('A top-level `bootstrap`');
+  expect(apiResearchPrompt).toContain('State which examples were tested and which breadth');
   expect(apiResearchPrompt).toContain(
-    'Real data for the recorded example proves only that one example',
+    'ignored input, stale coupled value, wrong result scope, or unsupported bound',
   );
-  expect(apiResearchPrompt).toContain('a failed parameterization');
   expect(apiResearchPrompt).toContain(
     'Decode structured transport before reasoning from byte strings',
   );

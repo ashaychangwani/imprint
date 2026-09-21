@@ -353,37 +353,34 @@ a value required by the selected downstream contract is absent, return
 `partial` for an optional future link, and do not call a required value proven
 and leave a later planner or compiler to invent it.
 
-Real data for the recorded example proves only that one example. On the MVP
-pass, prove the parameters needed by the selected core invocation. Do not delay
-the first handoff for optional breadth; identify optional filters and extra
-variants as deferred best-effort work in `reason`. If an unproven parameter is
-part of the selected MVP contract, return `partial` so the master can narrow the
-contract or request a follow-up. Before claiming the required core mappings
-are proven, test one coherent, materially different parameter set when the
-recording and live site make that possible, then verify that the response
-reflects the changed route, query, dates, identifier, or other core input. This is especially important
-when parameters are embedded inside an encoded URL, nested form value, binary
-token, or request transform: a response that still describes the recorded
-example is a failed parameterization even when it contains excellent real
-data. This small contrast belongs in the first proof, not only a repair
-follow-up. It is not an exhaustive parameter-by-parameter sweep: several core
-inputs may change together, while optional filters and extra modes remain
-deferred. Check unchanged core inputs too; a defaulted value is not proof just
-because other fields or a top-level input echo look correct.
-Choose the contrast to distinguish each claimed core mapping from recorded or
-default behavior. A changed result proves influence, not the input's advertised
-meaning. For a claimed bound or range, distinguish its extent from merely moving
-the same default result region; check the returned records against that promise.
-Changing one input does not prove the others. A single
-matching number in an unlabeled response is not evidence of that field's
-meaning: explain why the observed value represents the claimed input, using
-labels, structure, or a change in the corresponding response value. Several
-core inputs can change in the same test; no fixed call count is required. If
-the evidence still cannot distinguish a mapping from a default or coincidence,
+Prove the reusable core operation using the fixed recorded cases. Establish a
+public input's meaning from recorded interactions and request fields, its actual
+use in the construction across all coupled state, and returned record attributes
+or independently observed effective settings. Missing additional recorded
+contrasts alone is a coverage limit, not a reason to freeze an otherwise grounded
+input to its recorded literal. State which examples were tested and which breadth
+remains untested; do not claim a changed-input test happened when it did not.
+Encoding or echoing an input alone is still insufficient. An ambiguous field,
+ignored input, stale coupled value, wrong result scope, or unsupported bound
+remains a concrete missing proof and requires `partial` or contract repair.
+
+When a coherent, materially different parameter set exists in the selected
+recording, test that case too and verify that the response reflects the changed
+route, query, dates, identifier, or other core input. Reuse decisive supplied
+evidence; this is not an exhaustive parameter-by-parameter sweep. Choose the
+recorded contrast to distinguish a disputed meaning, not merely to obtain a
+different response. Changing one input does not prove the others; assess each
+claimed mapping. For a bound or range, verify its extent against returned
+records, rather than merely moving a default result region. Matching unlabeled
+numbers, query echoes, and unrelated price or inventory changes do not establish
+meaning. If that ambiguity cannot be resolved from the fixed evidence,
 name that mapping as unproven and return `partial`, preserving the working
-request for focused follow-up rather than declaring the whole contract proven.
-If rate limiting or bot protection makes a second live test unsafe, say
-which parameter mapping remains inferred instead of claiming it was proven.
+request rather than inventing new challenges or declaring the whole contract
+proven. When the working method consumes a different input shape, propose those
+grounded inputs to the master instead of accepting arbitrary inputs only through
+a lookup table of recorded literals. Preserve useful results and defer optional
+filters and extra modes.
+
 When decoding or constructing a structured selection, establish field boundaries
 and the complete selected identity. Printable runs may include framing bytes;
 matching a prefix, embedding a token or constructing a nonempty URL does not
