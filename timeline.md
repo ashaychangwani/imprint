@@ -14566,3 +14566,25 @@ and desktop/mobile inspection passed. The new fixture-selection regression fails
 on old code and passes after the correction. Offline retained repaired parsers
 now produce the expected 18/5/5 search counts and corrected locality labels;
 that does not substitute for fresh live verification or independent audit.
+
+## 2026-09-21 — Return invalid focused plans for master repair
+
+Flights 8 on 3a61e14 ended naturally at 46.136 minutes with no published tools.
+All four research operations were proven, including booking from fresh search
+output. Booking planning required a missing recorded response and remained
+invalid after local repair. That reporting error terminated the teach. No audit
+ran; the paired-fixture optimization did not reach fresh verification.
+
+Supply captured response-body availability before the master selects its MVP.
+Return rejected focused-planner diagnostics to the master alongside successful
+sibling proposals, retaining the affected planner's conversation. Invalid plans
+remain unusable; provider, cancellation, and host errors keep their own handling.
+No site-specific logic or browser setup changes. Keep SF-03 (mode comparability),
+SF-10 (late fixture availability), and recurring SF-15 (fatal planner handoff)
+visible in the failure ledger. Eight completed attempts cost $143.6783816 in
+reported base API equivalent, with earlier missing usage still excluded.
+
+Validation: 236 focused tests (1,479 assertions), type checking, lint, website
+build, and 1440/390-width visual inspection passed. The synthetic planner failure
+regression fails on old code and succeeds through both initial and repair
+planning after the fix. Fresh Flights 9 is next; no repeatability claim yet.

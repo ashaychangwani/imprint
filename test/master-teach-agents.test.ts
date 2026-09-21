@@ -1558,7 +1558,8 @@ describe('prompts and pre-plan discovery', () => {
         return { text: JSON.stringify(toolOutput()) };
       },
     };
-    expect(await requestToolSelectionAdvice(toolInput(), { analyzer: advisor })).toEqual(
+    const discovery = { ...toolInput(), recordingResponseBodySeqs: [1] };
+    expect(await requestToolSelectionAdvice(discovery, { analyzer: advisor })).toEqual(
       toolOutput(),
     );
     const sentInput = (seen[0] as { input: Record<string, unknown> }).input;
@@ -1570,9 +1571,11 @@ describe('prompts and pre-plan discovery', () => {
       'discoveryCandidates',
       'evidence',
       'recordingIndex',
+      'recordingResponseBodySeqs',
       'run',
     ]);
     expect(sentInput.discoveryCandidates).toEqual(toolInput().discoveryCandidates.map(boundary));
+    expect(sentInput.recordingResponseBodySeqs).toEqual([1]);
     expect(JSON.stringify(sentInput)).not.toContain('likelyParams');
     expect(JSON.stringify(sentInput)).not.toContain('credentialNames');
 
@@ -1589,8 +1592,14 @@ describe('prompts and pre-plan discovery', () => {
   });
 
   it('sends retained Codex master turns the complete host-current plan without repeating discovery', async () => {
-    const initial = initialMasterInput();
-    const revision = revisionMasterInput();
+    const initial = {
+      ...initialMasterInput(),
+      discovery: { ...initialMasterInput().discovery, recordingResponseBodySeqs: [1] },
+    };
+    const revision = {
+      ...revisionMasterInput(),
+      plannerFailures: [{ toolId: 'fixture', toolName: 'fixture', parseErrors: ['missing body'] }],
+    };
     const seen: unknown[] = [];
     let calls = 0;
     const analyzer: MasterTeachAnalyzer = {
@@ -1612,6 +1621,10 @@ describe('prompts and pre-plan discovery', () => {
     const second = seen[1] as { input: Record<string, unknown> };
     expect(JSON.stringify(first).length).toBeLessThan(50_000);
     expect(first.input).toHaveProperty('discovery');
+    expect((first.input.discovery as Record<string, unknown>).recordingResponseBodySeqs).toEqual([
+      1,
+    ]);
+    expect(second.input.plannerFailures).toEqual(revision.plannerFailures);
     expect(JSON.stringify(first.input)).not.toContain('"quote":');
     expect(second.input).not.toHaveProperty('discovery');
     expect(second.input).not.toHaveProperty('toolSelectionAdvice');

@@ -90,3 +90,7 @@ in `dependencySeqs`. This is boundary advice, not an implementation.
   "reason": "The evidence supports distinct producer and consumer boundaries."
 }
 <!-- END IMPRINT CANONICAL OUTPUT EXAMPLE -->
+
+When supplied, `recordingResponseBodySeqs` identifies recorded requests with
+captured response bodies. Flag fixture gaps when suggesting operation boundaries;
+a request listed in the recording index does not alone supply a parser fixture.

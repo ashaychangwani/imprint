@@ -1145,6 +1145,9 @@ function parameterOutputSchema(input: ParameterSelectionAdvisorInput) {
 }
 function toolAdvisorPromptInput(input: ToolSelectionAdvisorInput) {
   return ToolSelectionAdvisorPromptInputSchema.parse({
+    ...(input.recordingResponseBodySeqs
+      ? { recordingResponseBodySeqs: input.recordingResponseBodySeqs }
+      : {}),
     run: input.run,
     recordingIndex: input.recordingIndex,
     discoveryCandidates: input.discoveryCandidates.map(
@@ -1266,6 +1269,9 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
       ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
       run: input.discovery.run,
       discovery: {
+        ...(input.discovery.recordingResponseBodySeqs
+          ? { recordingResponseBodySeqs: input.discovery.recordingResponseBodySeqs }
+          : {}),
         detectorSharedContext: input.discovery.detectorSharedContext,
         discoveryCandidates: input.discovery.discoveryCandidates,
         evidenceSummary: evidenceCoverage(input.discovery.evidence, []),
@@ -1287,6 +1293,7 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
         }
       : undefined,
     ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
+    ...(input.plannerFailures?.length ? { plannerFailures: input.plannerFailures } : {}),
     ...(input.apiResearch?.length ? { apiResearch: input.apiResearch } : {}),
     ...(input.researchNoProgress?.length ? { researchNoProgress: input.researchNoProgress } : {}),
     ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),

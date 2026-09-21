@@ -101,7 +101,10 @@ map one tool at a time, and focused compilers build one tool at a time. The
 master chooses the build waves: independent tools can run together, while a
 producer runs before its consumers. Failed checks return factual evidence to
 the master, which can revise the affected tool and its dependants without
-rebuilding unrelated tools.
+rebuilding unrelated tools. Recorded response availability is supplied before
+MVP selection. Invalid focused-planner reports return exact diagnostics to the
+master for repair while preserving successful sibling proposals; they never
+become accepted execution plans.
 
 Before that tool's planning, one retained researcher conversation first proves the
 smallest useful API call. If part of the selected MVP contract or a required

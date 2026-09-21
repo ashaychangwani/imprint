@@ -29,6 +29,7 @@ import {
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
+  SemanticAgentOutputError,
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
   requestMasterDecision as requestValidatedMasterDecision,
@@ -1098,6 +1099,89 @@ describe('fresh foreground master controller end to end', () => {
       verificationForResearchParameters(implementation, { query: 'researcher-chosen' })?.id,
     ).toBeUndefined();
   });
+
+  for (const failureCount of [1, 2]) {
+    it(`returns invalid focused planning to the master and preserves successful siblings (${failureCount} failures)`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const promotions: string[][] = [];
+        const base = lifecycleFailureFixture({
+          runId: 'run-e2e-planner-advisory',
+          events: [],
+          promotionBatches: promotions,
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        });
+        const calls = new Map<string, number>();
+        let reviewed = false;
+        const diagnostics = ['verificationCases.0.recordedCall: missing captured response body'];
+        const terminal = await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: syntheticSessionPath(root),
+            noInteractive: true,
+            provider: 'codex-cli',
+            maxDurationMs: 5_000,
+          },
+          {
+            ...base,
+            requestFocusedPlan: async (input, options) => {
+              const count = (calls.get(input.tool.id) ?? 0) + 1;
+              calls.set(input.tool.id, count);
+              if (input.tool.id === CONSUMER_ID && count <= failureCount) {
+                throw new SemanticAgentOutputError('focused planner', diagnostics, 2);
+              }
+              if (input.tool.id === CONSUMER_ID) expect(reviewed).toBeTrue();
+              if (!base.requestFocusedPlan) throw new Error('fixture planner missing');
+              return base.requestFocusedPlan(input, options);
+            },
+            requestMasterDecision: async (input, options, mode) => {
+              expect(input.discovery.recordingResponseBodySeqs).toEqual([1, 2]);
+              if (input.plannerFailures?.length) {
+                expect(input.plannerFailures).toEqual([
+                  { toolId: CONSUMER_ID, toolName: CONSUMER_NAME, parseErrors: diagnostics },
+                ]);
+                if (!reviewed) {
+                  expect(input.plannerProposals.map(({ payload }) => payload.tool.id)).toEqual([
+                    PRODUCER_ID,
+                  ]);
+                } else {
+                  expect(
+                    input.current?.plan.payload.tools.find(({ id }) => id === PRODUCER_ID)
+                      ?.implementationPlan,
+                  ).toBeDefined();
+                }
+                expect(input.apiResearch?.every(({ status }) => status === 'proven')).toBeTrue();
+                reviewed = true;
+              }
+              if (!base.requestMasterDecision) throw new Error('fixture master missing');
+              return base.requestMasterDecision(input, options, mode);
+            },
+            requestCompletionReview: async (input) =>
+              CompletionReviewOutputSchema.parse({
+                binding: input.run,
+                verdict: 'passed',
+                summary: 'Both fixture tools passed.',
+                findings: [],
+                toolResultReviews: (input.toolResultEvidence ?? []).map((result) => ({
+                  toolId: result.payload.toolId,
+                  ...(result.payload.chainEdgeId
+                    ? { chainEdgeId: result.payload.chainEdgeId }
+                    : {}),
+                  status: 'credible',
+                  reason: 'The fixture result matches this invocation.',
+                  evidenceRefs: [result.ref],
+                })),
+                claimDispositions: [],
+              }),
+          },
+        );
+        expect(reviewed).toBeTrue();
+        expect(terminal.status).toBe('completed');
+        expect(calls.get(PRODUCER_ID)).toBe(1);
+        expect(calls.get(CONSUMER_ID)).toBe(failureCount + 1);
+        expect(new Set(promotions.flat())).toEqual(new Set([PRODUCER_NAME, CONSUMER_NAME]));
+      });
+    });
+  }
 
   it('compiles a proven producer before slower sibling research finishes', async () => {
     await withTemporaryImprintHome(async (root) => {

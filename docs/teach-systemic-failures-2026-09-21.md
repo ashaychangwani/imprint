@@ -8,21 +8,21 @@ strict independent audit, followed by an unchanged-code repeat and Hotels valida
 Keep each teach at a 30-minute target, assess at 60 minutes, and enforce 90 minutes.
 Audits retain a 45-minute limit. No recurring automation, MR, push or merge.
 
-Seven attempts in this September 21 campaign have ended unsuccessfully (four
-operator stops, two natural failures and one 90-minute deadline). Flights 7 on
-`d131a54` proved all four research APIs and the fresh search-to-booking research
-chain, but published only calendar. Location mislabeled locality IDs as airport
-IDs, and search dropped result groups and connecting itineraries. Their retained
-compilers repaired the artifacts too late for final live rechecking. No independent
-audit or repeatability pass is claimed. The next checkpoint removes duplicated
-fixture work from selected-case review and moves the existing direct-recall
-instruction earlier in the master prompt. Fresh Flights 8 will validate it.
+Eight attempts in this September 21 campaign have ended unsuccessfully (four
+operator stops, three natural failures and one 90-minute deadline). Flights 8 on
+`3a61e14` proved all four research operations but failed at 46.136 minutes before
+publication: booking's focused plan required recorded response 206, whose body
+is missing. The planner's output remained invalid after one local repair and
+terminated the teach. The missing-body guard was correct; earlier availability
+facts and a repairable focused-planner handoff are the next general corrections.
+No independent audit or repeatability pass is claimed. Paired-fixture review from
+`3a61e14` was not reached, so its fresh validation remains pending.
 
 All local evidence remains under
 `~/.imprint/experiments/reteach-systemic-2026-09-21/`. The collector is on
-127.0.0.1:6443. Latest preflight: AC power, 100% battery, 19 GiB free, original
+127.0.0.1:6443. Latest preflight: AC power, 100% battery, 18 GiB free, original
 recordings intact. No disk exhaustion, sleep, or network loss has been established
-as the cause of these seven unsuccessful attempts. No prior generated tools enter teaching.
+as the cause of these eight unsuccessful attempts. No prior generated tools enter teaching.
 Code and prompts stay fixed within each teach. The detailed observations below
 are historical entries; the current state and attempt table take precedence.
 
@@ -59,7 +59,7 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | SF-12 | Bootstrap cache ignores changed URL context | Flights 3 and Flights 5 retained a homepage jar/HTML after changing bootstrap to search. CDP browser pool does key on URL; disk jar cache does not. | Fixed in `760e3b4`; Flights 6 validated separate snapshots for distinct bootstrap URLs. |
 | SF-13 | Master invents comparisons outside the recording | Flights 3 requested another route/date. `5d7b2be` clarified the existing fixed-case policy; Flights 4 master explicitly kept the recorded route/date. | Track actual inputs, not just compliance prose. |
 | SF-14 | Inspected evidence and observations disappear at agent handoffs | Flights 3 lost completed search response 245 during follow-up; proven/partial handoffs also omitted observations. Fixed in `5d7b2be`; Flights 4 retained IDs 245/295, selected fixture 245 and repaired a bad capture matcher from history. | Fresh continuation evidence validated; still watch later boundary changes. |
-| SF-15 | Focused planner cannot return an evidence-gap advisory | Flights 3 correctly recognized unavailable fixtures after a bad first proposal, but its only output type required a full valid plan; empty cases became a fatal schema error. | First remove upstream evidence loss. If needed, add a bounded advisory path to the master, not fake proof. Not implemented. |
+| SF-15 | Invalid focused planning terminates the whole teach | Flights 3 and Flights 8: an unavailable fixture or malformed proposal becomes fatal after one local repair. | Return exact validator diagnostics to the master alongside valid siblings. Preserve retained planner history and reject invalid proof. Regression reproduces the old failure and passes through initial and repair planning; fresh validation pending. |
 | SF-16 | One verifier status conflates raw-fact readiness and parser correctness | Flights 4 location supplied complete facts and matched calls, then prematurely marked itself unverified. `d424359` clarifies omission of status for sufficient raw expectations; explicit gaps remain unverified. | Flights 7 readers supplied raw expectations and reached actual parser evaluation; preserve explicit uncertainty. |
 
 | SF-17 | Fixed-case verification turns into fixed-constant tools | Flights 5 removed every search input and restricted calendar to literal recorded windows, although search route/date mappings were grounded and the working calendar method could expose a different input shape. | Clarify coverage versus mapping support; require recorded meaning, actual construction, and independent result evidence together. Preserve ambiguous/no-op failures. Validate fresh, without inventing cases. |
@@ -129,6 +129,7 @@ not used to justify a production refactor during an active run.
 | September 21 Flights 5 | d424359 | Operator stop after 48.144 minutes; 0/4 published | SF-12 reused wrong bootstrap HTML; SF-07 repeated matcher typo; SF-17 froze useful inputs for lack of recorded contrasts. Positive research exists; final parser verification not reached. $13.6372248 reported; unflushed tail unknown. |
 | September 21 Flights 6 | 760e3b4 | Operator stop after 44.109 minutes; 0/4 published | Setup-URL isolation and repairable handoffs exercised successfully; SF-01 vague schema diagnostics and SF-19 pre-action waits blocked completion. $11.6595168 reported; one span missing usage. |
 | September 21 Flights 7 | d131a54 | Deadline at 90.019 minutes; 1/4 published (calendar) | All research and fresh research chain proven. Location identifier meaning and search result loss rejected; retained repairs completed too late for rechecking. $40.8916328 reported; two spans missing usage. |
+| September 21 Flights 8 | 3a61e14 | Natural failure at 46.136 minutes; 0/4 published | All research proven; missing response 206 rejected, then SF-15 killed planning. SF-10 availability was absent from discovery. $14.631096 reported, no missing usage spans. |
 
 Flights 1 accounting: 2,546,811 input tokens, including 1,609,728 cache reads;
 46,340 output tokens; zero reported cache writes; $5.3190232 estimated base API
@@ -1004,3 +1005,118 @@ lint and diff whitespace passed. Website build and 1440/390px visual inspection
 passed (existing bundle-size warning only). Fixture-selection regression failed
 on old code and passes after the small change. Next: fresh flights-8 with the
 same original recording, four-operation scope and 90-minute hard deadline.
+
+
+## Flights 8 in progress on 3a61e14
+
+Started 13:28:44 UTC in a new flights-8/home, original recording and four-operation
+scope. Target 13:58, assess 14:28, hard deadline 14:58 UTC. AC/100%, 18 GiB free;
+collector and process-bound sleep prevention remain active. Code/prompts stay fixed.
+
+Flights 7 timing deep dive is retained in model-stage-timing.json. Research:
+35 calls, 2,182.48 summed model seconds; master: 10 calls, 1,240.13 seconds;
+focused planning: nine calls, 751.10 seconds; raw evidence review: 15 calls,
+555.61 seconds. These overlap and exclude compiler time; they are not additive
+wall-time phases. Two raw-inspection turns addressed the initial fixture during
+continuation review, supporting the paired-fixture correction.
+
+SF-22 watch: oversized repeated evidence handoffs. Measured later master prompts
+were 305k–414k characters. The final four research histories occupy roughly 248k
+JSON characters, dominated by successful raw previews (about 154k characters)
+and response observations (about 55k), before candidates/current observations
+and the accepted plan are added. Most later master calls reported only 0–12k
+cached tokens despite hundreds of thousands of input tokens; cache behavior or
+compaction causality has not been established. The SDK's 80k compaction setting
+is a hypothesis to investigate, not a proven fault. Trace prompt contents are
+capped at 50k; pre-truncation lengths and provider token totals remain available.
+A possible bounded follow-up is to send only changed handoffs to the retained
+master while preserving the full stored history and full validation input.
+Do not erase failed observations or assume a short preview proves semantics.
+No handoff compression/protocol change is implemented during Flights 8.
+
+
+Flights 8 at 12 minutes: location has a useful autocomplete call for recorded
+query san, but correctly marks coordinates unproven and offers narrowing or a
+fresh derived detail request. Search repaired a 61.160-second capture timeout:
+the loaded page contained 20 results, while its endpoint matcher used a slash
+where the observed URL uses a dot. Corrected capture completed in 2.579 seconds
+warm. This is SF-07 recurrence, not demonstrated connectivity loss.
+
+SF-03/SF-10 watch: the initial master chose a one-way search from requests 206/245.
+Original event 204 says One way; event 243 says Multi-city. Request 206 lacks a
+response body; 245 has 51,286 body characters and a different mode value (2 vs 3)
+while both have one leg. The researcher proved the 206 one-way construction, so
+it still needs a genuinely comparable recorded fixture. The master’s initial
+retained-conversation projection includes candidate summaries and evidence counts,
+but not the body-availability list supplied later to focused planners. Inspect
+whether that missing early factual context causes late mode repair; do not assume
+an agent can obey an early body-selection instruction without those facts.
+No code change is made during this run, and it has not yet failed on this issue.
+
+
+Flights 8 at 31 minutes: the master removed optional coordinates and relative-price
+classification. Location was reclassified proven from the exact saved successful
+candidate without another network call. Calendar tried a two-navigation diagnostic
+(document context, then API capture); its second navigation failed after 93.841
+seconds total, with no matching grid request. The failure’s page diagnostic showed
+San Jose SJC, San Diego and the exact route/date tracking label. Research retained
+the previously successful single-navigation candidate and cited that diagnostic
+as contextual route evidence. This does not validate the failed two-navigation
+method or establish warm repeatability. Final fresh tool checks remain necessary.
+
+Booking’s first fresh-token POST and direct booking URL attempts failed; a
+same-session first-result click then captured actual fare data in 9.012 seconds.
+It correctly remained partial because selection_token did not drive that click.
+The master requested a current non-first producer record and a construction that
+actually consumes its identity. Browser sessions remain isolated by tool; sharing
+a producer session is not accepted as the repair. A fresh producer call completed
+in 41.456 seconds cold during this retained follow-up.
+
+
+At 36 minutes booking proved selection of the second, fresh WN4341 itinerary,
+then correctly remained partial because its search scope was hardcoded. The
+master added origin, destination and departure_date alongside selection_token,
+without inventing another route/date case. The retained researcher rebuilt both
+navigations from those inputs and retested in 36.290 seconds cold. At 40 minutes
+all four research operations were proven, with eight retained booking observations.
+This is request-level proof; comparable recorded search fixtures and final generated
+tool verification remain unresolved. No publication or independent audit yet.
+
+
+At 43 minutes focused search planning chose recordedCall [245] for both replay
+and live verification while retaining the proven one-way construction from 206.
+Its freshnessChanges mentions route/date preservation and refreshed browser state,
+prices, ranking and tokens, but does not address the different recorded mode.
+The selected recording also has request 235 in one-way mode, with no response body;
+there is no completed one-way GetShoppingResults response in this recording.
+Whether the single-leg multi-city response is semantically comparable must be
+established, not assumed merely because the route/date coincide. The independent
+review is still pending. Initial master evidence should expose body availability
+early enough for agents to select a verifiable mode before research.
+
+
+## Flights 8 terminal findings and next correction
+
+Natural failure at 46.135509 minutes, exit 1. Exact planner diagnostics are in
+`flights-8/run.log`; all retained research and trace evidence remains private.
+All four operations reached proven research status. Booking used fresh search
+output and correctly selected a non-first matching flight; this does not prove
+that generated tools work. No tool was published and no audit ran.
+
+The recording's selected one-way shopping requests have missing bodies. A later
+completed single-leg multi-city response was chosen as search's fixture without
+explaining the trip-mode difference. Booking instead referenced the missing
+one-way body in its parser response chain. Comparable route/date alone does not
+establish comparable modes. Keep SF-03 open. SF-10 must expose captured-body
+availability before discovery chooses the MVP, not only at focused planning.
+SF-15 recurred: exact rejected-output diagnostics should reach the master, which
+can revise the mode/evidence choice; runtime must not invent that strategy.
+
+Reported usage: 6,231,776 input tokens, including 3,572,480 cache-read tokens;
+128,246 output tokens; zero reported cache-write tokens; no missing analysis
+usage spans. Base API equivalent $14.631096, using the accounting assumptions
+above. Eight completed attempts total $143.6783816 reported base equivalent;
+seven earlier spans lack usage and Flights 5 has an unknown unflushed tail.
+This is not a subscription invoice. No infrastructure interruption caused the
+recorded terminal failure. The next fresh run is Flights 9 after validation and
+checkpointing the two general corrections.

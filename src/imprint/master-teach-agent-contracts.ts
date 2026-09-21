@@ -502,6 +502,7 @@ const FocusedPlannerProposalPayloadSchema = strictObject({
 });
 export const FocusedPlannerProposalSchema = contentProjection(FocusedPlannerProposalPayloadSchema);
 const DiscoveryInputFields = {
+  recordingResponseBodySeqs: z.array(z.number().int().nonnegative()).optional(),
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
   detectorSharedContext: TeachingCompileContextSchema,
@@ -512,6 +513,7 @@ export const ToolSelectionAdvisorInputSchema = strictObject(DiscoveryInputFields
 export type ToolSelectionAdvisorInput = z.infer<typeof ToolSelectionAdvisorInputSchema>;
 /** Narrow analyzer view. The full detector input remains the host validation boundary. */
 export const ToolSelectionAdvisorPromptInputSchema = strictObject({
+  recordingResponseBodySeqs: DiscoveryInputFields.recordingResponseBodySeqs,
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
   discoveryCandidates: z.array(ToolBoundaryProposalSchema),
@@ -538,6 +540,16 @@ export const MasterDecisionInputSchema = strictObject({
   current: MasterCurrentSchema.optional(),
   toolSelectionAdvice: ToolSelectionAdvisorOutputSchema.optional(),
   plannerProposals: z.array(FocusedPlannerProposalSchema),
+  /** Rejected planner output is advisory, never an executable proposal. */
+  plannerFailures: z
+    .array(
+      strictObject({
+        toolId: PromptToolIdSchema,
+        toolName: SemanticToolCandidateSchema.shape.toolName,
+        parseErrors: z.array(z.string()),
+      }),
+    )
+    .optional(),
   apiResearch: z.array(ApiResearchHandoffSchema).default([]),
   /** Exact factual no-op found after a completed master -> researcher cycle. */
   researchNoProgress: z.array(ApiResearchNoProgressSchema).max(64).optional(),

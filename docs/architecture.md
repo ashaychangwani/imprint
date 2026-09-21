@@ -600,7 +600,12 @@ The public teaching path is one fresh foreground controller:
    once, and every producer is in an earlier wave than its consumers.
 8. A focused planner receives only one tool, its relevant recording evidence,
    its dependencies, the completed research handoffs, and the exact artifact
-   contract.
+   contract. Recording response-body availability also reaches discovery before
+   the master selects a mode. If the focused planner still returns invalid output
+   after its local repair, exact diagnostics return to the master alongside valid
+   sibling proposals. The affected plan remains absent until a valid replacement
+   arrives from its retained conversation. Cancellation, provider failures and
+   host errors retain their existing handling.
 9. A fresh focused compiler builds that tool. Independent tools in the same
    master-authored wave may compile in parallel. The selected research call's
    input/observation file and full retained response are copied into its local

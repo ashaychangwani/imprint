@@ -42,6 +42,14 @@ operations and defer optional breadth. Choose a mode with comparable captured
 response bodies for parser verification; do not choose a missing-body mode and
 later substitute a different operation or mode merely because it has a body.
 
+`discovery.recordingResponseBodySeqs` lists the captured response bodies available
+for parser fixtures. Use it when selecting the mode, before research begins.
+`plannerFailures` contains rejected focused output and exact validator diagnostics,
+not proof that an API failed. Preserve valid sibling proposals and research, revise
+the affected tool or evidence choice, and explain the repair in your decision.
+Leave its implementation plan absent so its retained planner can try the revision.
+Do not substitute live output for a missing recording fixture.
+
 Keep the executable path small without discarding its verification evidence.
 A candidate's `requestSeqs` is a recorded evidence pool, not an ordered execution
 graph. Preserve a small set of distinct recorded examples for the selected core

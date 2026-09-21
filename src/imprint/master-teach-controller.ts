@@ -71,6 +71,7 @@ import {
 } from './master-teach-agent-contracts.ts';
 import {
   type MasterTeachAgentOptions,
+  SemanticAgentOutputError,
   apiResearchFollowUpStateSha256,
   apiResearchInputsSha256,
   apiResearchRequiredLinks,
@@ -2275,7 +2276,10 @@ function focusedEvidenceForPlan(input: {
   );
 }
 
+type FocusedPlannerFailure = NonNullable<MasterDecisionInput['plannerFailures']>[number];
+
 async function requestFocusedPlannerBundles(input: {
+  onInvalidOutput?: (failure: FocusedPlannerFailure) => void;
   plan: EditableTeachingPlan;
   discoveryRun: ToolSelectionAdvisorInput['run'];
   recordingIndex: ToolSelectionAdvisorInput['recordingIndex'];
@@ -2369,10 +2373,26 @@ async function requestFocusedPlannerBundles(input: {
   });
   if (planned.failures.length > 0) {
     throwTerminalFanoutFailure(planned.failures, input.agent.signal);
-    throw new AggregateError(
-      planned.failures.map(({ error }) => error),
-      focusedPlanningFailureMessage(planned.failures, targetTools.length),
+    const terminalFailures = planned.failures.filter(
+      ({ error }) =>
+        !input.onInvalidOutput ||
+        !(error instanceof SemanticAgentOutputError) ||
+        error.role !== 'focused planner',
     );
+    if (terminalFailures.length) {
+      throw new AggregateError(
+        terminalFailures.map(({ error }) => error),
+        focusedPlanningFailureMessage(terminalFailures, targetTools.length),
+      );
+    }
+    for (const { toolId, toolName, error } of planned.failures) {
+      if (!(error instanceof SemanticAgentOutputError)) continue;
+      input.onInvalidOutput?.({
+        toolId,
+        toolName,
+        parseErrors: [...error.parseErrors],
+      });
+    }
   }
 
   const bundles = planned.completed.map(({ value }) => value);
@@ -3206,6 +3226,9 @@ async function discoverAndPlan(input: {
   >;
 }> {
   const recordingIndex = recordingIndexFromSession(input.triage.session, input.recordingSha256);
+  const recordingResponseBodySeqs = input.triage.session.requests
+    .filter(({ response }) => response?.body !== undefined)
+    .map(({ seq }) => seq);
   const run = {
     runId: input.runId,
     site: input.site,
@@ -3220,6 +3243,7 @@ async function discoverAndPlan(input: {
     discoveryInput = ToolSelectionAdvisorInputSchema.parse({
       ...rebound.discoveryInput,
       recordingIndex,
+      recordingResponseBodySeqs,
     });
     discoveryEvidence = rebound.discoveryEvidence;
     advice = rebound.toolAdvice;
@@ -3250,6 +3274,7 @@ async function discoverAndPlan(input: {
       run,
       recordingIndex,
       detectorSharedContext,
+      recordingResponseBodySeqs,
       discoveryCandidates,
       evidence: discoveryEvidence,
     });
@@ -3418,10 +3443,12 @@ async function discoverAndPlan(input: {
       : [];
   });
   const reusedIds = new Set(reusablePlans.map(({ output }) => output.tool.id));
+  const plannerFailures: FocusedPlannerFailure[] = [];
   const plannerBundles = [
     ...reusablePlans,
     ...(await requestFocusedPlannerBundles({
       plan: research.plan,
+      onInvalidOutput: (failure) => plannerFailures.push(failure),
       discoveryRun: run,
       recordingIndex,
       triagedSession: input.triage.session,
@@ -3458,6 +3485,7 @@ async function discoverAndPlan(input: {
     },
     toolSelectionAdvice: advice,
     plannerProposals: plannerBundles.map(({ proposal }) => proposal),
+    ...(plannerFailures.length ? { plannerFailures } : {}),
     apiResearch: research.handoffs,
   };
   const finalDecision = await input.deps.requestMasterDecision(
@@ -5000,6 +5028,7 @@ export function focusedPlanningStateSha256(
   plan: EditableTeachingPlan,
   missingToolIds: readonly string[],
   proposals: readonly ReturnType<typeof FocusedPlannerProposalSchema.parse>[],
+  failures: readonly FocusedPlannerFailure[] = [],
 ): string {
   const toolById = new Map(plan.tools.map((tool) => [tool.id, tool]));
   const missingTools = [...new Set(missingToolIds)]
@@ -5030,6 +5059,7 @@ export function focusedPlanningStateSha256(
   return teachingPlanContentSha256({
     missingTools,
     proposals: executableProposals,
+    failures: [...failures].sort(canonicalOrder),
   });
 }
 
@@ -5264,8 +5294,10 @@ async function ensureCurrentImplementationPlans(
     }
 
     const seeds = new Map<string, FreshTeachBootstrapObject>();
+    const plannerFailures: FocusedPlannerFailure[] = [];
     const planners = await requestFocusedPlannerBundles({
       plan: current.plan,
+      onInvalidOutput: (failure) => plannerFailures.push(failure),
       discoveryRun: context.discoveryInput.run,
       recordingIndex: context.discoveryInput.recordingIndex,
       triagedSession: context.triagedSession,
@@ -5281,6 +5313,7 @@ async function ensureCurrentImplementationPlans(
       current.plan,
       missingToolIds,
       planners.map(({ proposal }) => proposal),
+      plannerFailures,
     );
     if (reviewedProposalStates.has(proposalStateSha256)) {
       throw new Error(
@@ -5306,6 +5339,7 @@ async function ensureCurrentImplementationPlans(
       },
       toolSelectionAdvice: context.toolAdvice,
       plannerProposals: planners.map(({ proposal }) => proposal),
+      ...(plannerFailures.length ? { plannerFailures } : {}),
       apiResearch: [...context.apiResearch],
     };
     const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
