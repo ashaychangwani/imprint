@@ -14348,3 +14348,20 @@ for every attempt, timings, cost caveats and local evidence paths. All task-owne
 processes and the collector stopped; old cron remains off. About 18 GiB free.
 No data deleted, no push, no MR and no merge. Further fresh teaches need a new
 campaign budget and new evidence homes.
+
+
+## 2026-09-20 22:38 PDT — Resume fresh teaches with a systemic failure ledger
+
+The user explicitly requested continued fresh teaches, smallest justified edits,
+and tracking recurring architecture failures. This supersedes the prior campaign
+stop. Fresh Flights 1 of the new campaign started September 21 05:38:36 UTC on
+b6b8cff (implementation 2647f8b), PID 30682, original recording and four-operation
+scope. New home: ~/.imprint/experiments/reteach-systemic-2026-09-21/flights-1/home.
+Target 06:08:36, assess 06:38:36, hard deadline 07:08:36 UTC. No resumed failed run.
+
+AC power, 90% battery, about 20 GiB free; both recordings intact. New collector
+on 6443 passed an actual protobuf export/decode/append check. Old cron remains off.
+Code and prompts stay unchanged through this teach/audit. The new ledger
+`docs/teach-systemic-failures-2026-09-21.md` separates confirmed recurring failures
+from architectural hypotheses and records the evidence needed for each small fix.
+No site-specific guidance, old generated tools, push, MR, merge or data deletion.

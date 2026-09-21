@@ -1,5 +1,9 @@
 # Teach rebuild handoff — September 7, 2026
 
+Latest continuation: [fresh-teach systemic failure ledger](teach-systemic-failures-2026-09-21.md).
+The user has authorized continued fresh teaches after the September 20 campaign.
+Use that ledger for current run state; older process entries below are historical.
+
 ## 2026-09-20 11:02 PDT — Bounded validation of recording-backed verification
 
 Implementation checkpoint **1073ceb**, same validation worktree and source branch.
