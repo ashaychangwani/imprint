@@ -308,8 +308,11 @@ Navigation readiness is ordered: `navigation.urlIncludes`, `navigation.selector`
 and `navigation.cookie` are checked **before** `navigation.actions`. They must
 be satisfied by the initial navigation, not by a later click. Use
 `navigation.resultSelector` to wait for rendered results **after** the actions.
-`navigation.networkResponse.urlIncludes` matches the captured response URL;
-it is separate from the page URL readiness condition. A pre-action readiness
+`navigation.networkResponse.urlIncludes` is a literal, case-sensitive substring
+of the captured response URL. Copy a contiguous substring from the recorded or
+observed endpoint; do not reconstruct it from an operation name. Inspect false
+matcher predicates before changing transport or adding browser actions.
+That matcher is separate from the page URL readiness condition. A pre-action readiness
 failure means no declared click has run; fix that condition before changing selectors.
 
 Failed clicks include bounded target diagnostics: match count, first-match
@@ -398,6 +401,10 @@ ordered relationship and compare the consumer's result with that whole record.
 A construction that selects only the first member is unproven for the group even
 when that member returns useful data. Use an available grouped record to distinguish
 these cases, or report the unresolved mapping for an explicit scope decision.
+
+Preserve the decoded recorded body as a template and change only evidenced value
+paths or deliberately omitted fields. Keep surrounding array depth, null slots,
+and encoding layers exact; do not hand-transcribe the nested wire skeleton.
 
 Start with the smallest directly recorded result request and the minimum wire
 shape that can plausibly return its core data. Reuse as little as possible from

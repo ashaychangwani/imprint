@@ -765,7 +765,7 @@ export class CdpNetworkResponseCapture {
         (response.requestSequence !== undefined &&
           response.requestSequence > this.afterRequestSequence),
     );
-    const recent = responses.slice(-12).map((response) => {
+    const facts = responses.map((response) => {
       let endpoint: string;
       let endpointTruncated = false;
       try {
@@ -799,9 +799,20 @@ export class CdpNetworkResponseCapture {
         inNavigationScope: this.navigationScopeReady ? this.matchesNavigationScope(response) : null,
       };
     });
+    // Repeated telemetry must not push distinct endpoint facts out of the
+    // bounded diagnostic. Group only identical displayed facts, preserving
+    // matcher/scope differences and ordering by each group's latest response.
+    const distinct = new Map<string, (typeof facts)[number] & { count: number }>();
+    for (const fact of facts) {
+      const key = JSON.stringify(fact);
+      const count = (distinct.get(key)?.count ?? 0) + 1;
+      distinct.delete(key);
+      distinct.set(key, { ...fact, count });
+    }
+    const recent = [...distinct.values()].slice(-12);
     return JSON.stringify({
       count: responses.length,
-      omitted: responses.length - recent.length,
+      omitted: responses.length - recent.reduce((total, response) => total + response.count, 0),
       matchingRequestCount: this.matchingRequestOrder.length,
       navigationScopeReady: this.navigationScopeReady,
       recent,

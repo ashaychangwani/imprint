@@ -24,6 +24,13 @@ content within the same run and analyzer conversation. Delivery fingerprints
 advance after a validated response. Stateless and self-contained calls retain
 the full input, and host validation always checks the complete current evidence.
 Prior research stays in the conversation; this does not reset agent history.
+Focused planners share the accepted plan and research, rather than consuming each
+other's output. Their calls overlap at the existing two-worker limit; only actual
+compilation and execution retain the master's dependency waves.
+Capture timeout summaries keep up to twelve distinct displayed response facts,
+ordered by latest occurrence. Identical facts are grouped with a count; differing
+matcher results or navigation scopes remain distinct. The total and omitted
+counts still count responses, and this never relaxes the selected matcher.
 Output repairs include the current validation metadata even in retained
 conversations. Identity mismatches name the exact field, expected value, and
 returned value so agents do not have to rediscover an opaque run identifier.

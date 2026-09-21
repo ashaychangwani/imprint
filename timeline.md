@@ -14608,3 +14608,29 @@ provider setting or proof standard changes. Fresh Flights 10 follows the checkpo
 1440/390-width visual inspection passed. No audit or repeatability pass yet.
 Nine attempts cost $168.2766920 in reported base API equivalent; missing usage is
 excluded and failed evidence is preserved in the September 21 failure ledger.
+
+
+## 2026-09-21 — Preserve useful diagnostics and overlap independent planning
+
+Flights 10 on 28f128e reached the 90-minute deadline with no published tools.
+Useful fresh search and booking calls succeeded, but repeated request-shape and
+capture mistakes, a producer-stage mismatch, and planning consumed the budget.
+The context fix worked: unchanged research was omitted and a later master message
+was about 52,000 characters. No raw generated-tool review or independent audit ran.
+
+Capture timeout diagnostics now group identical displayed endpoint facts before
+keeping twelve entries, preserving counts and differing matcher/scope facts.
+Focused planners overlap at the existing two-worker limit because they do not
+consume one another's outputs; compilation still honors producer dependencies.
+Research and planner guidance preserves recorded/tested request structures and
+upstream representations, and identifies literal URL-substring matching.
+
+Both regressions fail on old code and pass after the corrections. 369 focused
+tests (2,153 assertions), type checking, lint, website build and 1440/390-width
+visual inspection passed. Browser setup, response matching, deadlines, proof
+standards and strategic choices remain unchanged. Fresh Flights 11 is next.
+
+The failure ledger records unresolved stage/comparability drift, sibling response
+inspection limits, bulky focused handoffs and speculative-draft scheduling.
+Ten completed attempts cost $187.8730200 in reported base API equivalent; missing
+usage is excluded. All unsuccessful evidence remains local. No MR or push.

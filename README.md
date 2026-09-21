@@ -106,7 +106,10 @@ MVP selection. Invalid focused-planner reports return exact diagnostics to the
 master for repair while preserving successful sibling proposals; they never
 become accepted execution plans. The retained master receives changed research
 handoffs without repeatedly resending unchanged history; host validation still
-uses the full evidence.
+uses the full evidence. Focused planning overlaps within the same two-worker
+limit; compilation and execution still follow the accepted dependencies.
+Capture timeouts group repeated endpoint facts so telemetry does not crowd out
+distinct responses, while keeping matching and readiness rules unchanged.
 
 Before that tool's planning, one retained researcher conversation first proves the
 smallest useful API call. If part of the selected MVP contract or a required

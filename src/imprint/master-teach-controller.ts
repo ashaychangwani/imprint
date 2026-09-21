@@ -2310,12 +2310,11 @@ async function requestFocusedPlannerBundles(input: {
       seeds: input.seeds,
     });
 
-  const targetIds = new Set(targetTools.map(({ id }) => id));
   const targetPlan = {
     tools: targetTools,
-    buildWaves: input.plan.buildWaves
-      .map((wave) => wave.filter((toolId) => targetIds.has(toolId)))
-      .filter((wave) => wave.length > 0),
+    // Every planner receives the same accepted plan and research; none consumes
+    // another planner's output. Execution dependencies still order compilation.
+    buildWaves: targetTools.length ? [targetTools.map(({ id }) => id)] : [],
   };
   const planned = await compileEveryToolInBuildWaves(targetPlan, {
     concurrency: FOCUSED_COMPILE_CONCURRENCY,

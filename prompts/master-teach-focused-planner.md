@@ -47,6 +47,10 @@ The master has already returned partial handoffs to their retained researchers;
 do not silently complete or reinterpret a partial request in this planning
 stage. If an injected or older handoff is still partial, preserve its stated
 gap and tell the master that research must continue.
+Carry the proven workflow, request transform and producer value representations
+through unchanged. Plan parsing around that tested construction; do not rewrite
+its nested request envelope or redefine an upstream value's shape in prose.
+An executable construction change needs fresh research proof.
 Do not replace a proven minimal call with a larger recorded request graph. A
 blocked handoff is an exact research gap for the master to resolve; it is not
 automatic evidence for playbook.

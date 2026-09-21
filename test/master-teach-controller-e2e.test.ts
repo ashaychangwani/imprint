@@ -1183,6 +1183,54 @@ describe('fresh foreground master controller end to end', () => {
     });
   }
 
+  it('overlaps independent planning while preserving producer-first compilation', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const events: string[] = [];
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-parallel-planning',
+        events,
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const planner = base.requestFocusedPlan;
+      if (!planner) throw new Error('fixture planner missing');
+      let releaseProducer!: () => void;
+      const consumerStarted = new Promise<void>((resolve) => {
+        releaseProducer = resolve;
+      });
+      let active = 0;
+      let peak = 0;
+      await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: syntheticSessionPath(root),
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 1_000,
+        },
+        {
+          ...base,
+          requestFocusedPlan: async (input, options) => {
+            if (input.apiResearch?.length === 1)
+              throw new Error('fixture defers the speculative plan');
+            active += 1;
+            peak = Math.max(peak, active);
+            try {
+              if (input.tool.id === PRODUCER_ID) await consumerStarted;
+              else releaseProducer();
+              return await planner(input, options);
+            } finally {
+              active -= 1;
+            }
+          },
+        },
+      );
+      expect(peak).toBe(2);
+      const builds = events.filter((event) => event.startsWith('compile:'));
+      expect(builds).toEqual([`compile:${PRODUCER_ID}`, `compile:${CONSUMER_ID}`]);
+    });
+  });
+
   it('compiles a proven producer before slower sibling research finishes', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);

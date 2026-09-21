@@ -547,6 +547,39 @@ describe('navigation network-response capture', () => {
     expect(await capture.outcome).toMatchObject({ ok: true, response: { body: 'selected body' } });
   });
 
+  it('keeps distinct endpoint evidence when repeated responses fill the timeout tail', () => {
+    const capture = new CdpNetworkResponseCapture({
+      urlIncludes: '/api/results',
+      recordingResponseRequestSeq: 42,
+      method: 'POST',
+      resourceType: 'XHR',
+    });
+    for (let index = 0; index < 21; index++) {
+      const request = {
+        requestId: String(index),
+        url:
+          index === 0 ? 'https://fixture.test/api.results' : `https://fixture.test/log?n=${index}`,
+        method: 'POST',
+        resourceType: 'XHR',
+      };
+      expect(capture.observeRequest(request)).toBe(false);
+      expect(capture.observeResponse({ ...request, status: 200, headers: {} })).toBe(false);
+    }
+    const evidence = JSON.parse(
+      capture.timeoutMessage(100).split('observed network responses: ')[1] ?? '',
+    );
+    expect(evidence.count).toBe(21);
+    expect(evidence.omitted).toBe(0);
+    expect(evidence.recent).toHaveLength(2);
+    expect(evidence.recent[0]).toMatchObject({
+      endpoint: 'https://fixture.test/api.results',
+      count: 1,
+      matcherChecks: { urlIncludes: false, method: true, resourceType: true },
+    });
+    expect(evidence.recent[1]).toMatchObject({ endpoint: 'https://fixture.test/log', count: 20 });
+    expect(evidence.matchingRequestCount).toBe(0);
+  });
+
   it('bounds timeout metadata and excludes URL secrets, headers and non-HTTP bodies', () => {
     const capture = new CdpNetworkResponseCapture({
       urlIncludes: '/missing',
