@@ -2118,7 +2118,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           .filter(Boolean)
           .join(' and ');
         throw new Error(
-          `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}`,
+          `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}${options.actions?.length ? `; pre-action readiness failed; navigation.actions not started (${options.actions.length} pending)` : ''}`,
         );
       }
     }

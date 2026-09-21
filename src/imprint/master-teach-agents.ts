@@ -444,7 +444,11 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
     }
     const { workflow, requestTransformSource, parameterValues } = candidate;
     if (workflow.site !== input.run.site)
-      issue(ctx, ['candidate', 'workflow', 'site'], 'wrong site');
+      issue(
+        ctx,
+        ['candidate', 'workflow', 'site'],
+        `site must equal ${JSON.stringify(input.run.site)}`,
+      );
     if (workflow.toolName !== input.tool.candidate.toolName)
       issue(ctx, ['candidate', 'workflow', 'toolName'], 'wrong public tool name');
     if (workflow.parserModule)
@@ -453,7 +457,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       issue(
         ctx,
         ['candidate', 'requestTransformSource'],
-        'request transform source and module must be supplied together',
+        'supply both candidate.requestTransformSource and candidate.workflow.requestTransformModule: "./request-transform.ts", or omit both',
       );
     if (
       workflow.requestTransformModule &&

@@ -304,6 +304,14 @@ actually requires them after navigation.
 
 When a specific action triggers the desired response, you may set `networkResponse.actionIndex` to that zero-based action index. Matching begins immediately before that click is dispatched; earlier request starts cannot satisfy it even if they finish later. Omit it to capture from navigation start. Navigation clicks poll their exact selector until it is clickable within the remaining navigation timeout, then dispatch once. Waiting does not activate an action-scoped capture. Choose this boundary from the observed operation, not a guessed response occurrence. A pre-action response may be cancelled or replaced by the action; do not treat its headers as the final result.
 
+Navigation readiness is ordered: `navigation.urlIncludes`, `navigation.selector`,
+and `navigation.cookie` are checked **before** `navigation.actions`. They must
+be satisfied by the initial navigation, not by a later click. Use
+`navigation.resultSelector` to wait for rendered results **after** the actions.
+`navigation.networkResponse.urlIncludes` matches the captured response URL;
+it is separate from the page URL readiness condition. A pre-action readiness
+failure means no declared click has run; fix that condition before changing selectors.
+
 Failed clicks include bounded target diagnostics: match count, first-match
 bounds and computed styles, parent identity, and the actual center-hit element.
 Inspect these facts with the current page before revising the interaction. A

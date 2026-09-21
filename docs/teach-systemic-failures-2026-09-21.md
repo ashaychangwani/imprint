@@ -8,16 +8,15 @@ strict independent audit, followed by an unchanged-code repeat and Hotels valida
 Keep each teach at a 30-minute target, assess at 60 minutes, and enforce 90 minutes.
 Audits retain a 45-minute limit. No recurring automation, MR, push or merge.
 
-Five attempts in this September 21 campaign have ended unsuccessfully (three
-operator stops, two natural failures). Flights 5 was stopped after 48.144 minutes
-on `d424359`; it had positive research results but narrowed search to a fixed
-route/date and grid to literal windows. No tools were published and no independent
-audit ran. The current checkpoint addresses repeated bootstrap/capture problems
-and that evidence-policy scope regression. Fresh Flights 6 is next after checks.
-
-`d424359`'s citation correction has unit and retained-byte validation, but Flights 5
-did not reach final parser review, so fresh end-to-end confirmation remains due.
-No four-tool teach, audit, or repeatability pass is claimed in this campaign.
+Six attempts in this September 21 campaign have ended unsuccessfully (four
+operator stops, two natural failures). Flights 6 stopped at 44.109 minutes on
+`760e3b4`: booking waited for its post-click URL before any click could execute,
+while vague schema errors repeatedly derailed search repair. No tools were
+published and no audit ran. The next small checkpoint clarifies readiness phases
+and exact repair fields, preserving execution and proof semantics. Fresh Flights 7
+follows checks. The original citation correction has synthetic/retained-byte
+validation, but Flights 5/6 did not reach final parser review. No four-tool teach,
+audit, or repeatability pass is claimed in this campaign.
 
 All local evidence remains under
 `~/.imprint/experiments/reteach-systemic-2026-09-21/`. The collector is on
@@ -46,7 +45,7 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | ID | Failure | Evidence and status | Smallest next action / trigger |
 | --- | --- | --- | --- |
 | SF-01 | Prompt examples and machine contracts disagree | September 20 Flights 1: all focused plans omitted required recorded-call metadata. Fixed in f1a0b6a; fresh Flights 2 passed that planning boundary. | Recurrence: September 21 Flights 1 exposed an obsolete first-live-case-only instruction, also asserted by a test. Corrected guidance/example/tests to match the existing all-case runner; fresh validation pending. |
-| SF-02 | Evidence formatting consumes the verification budget | Recurred in Flights 4: seven quotations exactly matched original raw strings, but only two of nine matched their extra-escaped JSON wrapper. The reader reached its final turn with grounded facts and was rejected. `d424359` accepts exact citations in either representation; synthetic regression fails before and passes after. | Validate in fresh Flights 5. Do not widen budgets or waive raw-source citation checks. |
+| SF-02 | Evidence formatting consumes the verification budget | Recurred in Flights 4: seven quotations exactly matched original raw strings, but only two of nine matched their extra-escaped JSON wrapper. The reader reached its final turn with grounded facts and was rejected. `d424359` accepts exact citations in either representation; synthetic regression fails before and passes after. | Flights 5 did not reach this stage; validate in Flights 6. Do not widen budgets or waive raw-source citation checks. |
 | SF-03 | Verification accepts an unrelated live request | September 20 calendar saved-response check passed parser fidelity despite an unnecessary date change. Explicit comparability assessment now rejects it; unchanged location input passes. | Track recorded/live input relationships at planning and review. Repair the selected pair without inventing new cases. |
 | SF-04 | Result membership or component identity is lost between raw data and output | Historical Flights 53 duplicated repeated frames; September 20 Flights 2 omitted other result groups and connecting options. Earlier 52 constructed a consumer selection from only part of a composite record. These are confirmed recurring artifact defects, not one universal parsing rule. | Check whether the compiler sees all selected raw bodies and actionable independent feedback. Repair its existing fixed cases; do not prescribe first-frame selection, concatenation, deduplication or a site-specific mapping in runtime. |
 | SF-05 | MVP verification and strict audit require different coverage | First isolated refine repair passed its raw checks and two identical calls, but strict audit could not establish the query parameter. Selecting distinct existing recorded queries made repair and extension pass. September 21 Flights 1 repeated the single-query plan despite a variable query contract. Stopped early to correct contradictory planner guidance and upstream evidence pruning. | If teach repeats this gap, align case-selection guidance with strict audit using the same fixed recorded set. Preserve unverified coverage rather than weakening the audit. |
@@ -57,13 +56,15 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | SF-09 | Boundary refresh overwrites same-run research history | Confirmed Flights 2. Fixed in `dce493a`; later runs retain full private observations and forward bounded history. | Watch boundary-changing follow-ups; old observations must never prove a changed candidate. |
 | SF-10 | Missing recording fixtures are detected only after compilation | Flights 2 failed here. `dce493a` gives planning body availability and checks fixture references; Flights 3 demonstrated early rejection. | Preserve the guard and let agents choose comparable completed captures. |
 | SF-11 | Generated request construction changes nested array structure | Calendar in Flights 3/4 and booking in Flights 3. Extra wrappers caused bad requests before agents corrected them. | A future agent-requested prepare/compare diagnostic could expose structure before spending network/browser time. Not implemented. |
-| SF-12 | Bootstrap cache ignores changed URL context | Flights 3 and Flights 5 retained a homepage jar/HTML after changing bootstrap to search. CDP browser pool does key on URL; disk jar cache does not. | Confirmed recurrence. Prepare a URL-context cache regression and the smallest isolation fix if another checkpoint is needed. |
+| SF-12 | Bootstrap cache ignores changed URL context | Flights 3 and Flights 5 retained a homepage jar/HTML after changing bootstrap to search. CDP browser pool does key on URL; disk jar cache does not. | Fixed in `760e3b4` with a URL-context regression; validate in fresh Flights 6. |
 | SF-13 | Master invents comparisons outside the recording | Flights 3 requested another route/date. `5d7b2be` clarified the existing fixed-case policy; Flights 4 master explicitly kept the recorded route/date. | Track actual inputs, not just compliance prose. |
 | SF-14 | Inspected evidence and observations disappear at agent handoffs | Flights 3 lost completed search response 245 during follow-up; proven/partial handoffs also omitted observations. Fixed in `5d7b2be`; Flights 4 retained IDs 245/295, selected fixture 245 and repaired a bad capture matcher from history. | Fresh continuation evidence validated; still watch later boundary changes. |
 | SF-15 | Focused planner cannot return an evidence-gap advisory | Flights 3 correctly recognized unavailable fixtures after a bad first proposal, but its only output type required a full valid plan; empty cases became a fatal schema error. | First remove upstream evidence loss. If needed, add a bounded advisory path to the master, not fake proof. Not implemented. |
-| SF-16 | One verifier status conflates raw-fact readiness and parser correctness | Flights 4 location supplied complete facts and matched calls, then prematurely marked itself unverified. `d424359` clarifies omission of status for sufficient raw expectations; explicit gaps remain unverified. | Validate the prompt correction in Flights 5; do not silently override an agent's uncertainty. |
+| SF-16 | One verifier status conflates raw-fact readiness and parser correctness | Flights 4 location supplied complete facts and matched calls, then prematurely marked itself unverified. `d424359` clarifies omission of status for sufficient raw expectations; explicit gaps remain unverified. | Flights 5 did not reach final review; validate in Flights 6 and do not silently override an agent's uncertainty. |
 
 | SF-17 | Fixed-case verification turns into fixed-constant tools | Flights 5 removed every search input and restricted calendar to literal recorded windows, although search route/date mappings were grounded and the working calendar method could expose a different input shape. | Clarify coverage versus mapping support; require recorded meaning, actual construction, and independent result evidence together. Preserve ambiguous/no-op failures. Validate fresh, without inventing cases. |
+| SF-18 | Consumer cannot inspect retained sibling raw bodies | Flights 6 booking received the producer observation but result inspection only searches its own history. | Track recurrence; a same-run read-only source lookup must remain separate from candidate-proof eligibility. Not implemented. |
+| SF-19 | Pre-action readiness confused with post-action completion | Flights 6 booking waited for a URL that its unexecuted clicks would produce, three times. | Phase guidance plus pending-action timeout diagnostics; regression reproduces zero clicks. Fresh validation next. |
 
 ## Code-path observations to test, not established failures
 
@@ -126,6 +127,7 @@ not used to justify a production refactor during an active run.
 | September 21 Flights 3 | dce493a | Natural failure at 78.914 minutes; 1/4 published | SF-14 lost completed fixture, then SF-15 planner output failure. Missing-body guard worked; search returned 20 distinct rows. $21.0471232. |
 | September 21 Flights 4 | 5d7b2be | Operator stopped at 60.108 minutes; calendar published | SF-02/16 blocked parser evaluation; booking waited. Retention and fresh research chaining worked. $17.8705224; one interrupted usage span missing. |
 | September 21 Flights 5 | d424359 | Operator stop after 48.144 minutes; 0/4 published | SF-12 reused wrong bootstrap HTML; SF-07 repeated matcher typo; SF-17 froze useful inputs for lack of recorded contrasts. Positive research exists; final parser verification not reached. $13.6372248 reported; unflushed tail unknown. |
+| September 21 Flights 6 | 760e3b4 | Operator stop after 44.109 minutes; 0/4 published | Setup-URL isolation and repairable handoffs exercised successfully; SF-01 vague schema diagnostics and SF-19 pre-action waits blocked completion. $11.6595168 reported; one span missing usage. |
 
 Flights 1 accounting: 2,546,811 input tokens, including 1,609,728 cache reads;
 46,340 output tokens; zero reported cache writes; $5.3190232 estimated base API
@@ -719,3 +721,121 @@ regressions passed in the complete suite, including the browser-form test that
 had timed out during the scratch run. Lint, type checking, diff whitespace,
 website build and 1440/390px visual inspection passed. The existing bundle-size
 warning remains. No fresh live result is implied by these checks.
+
+
+## Flights 6 in progress on 760e3b4
+
+Started 11:04:23 UTC in `flights-6/home`; 19 GiB available, AC power and
+process-bound sleep prevention verified. Target 11:34, assess at 12:04, hard
+stop at 12:34 UTC. Exact recording and four-operation guidance are unchanged.
+Initial discovery retained all four operations and reusable input fields.
+However, the master again chose the 206→218 path while retaining 245/256 as
+contrasts. Its compact evidence explicitly has no responseBodyLength for 206
+and 51,286 bytes for 245; this initial choice is not caused by missing metadata.
+Research/final planning must resolve mode comparability before claiming proof.
+Location first research returned New York data and deferred other recorded
+queries; inspect final selected verification cases before claiming coverage.
+No final tool or live validation pass is established at this checkpoint.
+
+Private `flights-5/model-stage-timing.json` records 58 research model calls and
+2,146.13 summed model seconds. Calls overlap, so this is not additive wall time;
+compiler and interrupted tail usage may be absent from that role breakdown.
+Accounting remains in `accounting.json` with its separate completeness caveats.
+
+At 21 minutes, Flights 6 first-pass research finished: location proven, search
+partial for the booking-selection representation, calendar partial for ignored
+window bounds, and booking blocked pending fresh producer data. Search kept
+reusable route/date fields grounded by construction and returned record attributes;
+it did not freeze them merely for missing contrasts. Calendar explicitly detected
+that its initial successful capture ignores the four claimed bounds.
+
+The URL cache fix exercised real changed setup context: calendar's homepage
+snapshot (345,917 characters) and Flights-page snapshot (2,047,486 characters)
+were minted separately under two URL hashes. Search's capture timeout included
+the new predicate diagnostics. Its matcher still had a slash/dot mistake, but
+it switched to rendered HTML after the observed page showed results without a
+captured shopping response; do not claim the diagnostic proved the cause or
+that the agent repaired this matcher. Calendar used the correct matcher on its
+first capture and returned the raw grid after 33.923 seconds of cold execution.
+
+
+Flights 6 at 28–31 minutes reproduced malformed advisory handling: search
+returned inspect_result fields at the root, omitted binding, and asked for a
+12,000-character slice (the contract maximum is 2,000). The repair supplied
+binding but omitted resultQuery. The controller returned the validation failure
+and actual observations to the master instead of terminating the whole teach.
+This exercises the earlier 60392ef protection, without accepting invalid proof.
+
+A separate evidence-access limitation emerged: booking requested read-only
+inspection of the successful sibling search observation. The validator searches
+only the current researcher's observations, so it reported no retained result
+text even though the search body exists on disk and its sibling handoff names
+it. Search must currently inspect its own body and forward slices, or become a
+callable proven producer first. Track this as SF-18: sibling raw evidence cannot
+be independently inspected by the consuming researcher. A possible small
+correction is a read-only, same-run source lookup distinct from proof eligibility;
+do not merge sibling observations into the consumer's candidate-proof history.
+Not implemented. Search's saved successful HTML contains 60 data-gs attributes,
+so its claim of a missing representation is not yet an established absence.
+The attributes' semantics and complete record pairing still require proof.
+
+At 31 minutes calendar's narrowed route/selected-date contract was re-executed
+and reported proven. Location remains proven. No tool has passed final MVP
+verification or independent audit in this attempt yet.
+
+
+At 35 minutes, search independently found the live row's data-gs selection and
+paired flight identity in retained HTML. Its proposed retest then failed schema
+validation before execution: site was google.com rather than the current site
+id, and requestTransformModule was absent despite requestTransformSource. The
+repair diagnostic only said “wrong site” and “source and module must be supplied
+together”; the repair guessed a URL as the site and still omitted the module.
+This is recurring SF-01 protocol drift amplified by underspecified feedback.
+A two-message correction is prepared privately as pending-research-diagnostics.patch,
+not applied to this active run. It supplies the expected site id and exact module
+field/path. A targeted synthetic check fails before and passes after (48 assertions),
+and type checking passes. No validation predicate or proof rule is relaxed.
+
+At 40 minutes, booking confirmed cross-navigation token rotation, then changed
+the diagnostic to stable complete flight identity. Both initial token-based and
+first identity-selector attempts timed out (91.645 seconds cold, 60.229 warm).
+Subsequent source inspection corrected this initial diagnosis: these were
+pre-action URL readiness waits, so none of the proposed selectors executed. The same failed attempts remain in its research history.
+
+
+## Flights 6 stop: readiness phase confused with post-action completion
+
+The booking navigation set urlIncludes to the booking page, then declared clicks
+that would reach it. The runtime checks page URL/selector/cookie conditions before
+executing actions. Therefore all three timeouts happened before any click target
+was even evaluated. Changing the selector could not fix them. This is SF-19:
+readiness phases are exposed as nearby fields without sufficiently explicit
+ordering, and the timeout hides whether actions started. It is not a selector
+failure, internet outage, or insufficient cookie wait. The earlier selector
+interpretation above is corrected by this execution-order evidence.
+
+The checkpoint keeps runtime ordering and deadlines intact. It adds the factual
+pending-action count to this timeout and clarifies pre-action URL/selector/cookie
+versus post-action resultSelector in research, planning and compiler guidance.
+A synthetic CDP regression reproduces the same final-URL-before-click deadlock;
+old diagnostics fail its assertion. The two prepared schema diagnostics now name
+the expected site id and exact transform-module field/path. No proof is waived,
+no site-specific rule is added, and no browser state is shared across tools.
+
+Stopped cleanly with SIGINT, exit 130, at 44.109 minutes. Process group exited
+before code/prompt changes. No published tools or audit. Location and narrowed
+calendar were research-proven; search had real results and discovered its live
+selection attributes, but schema errors and dependent readiness waits prevented
+completion. The prior malformed-handoff protection demonstrably returned actual
+history to the master, which identified the error and requested repair.
+
+Flights 6 reported 7,342,468 input (5,554,432 cache reads), 114,280 output,
+zero cache writes reported, and $11.6595168 base API equivalent. Root trace closed;
+one analyze span lacks usage. The six attempts total $88.1556528 reported, with
+five observed missing-usage spans and the earlier interrupted tail still unknown.
+Original failed calls, research snapshots and stop reason remain in flights-6.
+
+Checkpoint validation: 172 focused tests passed (987 assertions), including the
+pre-action deadlock and exact schema-diagnostic regressions. Type checking, lint,
+diff whitespace, website build and 1440/390px visual inspection passed. The
+existing website bundle-size warning remains. No live pass is implied.

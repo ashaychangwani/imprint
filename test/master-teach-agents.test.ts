@@ -2075,6 +2075,23 @@ describe('prompts and pre-plan discovery', () => {
     ).toEqual(partial);
     expect(repairCalls).toBe(2);
 
+    const malformedCandidate = structuredClone(candidate);
+    malformedCandidate.workflow.site = 'wrong-fixture.invalid';
+    malformedCandidate.requestTransformSource = 'export function transform() { return {}; }';
+    malformedCandidate.workflow.requestTransformModule = undefined;
+    const malformedTest = JSON.stringify({
+      ...output,
+      action: 'test',
+      candidate: malformedCandidate,
+      basedOnObservationId: undefined,
+    });
+    expect(() => parseApiResearchOutput(malformedTest, input)).toThrow(
+      `site must equal ${JSON.stringify(input.run.site)}`,
+    );
+    expect(() => parseApiResearchOutput(malformedTest, input)).toThrow(
+      'candidate.workflow.requestTransformModule: "./request-transform.ts"',
+    );
+
     const invalidModeCandidate = structuredClone(candidate);
     const invalidModeRequest = invalidModeCandidate.workflow.requests[0];
     if (!invalidModeRequest) throw new Error('test candidate has no request');

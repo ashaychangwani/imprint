@@ -1216,6 +1216,14 @@ with the consumer result. If the planned example or adapter rejects that valid
 record, report the exact incompatibility to the master for repair or an explicit
 scope decision. Do not extrapolate a passing singleton to that structure.
 
+Navigation readiness is ordered: `navigation.urlIncludes`, `navigation.selector`,
+and `navigation.cookie` are checked **before** `navigation.actions`. They must
+be satisfied by the initial navigation, not by a later click. Use
+`navigation.resultSelector` to wait for rendered results **after** the actions.
+`navigation.networkResponse.urlIncludes` matches the captured response URL;
+it is separate from the page URL readiness condition. A pre-action readiness
+failure means no declared click has run; fix that condition before changing selectors.
+
 Navigation clicks poll the exact agent-selected selector until it is clickable,
 using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches
 once; an action-scoped response capture starts at dispatch, not during that wait.

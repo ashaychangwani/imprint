@@ -186,6 +186,14 @@ navigation. The runtime does not infer the matcher or semantic meaning. Use this
 cheaper direct API constructions cannot reproduce page-owned transport.
 If the selected response alone completes the request, omit `waitUntil`; retain
 other waits only when the researched workflow needs them after navigation.
+Navigation readiness is ordered: `navigation.urlIncludes`, `navigation.selector`,
+and `navigation.cookie` are checked **before** `navigation.actions`. They must
+be satisfied by the initial navigation, not by a later click. Use
+`navigation.resultSelector` to wait for rendered results **after** the actions.
+`navigation.networkResponse.urlIncludes` matches the captured response URL;
+it is separate from the page URL readiness condition. A pre-action readiness
+failure means no declared click has run; fix that condition before changing selectors.
+
 Navigation is not an implicit pre-step: declare it as the load-bearing workflow
 request when its rendered or captured response is the evidence-backed result.
 

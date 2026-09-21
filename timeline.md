@@ -14519,3 +14519,26 @@ regressions passed in the complete suite, including the browser-form test that
 had timed out during the scratch run. Lint, type checking, diff whitespace,
 website build and 1440/390px visual inspection passed. The existing bundle-size
 warning remains. No fresh live result is implied by these checks.
+
+
+## 2026-09-21 — Explain readiness phases and exact research repairs
+
+Flights 6 on 760e3b4 stopped at 44.109 minutes with no published tools. It
+validated separate setup-URL caches and returned malformed handoffs to the
+master without terminating the teach. It retained reusable search inputs and
+correctly narrowed calendar to route plus selected dates. Completion still failed.
+
+The decisive repeated wait was mechanical: booking required its final URL before
+running the clicks that could produce it. Three calls therefore never clicked.
+Timeout diagnostics now state that actions have not started; research/planning/
+compiler guidance distinguishes pre-action readiness from post-action result
+waiting. Exact expected site and transform-module diagnostics also replace vague
+repair errors that caused another round of invalid output. Execution semantics,
+timeouts, proof checks and site-independent strategy ownership remain unchanged.
+Fresh Flights 7 follows checkpoint checks; no success or repeatability is claimed.
+Detailed systemic observations, evidence and costs are in the September 21 ledger.
+
+Checkpoint validation: 172 focused tests passed (987 assertions), including the
+pre-action deadlock and exact schema-diagnostic regressions. Type checking, lint,
+diff whitespace, website build and 1440/390px visual inspection passed. The
+existing website bundle-size warning remains. No live pass is implied.

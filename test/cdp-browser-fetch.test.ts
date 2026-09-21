@@ -1387,6 +1387,16 @@ describe('navigation network-response capture', () => {
       });
       expect(await firstAction?.text()).toBe('menu-4');
       expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
+      await expect(
+        browser.navigate?.('https://fixture.test/page', {
+          urlIncludes: '/after-click',
+          timeoutMs: 120,
+          pollIntervalMs: 10,
+          actions,
+        }),
+      ).rejects.toThrow('navigation.actions not started (2 pending)');
+      expect(clicked).toBe(0);
+      expect(targetAttempts).toBe(0);
       for (const [state, message] of [
         ['missing', 'within 120ms'],
         ['diagnostic', 'target diagnostics: {"reason":"zero_area","matchedCount":2}'],
