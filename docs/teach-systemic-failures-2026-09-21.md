@@ -241,3 +241,172 @@ known process-cleanup test race failed once, then passed its rerun and the final
 full suite. Website build and desktop/mobile text rendering passed. These checks
 validate mechanics, not fresh-teach reliability. Next command:
 `python3 ~/.imprint/experiments/reteach-systemic-2026-09-21/run.py flights-3 google-flights`.
+
+
+## Flights 3 active validation
+
+Fresh Flights 3 started 2026-09-21 07:38:45 UTC on `dce493a`, PID/PGID 79138,
+using the original recording and four-operation guidance. Home is
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-3/home`. Target 08:08:45,
+assessment 08:38:45, hard deadline 09:08:45 UTC. AC power, fully charged battery,
+about 20 GiB available. No implementation changes during this run; no prior
+artifacts supplied to its teaching agents. The task collector remains on 6443;
+there is no recurring automation.
+
+Approximate Flights 2 wall-clock stages from progress/rollout timestamps:
+0–8 minutes selection; 8–24 first-pass research plus an overlapping location draft;
+24–52 research follow-ups and contract revisions; 52–58 focused planning/master
+acceptance; 58–66 search/calendar compilation; 66–78 generated-tool verification;
+78–79.6 final unchanged-plan failure. Nested trace totals overlap and must not be
+summed as wall time. The largest delay was research/contract coordination, not
+disk exhaustion or loss of power/network. Browser capture waits caused some
+local delays, including wrong generated page-state encodings; warm requests were
+usually much faster after the corresponding repair.
+
+
+SF-11 (recurring generated request-structure errors): Flights 3 booking added an
+unsupported location array layer, making its prepared body 12 bytes longer than
+the recording. Calendar repeated the same kind of error across four locations,
+making its body 24 bytes longer. Each malformed construction traversed transport
+rungs before the agent used prepared-request comparisons to correct nesting.
+Both errors were generated-artifact mistakes; changing network transport could
+not repair them. The existing comparisons enabled repair, but arrive after live
+execution. Track whether a small agent-requested render/compare step before
+execution would remove these repeated sweeps. This is a candidate for future work,
+not an automatic runtime rule equating every structural difference with failure.
+Do not add site-specific body mappings or skip legitimate browser state.
+
+
+SF-12 (observed stale setup context): Flights 3 calendar changed its bootstrap
+page from the home page to a search page, but fetch-bootstrap reused a 199-second
+old jar containing 339,370 bytes of home-page HTML. Required captures were absent,
+and execution escalated to a fresh CDP context. `getOrMintCdpJar` scopes its disk
+cache by tool/rung and age but does not bind it to bootstrap URL; `MintedJar` does
+not record that URL. The live CDP pool does key on bootstrap URL. A narrowly scoped
+cache-context fix is a candidate if this causes repeated setup failure; no change
+is made during the active run, and this does not justify sharing state across
+rungs or removing readiness requirements.
+
+
+Flights 3 checkpoint at 44.7 minutes: location and booking research are proven;
+calendar follow-up is now proven; search remains partial pending a narrower
+contract. Calendar retained all eleven observations (seven initial plus four
+follow-up), confirming same-run history retention at this boundary. Its shifted
+window initially clicked a stale positional selector and moved the return edge
+the wrong way; using the recording's semantic Scroll down selector repaired the
+seven-record response. A supplemental route-label check then timed out because
+the agent expected Las Vegas for a San Diego identifier; the retained failed
+response identified San Diego and supported correction without another request.
+This was an agent interpretation/readiness-selector error, not evidence of an
+internet outage. The resulting candidate supports two recorded window shapes;
+general arbitrary window support is not established. No strict audit yet.
+
+
+SF-13 (recording-only policy drift): at 47 minutes in Flights 3, the master
+requested a new airport-code route/date after the retained researcher correctly
+reported that no selected one-way recording changed the origin. The researcher
+then tested SFO-to-LAX on 2026-10-20, absent from the selected recorded call.
+This violates the requested fixed recording-backed case policy; a successful
+result cannot be counted as a matched recorded/live verification case. The
+master prompt contains a short prohibition on extra exploratory challenges,
+but later unconstrained instructions request a distinguishing comparison. Other
+verification agent prompts carry an explicit recording-backed policy override.
+Review this prompt inconsistency after the active run; keep its observations
+and accounting, and do not silently present it as a compliant paired example.
+
+
+SF-14 (research evidence lost between follow-ups and planning): Flights 3
+search inspected completed request 245 during its first pass, but a later
+follow-up rebuilt the focused evidence from the selected scope plus only that
+follow-up's additional sequences. `mergeResearch` replaces the old evidence
+projection. `researchApiMvpCall` keeps inspected sequence IDs only in memory and
+saves observations without those IDs, so later boundary/follow-up passes do
+not reconstruct the earlier inspection evidence for downstream planners. The
+search planner then chose document request 1 as its replay result: that body
+is the generic landing page and contains neither flight cards nor data-gs
+selection attributes. Its body exists, so the new availability guard correctly
+does not catch this semantic mismatch. A minimal repair is to preserve the
+agent-selected inspection IDs alongside same-run history and reconstruct their
+evidence on follow-up; agents still decide which request is comparable.
+
+The same controller also drops `outcome.observations` while constructing proven
+and partial handoffs, despite the researcher returning that bounded history.
+Only blocked handoffs carry the complete returned list. Forward the existing
+field so the master and planner can inspect successful contrasts and failures
+without relying exclusively on the final summary. These defects are distinct
+from the already-fixed local observation-file overwrite. No source edit has
+been applied while Flights 3 is active.
+
+
+Flights 3 sixty-minute assessment (08:38:45 UTC): all four research handoffs
+are proven, a four-tool/two-wave plan exists, and final booking-plan/chain
+review is underway before compilation. Continue
+within the original 09:08:45 hard deadline because this is real phase progress.
+The search replay proposal still names landing-page request 1; verification
+must reject unsupported extraction rather than waive the missing search fixture.
+Master corrected the booking chain paths from itineraries to the producer's
+accepted items result shape. No publication or independent audit has completed.
+
+
+Flights 3 checkpoint at 74 minutes: search compiled and its live call completed
+in 33.495 seconds including cold CDP setup. The independent reader then rejected
+request 1 as incomparable with the claimed SJC-to-SAN search; this was an honest
+unverified result, not a successful teach. Location lookup published after both
+New York and SJC pairs passed, including complete result groups and associated
+airports. Each pair reread both selected recorded fixtures; this repeated work
+is a measured efficiency issue, separate from semantic failures. The master is
+now revising from search's fixture failure; calendar and booking remain unchecked.
+
+A minimal candidate correction was prepared outside the active checkout in
+`~/.imprint/experiments/reteach-systemic-2026-09-21/scratch-history-fix`, with
+`pending-history-fix.patch` and its manifest in that campaign root. It saves
+and restores inspected recording IDs, forwards existing observation history
+in proven/partial handoffs, and explicitly keeps master-directed comparisons
+within recording-backed cases. It has not yet been applied to the running teach.
+Two targeted regressions fail against the old code and pass with the repair;
+201 focused tests and all 1,985 full-suite tests pass (6,434 assertions, 110.53s).
+Lint, types, website build, and 1440/390px visual checks pass; the existing large
+JavaScript chunk warning remains. The scratch preview/browser are stopped.
+
+
+At 77.5 minutes, the master requested focused replanning of search and calendar.
+It correctly identified the incomparable landing-page fixture but incorrectly
+asserted that request 206 has a captured core response. The new planner body
+availability guard must reject that source. Calendar did not reach compilation: its
+focused plan had two request definitions while the exact proven candidate had
+three (route-label navigation plus mutually exclusive initial/shifted branches).
+The master requested preservation of the proven definitions; this is a planning
+mismatch, not a demonstrated calendar live failure. Booking remains waiting on
+a verified producer.
+
+
+Flights 3 final result: exited 1 at 08:57:40 UTC after 78.914 minutes, with
+1 of 4 tools ready (location lookup). Search remained recording-unverified;
+calendar had a plan/request-definition mismatch; booking never reached a
+verified producer chain. All owned processes exited, and no strict audit was
+started for this incomplete four-operation teach. The availability guard did
+reject request 206 in the retained planner repair turn. The planner then returned
+an empty recordedCall request list because its supplied evidence lacked a
+comparable response; the schema correctly rejected it.
+
+SF-15 (unrepresentable planning gap terminates the stage): a focused planner can
+recognize that its evidence cannot produce a valid verification plan, but its
+output contract still requires a complete plan. After one invalid-output repair,
+that failure terminates the whole planning fanout instead of returning a factual
+advisory gap to the master, unlike malformed research handoffs. This occurred
+once here and remains a tracked architectural limitation; no new fallback or
+weakened fixture validation was added. First fix the demonstrated upstream
+evidence loss and check a fresh run before expanding planner orchestration.
+
+Flights 3 accounting: 12,293,979 input tokens including 8,939,648 cache reads;
+202,697 output; zero reported cache writes; $21.0471232 estimated base API cost.
+No missing usage spans. All three campaign attempts total $44.9883888,
+29,668,587 input tokens (22,995,072 cached), 454,815 output, zero reported writes,
+and two missing usage spans from the interrupted first attempt. These are base
+API equivalents, not subscription charges; prior pricing caveats still apply.
+
+The tested pending patch was applied only after Flights 3 and its process group
+exited. In-checkout regression checks, lint, and type checking passed. The full
+suite and website checks above used identical patched files in the isolated
+scratch copy. Next: commit this checkpoint and start a new `flights-4` teach from
+the original recording. Do not resume Flights 3 or seed its generated artifacts.

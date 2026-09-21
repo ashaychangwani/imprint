@@ -14418,3 +14418,35 @@ mobile widths without horizontal overflow. The first full run exposed two mocks
 that assumed cleared history; their boundary-refresh behavior now chooses current
 candidate proof. The known process-cleanup race failed once, then passed isolated
 and in the final full suite. Private logs preserve those failed checks too.
+
+
+## 2026-09-21 — Keep inspected recording evidence through research follow-ups
+
+Fresh Flights 3 on dce493a finished unsuccessfully after 78.914 minutes, with
+location lookup verified and published, and three operations still unready.
+The missing-body guard worked: it rejected request 206 during focused replanning.
+Earlier, search had incorrectly used a generic landing page as its recording
+fixture; the independent reader rejected that comparison. Calendar needed its
+plan aligned with its proven workflow; booking still depended on verified search.
+
+The concrete upstream defect was lost evidence between research follow-ups.
+Research had inspected a completed search response, but later projections dropped
+it. Save the selected inspection IDs with same-run history and rebuild that
+evidence for downstream planning. Also forward the already-returned observation
+list in proven/partial handoffs, rather than giving the master only one selected
+observation. The master prompt now explicitly keeps required comparisons and
+follow-ups within recorded cases; this run had invented an extra route test.
+
+The small fix passed 201 focused tests and the full 1,985-test suite in an isolated
+scratch copy, plus lint/types and website build/desktop/mobile inspection. The
+new regressions fail on the old code and pass after repair. It was applied only
+after the active teach exited, then its targeted checks, lint and types passed
+in this checkout. No audit or repeatability pass is claimed.
+
+Evidence and accounting: `~/.imprint/experiments/reteach-systemic-2026-09-21/`.
+Flights 3 used 12,293,979 input tokens (8,939,648 cached), 202,697 output, zero
+reported writes, and $21.0471232 estimated base API cost. Three attempts total
+$44.9883888 with two unreported usage spans from the interrupted first attempt.
+The failure ledger tracks request-construction errors, stale bootstrap context,
+recording-policy drift, lost handoff evidence, and the planner's inability to
+return an unverified-plan advisory. Fresh validation is next; no cron or MR.

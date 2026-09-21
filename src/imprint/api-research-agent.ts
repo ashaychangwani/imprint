@@ -18,7 +18,10 @@ import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
 import { redactFreeformText } from './freeform-redact.ts';
-import { ApiResearchObservationSchema } from './master-teach-agent-contracts.ts';
+import {
+  ApiResearchInputSchema,
+  ApiResearchObservationSchema,
+} from './master-teach-agent-contracts.ts';
 import type {
   ApiResearchCandidate,
   ApiResearchHandoff,
@@ -439,11 +442,25 @@ export async function researchApiMvpCall(input: {
       const saved = JSON.parse(readFileSync(historyPath, 'utf8'));
       const checked = ApiResearchObservationSchema.array().safeParse(saved.observations);
       if (checked.success) savedObservations = checked.data;
+      const inspected = ApiResearchInputSchema.shape.inspectedRequestSeqs.safeParse(
+        saved.inspectedRequestSeqs,
+      );
+      if (inspected.success) {
+        const known = new Set(input.recordingIndex.requestSeqs);
+        for (const seq of inspected.data ?? []) {
+          if (known.has(seq)) inspectedRequestSeqs.add(seq);
+        }
+      }
     } catch {
       input.report?.(
         `${input.tool.candidate.toolName}: prior research history could not be read; retaining the supplied handoff`,
       );
     }
+  }
+  // Restore the agent-selected recording evidence for downstream planning too.
+  // A retained conversation remembers an inspection; a rebuilt projection does not.
+  if (inspectedRequestSeqs.size > 0 && input.inspectRequests) {
+    evidence = input.inspectRequests([...inspectedRequestSeqs]).accumulated;
   }
   const observations: ApiResearchObservation[] = [
     ...savedObservations,
@@ -650,7 +667,7 @@ export async function researchApiMvpCall(input: {
         if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
         writeFileSync(
           pathJoin(input.toolDir, 'api-research.json'),
-          `${JSON.stringify({ decision, observation, observations }, null, 2)}\n`,
+          `${JSON.stringify({ decision, observation, observations, inspectedRequestSeqs: [...inspectedRequestSeqs] }, null, 2)}\n`,
           'utf8',
         );
         return {

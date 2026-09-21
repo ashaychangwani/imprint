@@ -1414,6 +1414,8 @@ describe('prompts and pre-plan discovery', () => {
     const master = prompt('master-teach-decision.md');
     expect(master).toContain('recorded evidence pool, not an ordered execution');
     expect(master).toContain('useful contrasts in `representativeSeqs`');
+    expect(master).toContain('research follow-ups and required parameter comparisons too');
+    expect(master).toContain('do not request a newly invented route');
     const planner = prompt('master-teach-focused-planner.md');
     expect(planner).toContain('executes and reviews every selected `live` verification case');
     expect(planner).toContain('at most three distinct recorded cases');

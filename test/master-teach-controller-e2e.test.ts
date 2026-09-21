@@ -1356,6 +1356,14 @@ describe('fresh foreground master controller end to end', () => {
   it('returns a partial MVP to the same researcher with master-selected sibling evidence', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
+      const recording = SessionSchema.parse(readJson(recordingPath));
+      const alternate = structuredClone(recording.requests[1]);
+      if (!alternate?.response) throw new Error('missing fixture detail response');
+      alternate.seq = 4;
+      alternate.url = 'https://fixture.invalid/api/items/item-2';
+      alternate.response.body = JSON.stringify({ id: 'item-2', name: 'Inspected alternate item' });
+      recording.requests.push(alternate);
+      writeFileSync(recordingPath, JSON.stringify(recording));
       const base = lifecycleFailureFixture({
         runId: 'run-e2e-partial-research-follow-up',
         events: [],
@@ -1409,11 +1417,12 @@ describe('fresh foreground master controller end to end', () => {
                 return {
                   binding: decision.binding,
                   action: 'inspect' as const,
-                  requestedRequestSeqs: [1],
+                  requestedRequestSeqs: [1, 4],
                   reason: 'Inspect the neighboring producer request before testing the consumer.',
                 };
               }
               expect(input.inspectedRequestSeqs).toContain(1);
+              expect(input.inspectedRequestSeqs).toContain(4);
               expect(JSON.stringify(input.evidence)).toContain('https://fixture.invalid/api/items');
               sawNeighborInspection = true;
             }
@@ -1443,6 +1452,8 @@ describe('fresh foreground master controller end to end', () => {
               );
               expect(input.followUp.relevantRequestSeqs).toEqual([1]);
               expect(input.evidence.payload.entries.length).toBeGreaterThan(1);
+              expect(input.inspectedRequestSeqs).toContain(4);
+              expect(JSON.stringify(input.evidence)).toContain('Inspected alternate item');
             }
             return decision;
           },
@@ -1451,6 +1462,8 @@ describe('fresh foreground master controller end to end', () => {
               ({ toolName, status }) => toolName === CONSUMER_NAME && status === 'partial',
             );
             if (input.decisionPurpose === 'research_review' && partial) {
+              expect(partial.observations).toHaveLength(1);
+              expect(partial.observations?.[0]?.id).toBe(partial.observation?.id);
               const desiredPlan = desiredFromCurrent(input);
               const producer = desiredPlan.tools.find(
                 ({ candidate }) => candidate.toolName === PRODUCER_NAME,
@@ -1491,6 +1504,14 @@ describe('fresh foreground master controller end to end', () => {
             plannerCalls += 1;
             expect(sawFollowUp).toBeTrue();
             expect((input.apiResearch ?? []).every(({ status }) => status === 'proven')).toBeTrue();
+            for (const handoff of input.apiResearch ?? []) {
+              expect(
+                handoff.observations?.some(({ id }) => id === handoff.observation?.id),
+              ).toBeTrue();
+            }
+            if (input.tool.candidate.toolName === CONSUMER_NAME) {
+              expect(JSON.stringify(input.evidence)).toContain('Inspected alternate item');
+            }
             return await basePlanner(input);
           },
         },

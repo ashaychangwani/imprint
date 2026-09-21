@@ -619,6 +619,42 @@ describe('focused API research', () => {
         inspectedRequestSeqs: [13],
         relevantEvidence: expandedEvidence,
       });
+      const saved = JSON.parse(readFileSync(join(toolDir, 'api-research.json'), 'utf8'));
+      expect(saved.inspectedRequestSeqs).toEqual([13]);
+      inspected = [];
+      const continued = await researchApiMvpCall({
+        run,
+        recordingIndex: { ...recordingIndex, requestSeqs: [12, 13] },
+        tool,
+        evidence,
+        inspectRequests: (requestSeqs) => {
+          inspected = requestSeqs;
+          return { delta: expandedEvidence, accumulated: expandedEvidence };
+        },
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) => {
+            expect(input.previousProgress).toBeUndefined();
+            expect(input.inspectedRequestSeqs).toEqual([13]);
+            expect(input.evidence).toEqual(expandedEvidence);
+            return {
+              binding,
+              action: 'proven',
+              candidate: revised,
+              basedOnObservationId: result.observation.id,
+              reason: 'Retained evidence still supports the unchanged request.',
+            };
+          },
+          runApiTool: async () => {
+            throw new Error('Restoring inspected evidence must not repeat a live request');
+          },
+        },
+      });
+      expect(inspected).toEqual([13]);
+      expect(continued.observation.id).toBe(result.observation.id);
+      expect(continued.observations).toHaveLength(2);
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }

@@ -2772,6 +2772,7 @@ async function researchSelectedOperations(input: {
               summary: outcome.summary,
               candidate: outcome.candidate,
               observation: outcome.observation,
+              observations: outcome.observations,
               missingProof: outcome.missingProof,
             });
           }
@@ -2784,6 +2785,7 @@ async function researchSelectedOperations(input: {
             summary: outcome.summary,
             candidate: outcome.candidate,
             observation: outcome.observation,
+            observations: outcome.observations,
           });
           await input.onProven?.(sourceTool, outcome, handoff, evidence);
           return handoff;
