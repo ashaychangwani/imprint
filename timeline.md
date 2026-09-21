@@ -14450,3 +14450,37 @@ $44.9883888 with two unreported usage spans from the interrupted first attempt.
 The failure ledger tracks request-construction errors, stale bootstrap context,
 recording-policy drift, lost handoff evidence, and the planner's inability to
 return an unverified-plan advisory. Fresh validation is next; no cron or MR.
+
+
+## 2026-09-21 — Accept exact response quotations during independent verification
+
+Fresh Flights 4 on 5d7b2be reached four proven research handoffs in 41.8 minutes.
+Saved inspection IDs survived the search follow-up, the planner selected the
+completed response fixture, and booking used a fresh coherent search selection.
+The master also corrected the compiled producer/consumer output path itself.
+Calendar passed recording/live and MVP checks. These are improvements, not a
+four-tool teach or repeatability pass.
+
+At the 60-minute assessment, stop this attempt to correct two verifier failures.
+Search supplied quotations that exactly match original response bytes, but the
+host checked only a JSON-wrapped copy with extra escaping. Accept exact quotes
+from either representation. Location supplied complete facts and matched calls
+but set an unverified verdict before seeing parser output; clarify the separate
+phase completion meanings without overriding genuine evidence gaps. The focused
+regression fails before the citation fix and passes afterward. Source changes
+were applied only after the teach's owned process group exited.
+
+Flights 4: operator stop, exit 130, 60.108 minutes, one of four tools published,
+no audit. Reported tokens: 10,352,473 input including 7,431,936 cached; 160,780
+output; zero writes reported; one interrupted usage span missing. Estimated base
+API cost $17.8705224, bringing four attempts to $62.8589112 before unknown usage
+and surcharges. Evidence remains under the September 21 campaign directory.
+Fresh teach validation follows this checkpoint.
+
+
+Checkpoint validation: 1,987 tests passed across 100 files (6,445 assertions,
+109.49 seconds); lint and type checking passed. Website build and desktop/mobile
+inspection passed without horizontal overflow. The original failed search
+review's nine quotations were checked offline: old validation accepts two, the
+corrected exact-source validation accepts all nine. No parser pass is inferred
+from citation acceptance. Fresh validation starts from this committed checkpoint.

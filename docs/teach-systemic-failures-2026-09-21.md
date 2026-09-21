@@ -410,3 +410,163 @@ exited. In-checkout regression checks, lint, and type checking passed. The full
 suite and website checks above used identical patched files in the isolated
 scratch copy. Next: commit this checkpoint and start a new `flights-4` teach from
 the original recording. Do not resume Flights 3 or seed its generated artifacts.
+
+
+## Flights 4 active validation
+
+Fresh Flights 4 started 2026-09-21 09:01:00 UTC on `5d7b2be`, PID/PGID 13399.
+Foreground driver session 47230 uses the original recording, unchanged
+four-operation guidance, and a new home under the campaign's `flights-4/`.
+Target 09:31, assessment 10:01, hard deadline 10:31 UTC. Available disk is
+19 GiB; the task collector remains reachable on 6443. No prior generated
+artifacts are supplied. Source code and prompts stay unchanged during this run.
+
+
+Post-run offline inspection of Flights 3's retained live search output found
+20 rows and 20 distinct complete rows. The Flights 2 triplication failure did
+not recur in this result. This count check is not a full semantic audit: the
+independent reader stopped on the incomparable fixture before checking search
+output meaning and completeness.
+
+
+Flights 3 model-stage timing is saved privately in
+`flights-3/model-stage-timing.json`. Structured-output classification found seven
+master decisions totaling 888.94 seconds and ten focused-planning calls totaling
+893.49 seconds; the latter include concurrent calls. They emitted 39,211 and
+38,134 output tokens respectively. Research used 39 decisions totaling 2,119.38
+seconds. These are overlapping model-call durations, not additive wall-clock
+stages. Complete-plan regeneration and repeated approval/planning account for
+substantial latency; browser startup alone does not explain the 79-minute run.
+A later architectural option is references to unchanged plan portions plus
+explicit agent-authored edits, while keeping binding validation mechanical.
+Do not implement that larger protocol change in this unblocker checkpoint.
+
+
+Flights 4 search at 12 minutes showed another SF-07 mechanism: the page really
+issued a successful in-scope POST/XHR to its shopping endpoint, but the authored
+URL substring matcher began with a slash where the actual endpoint has a dot.
+The trace reports matchingRequestCount 0 and includes the actual endpoint. The
+researcher switched to rendered HTML rather than repairing that literal mismatch.
+The next same-browser call completed in 1.967 seconds. This is a candidate matcher
+error, not loss of network or an absent API response. The new observation handoff
+should let the master see it; watch that before adding more guidance. A possible
+future mechanical aid is per-predicate match facts in timeout diagnostics, not a
+site-specific matcher rewrite or automatic semantic selection.
+
+
+Flights 4 at 15 minutes: location research is proven; search is partial and
+its saved history now includes inspected recording IDs 245 and 295. Booking
+returned a valid dependency block after one token-only diagnostic: error 13
+cannot distinguish a stale token from omitted coupled context, so the master
+must supply fresh search evidence or revise the contract. Calendar research
+started next. This is not an invalid research handoff or evidence that booking
+API execution is impossible. The new inspection persistence has been exercised;
+retention across the upcoming follow-up is still to be verified.
+
+
+SF-11 recurred in Flights 4 calendar: four locations each had one extra array
+wrapper, producing the same 24-byte body surplus seen in Flights 3. All four
+transport rungs returned BAD_RESPONSE before the researcher corrected the body
+to 683 bytes. Fetch then accepted it but returned protocol marker 13 with no
+grid data, so that transport completion is not semantic proof. The agent is now
+testing recorded request context. A generic prepare-and-compare diagnostic before
+network execution remains a plausible efficiency fix; the runtime must report
+structure differences rather than decide which fields are semantically needed.
+
+
+Flights 4 first master review (about 26 minutes) used the forwarded observations
+to identify the bad shopping-response matcher and directed the retained search
+researcher to repair it on the same recorded route/date. It explicitly forbade
+new challenge routes/dates, retained the public inputs pending structural and
+effective-state proof, and named completed request 245 as supporting evidence.
+Calendar should tie rendered route state to its grid from the same navigation.
+Booking follows those repairs and must call the updated search producer for
+a fresh coherent selection. This is a positive coordination result from the
+new handoff path, not yet a successful teach or independent audit.
+
+
+Flights 4 at 29.5 minutes: the repaired shopping-response capture completed in
+41.929 seconds including fresh CDP setup, then search returned a proven handoff.
+Its history grew from four to five observations and inspected IDs 245/295
+survived the actual follow-up. This validates the new retention path in the fresh
+run; it does not yet establish final planner fixture selection or parser quality.
+Calendar route verification and fresh booking consumption follow next.
+
+
+Flights 4 at 34 minutes: calendar research is proven after route-state
+corroboration; all seven observations are retained. Booking has explicitly
+invoked `call_producer` for fresh search output, instead of testing the recorded
+token again. Its consumer request and final executable chain still need proof.
+
+
+Flights 4 at 41.8 minutes: all four research handoffs are proven. Booking used
+a fresh producer response, then a coherent serialized selection carrying its
+token and route/date/carrier/flight identity. Direct fetch returned only marker
+13; page-owned booking capture completed in 32.474 seconds including cold setup
+and returned positive booking data. Its four observations are preserved.
+This research milestone is roughly eight minutes earlier than Flights 3, but
+final planning, parsers, compiled chain checks, and independent audit remain.
+
+
+Flights 4 at 48 minutes: focused planning now selects completed shopping
+response 245 for recorded replay; SF-14's downstream fixture-loss symptom has
+not recurred. Calendar has one request definition matching its proven workflow.
+The booking focused planner proposed `itineraries[1].selected_flights`, but
+search's output plan names `items`; the master explicitly corrected the edge
+to `items[1].selected_flights` before compilation. This is successful agent-led
+coordination, not a runtime defect. Location planning nevertheless selected only
+the recorded New York query despite proven SJC evidence; SF-08 coverage pruning
+remains under observation. Do not count one query as recorded contrast coverage.
+
+
+Flights 4 at 52 minutes exposed SF-16, a verifier phase-contract ambiguity.
+Location's raw-only reader returned complete expectations for both sources and
+comparability `matched`, explaining that all five city groups, identities,
+ownership, distances, and scores were established. It also set top-level
+`status: unverified`. The runtime consequently terminated before showing parser
+output. This is an incomplete/inconsistent verifier report, not evidence that
+the location parser failed. The same response schema describes raw expectation
+readiness and final parser correctness; clarify the phase contract without
+ignoring an explicit unverified finding or accepting unreviewed output. Let the
+current run expose subsequent outcomes before choosing the smallest correction.
+
+
+Flights 4 at 57 minutes: SF-02 recurred with a concrete mechanical cause. Search
+reader used all six inspections, then supplied complete facts and matched
+comparability. Its escaped array quotations are literal substrings of the
+original response string, but not of `JSON.stringify(responses)`, which adds
+another escaping layer. The validator checks only that serialized array. Seven
+valid raw quotations were rejected on the final turn, yielding the misleading
+inspection-budget result before parser evaluation. A minimal general correction
+is to validate quotes against both the shown serialized source and each original
+raw response string, retaining exact substring checks and rejecting invented
+citations. No semantic inference, increased inspection budget, or new live case
+is needed. Preserve the source-level distinction in regression coverage.
+
+
+Flights 4 was operator-stopped at the 60-minute assessment, not a natural teach
+completion: exit 130 after 60.108 minutes. Calendar passed its 49-item recording/
+live check and MVP review and published. Search and location never reached parser
+evaluation because of the verifier issues above; booking waited on search.
+No independent audit or repeatability pass is claimed. Its process group exited
+fully before source files changed. Preserved local `operator-stop.json` records
+the decision. Reported usage: 10,352,473 input including 7,431,936 cache reads,
+160,780 output, zero cache writes reported, $17.8705224 base API equivalent; one
+interrupted model span lacks usage. Four attempts total $62.8589112, excluding
+unreported usage and pricing surcharges.
+
+The next minimal correction accepts quotations in original response strings
+without removing exact-source citation checks. A synthetic regression reproduces
+the extra-escaping rejection on old code and passes after the fix. The reader
+prompt also distinguishes raw-fact readiness from a final parser verdict; an
+explicit raw-evidence gap still terminates unverified, covered by regression.
+This does not increase inspection limits or alter selected cases, request
+construction, browser readiness, or site behavior.
+
+
+Checkpoint validation: 1,987 tests passed across 100 files (6,445 assertions,
+109.49 seconds); lint and type checking passed. Website build and desktop/mobile
+inspection passed without horizontal overflow. The original failed search
+review's nine quotations were checked offline: old validation accepts two, the
+corrected exact-source validation accepts all nine. No parser pass is inferred
+from citation acceptance. Fresh validation starts from this committed checkpoint.

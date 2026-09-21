@@ -169,7 +169,7 @@ export async function verifyRecordingEvidence(input: {
   mkdirSync(input.directory, { recursive: true, mode: 0o700 });
   const sources = input.fixtures.map(({ actual: _actual, ...fixture }) => fixture);
   const sourceKey = hash({
-    contract: 'recording-evidence-v2',
+    contract: 'recording-evidence-v3',
     operation: input.operation,
     sources,
   });
@@ -199,6 +199,13 @@ export async function verifyRecordingEvidence(input: {
   if (new Set(sources.map(({ id }) => id)).size !== sources.length)
     throw new Error('Duplicate evidence case id');
   const sourceTexts = new Map(sources.map((fixture) => [fixture.id, text(fixture.responses)]));
+  // The preview wraps responses in JSON; literal wire bytes have different escaping.
+  const citationTexts = new Map(
+    sources.map(({ id, responses }) => [
+      id,
+      [text(responses), ...responses.filter((response) => typeof response === 'string')],
+    ]),
+  );
   const factsPath = join(input.directory, `${sourceKey}.expectations.json`);
   let expectations: z.infer<typeof FactsSchema>[] | undefined;
   if (existsSync(factsPath))
@@ -316,7 +323,7 @@ export async function verifyRecordingEvidence(input: {
         const ids = proposed.map(({ sourceId }) => sourceId);
         const invalidCitations = proposed.flatMap(({ sourceId, facts }) =>
           facts.flatMap(({ quote }, index) =>
-            sourceTexts.get(sourceId)?.includes(quote)
+            citationTexts.get(sourceId)?.some((source) => source.includes(quote))
               ? []
               : [{ sourceId, factIndex: index, quote }],
           ),

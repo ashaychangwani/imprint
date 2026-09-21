@@ -42,6 +42,64 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('accepts exact raw response quotations without requiring JSON-wrapper escaping', async () => {
+    const data = fixtures();
+    const quotedFacts = data.map((fixture) => {
+      const row = JSON.stringify({ id: `${fixture.id}-item`, label: 'A "quoted" item' });
+      const raw = JSON.stringify([['envelope', row]]);
+      fixture.responses = [raw];
+      const quote = raw.slice(2, -2);
+      expect(raw).toContain(quote);
+      expect(JSON.stringify(fixture.responses)).not.toContain(quote);
+      return { sourceId: fixture.id, facts: [{ statement: 'One quoted item', quote }] };
+    });
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: data,
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-test-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        calls++;
+        if (calls === 1)
+          return schema.parse({
+            action: 'finish',
+            reason: 'Exact raw response quotations',
+            comparability,
+            expectations: quotedFacts,
+          });
+        expect(payload).toHaveProperty('phase', 'evaluation');
+        expect(payload).toHaveProperty('expectations', quotedFacts);
+        return schema.parse({ action: 'finish', status: 'passed', reason: 'Parser matches' });
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(calls).toBe(2);
+  });
+
+  it('preserves an explicit raw-evidence gap even with matched calls and partial facts', async () => {
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-test-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        calls++;
+        expect(payload).toHaveProperty('phase', 'expectations');
+        return schema.parse({
+          action: 'finish',
+          status: 'unverified',
+          reason: 'Core membership is not established',
+          comparability,
+          expectations,
+        });
+      },
+    });
+    expect(result.status).toBe('unverified');
+    expect(calls).toBe(1);
+  });
+
   it('keeps unrelated recording/live requests unverified before revealing parser output', async () => {
     let calls = 0;
     const result = await verifyRecordingEvidence({
