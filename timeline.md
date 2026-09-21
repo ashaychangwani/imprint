@@ -14634,3 +14634,27 @@ The failure ledger records unresolved stage/comparability drift, sibling respons
 inspection limits, bulky focused handoffs and speculative-draft scheduling.
 Ten completed attempts cost $187.8730200 in reported base API equivalent; missing
 usage is excluded. All unsuccessful evidence remains local. No MR or push.
+
+
+## 2026-09-21 — Show request nesting differences to researchers
+
+Flights 11 on 5d5a770 was operator-stopped at 70.384 minutes with no published
+tools. Search, calendar and booking each generated extra nested arrays despite
+template guidance. Booking did call search freshly; its continuation still had
+the reproduced construction error. Calendar's direct API returned empty results
+after earlier success, while page-owned capture returned the initial 49-cell grid.
+Its wider window controls remained unproven. No independent audit ran.
+
+Research diagnostics now reuse the existing bounded body comparator to report
+paths, types, lengths and encoding differences. This exposes nesting errors even
+when the first changed byte belongs to intentionally refreshed state. Agents
+decide which changes are intended. The runtime does not rewrite requests or
+choose an execution strategy. Unsupported/incomplete decoding remains unavailable.
+
+A synthetic regression fails on old code and passes with the diagnostic. 276
+focused tests (1,721 assertions), type checking, lint, website build and desktop/
+mobile inspection passed. Fresh Flights 12 follows the checkpoint. The ledger
+also preserves the unresolved master-watchdog completion race and research
+follow-up scheduling delay. Eleven completed attempts cost $198.9840496 in
+reported base API equivalent; missing usage remains excluded. Evidence is retained.
+No MR, push, merge, automation or deletion.

@@ -14,6 +14,7 @@ import {
   type BackendResponseObservation,
   rememberProvenCompileBackend,
 } from './backend-ladder.ts';
+import { compareBodyStructures, decodeBodyStructure } from './body-structure.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
@@ -334,6 +335,17 @@ function preparedRequestComparison(
   );
   const urlMismatch = firstMismatchByte(recorded.url, observation.url);
   const bodyMismatch = firstMismatchByte(recordedBody, renderedBody);
+  const recordedStructure = decodeBodyStructure(recordedBody);
+  const preparedStructure = decodeBodyStructure(renderedBody);
+  const bodyStructureComparison =
+    recordedStructure.ok &&
+    preparedStructure.ok &&
+    !recordedStructure.structure.truncated &&
+    !preparedStructure.structure.truncated
+      ? compareBodyStructures(recordedStructure.structure, preparedStructure.structure, {
+          includePaths: true,
+        })
+      : undefined;
   return {
     backend: observation.backend,
     requestIndex: observation.requestIndex,
@@ -370,6 +382,7 @@ function preparedRequestComparison(
     recordedBodyBytes: Buffer.byteLength(recordedBody, 'utf8'),
     preparedBodyBytes: Buffer.byteLength(renderedBody, 'utf8'),
     ...(bodyMismatch === undefined ? {} : { bodyFirstMismatchByte: bodyMismatch }),
+    ...(bodyStructureComparison ? { bodyStructureComparison } : {}),
   };
 }
 

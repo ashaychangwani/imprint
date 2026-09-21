@@ -110,6 +110,9 @@ uses the full evidence. Focused planning overlaps within the same two-worker
 limit; compilation and execution still follow the accepted dependencies.
 Capture timeouts group repeated endpoint facts so telemetry does not crowd out
 distinct responses, while keeping matching and readiness rules unchanged.
+Research request diagnostics also show bounded decoded body differences, helping
+agents distinguish changed inputs from accidental nesting or encoding changes.
+Agents judge those differences; they are not an automatic pass/fail rule.
 
 Before that tool's planning, one retained researcher conversation first proves the
 smallest useful API call. If part of the selected MVP contract or a required

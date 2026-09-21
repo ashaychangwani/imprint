@@ -1,6 +1,7 @@
 /** Strict wire contracts for bounded, one-shot semantic roles. */
 import { z } from 'zod';
 import type { BackendAttemptFact } from './backend-ladder.ts';
+import type { BodyComparison } from './body-structure.ts';
 import {
   ChainEdgeSchema,
   ConcreteTeachingParameterSchema,
@@ -174,6 +175,7 @@ const PreparedRequestComparisonSchema = strictObject({
   recordedBodyBytes: z.number().int().nonnegative().optional(),
   preparedBodyBytes: z.number().int().nonnegative().optional(),
   bodyFirstMismatchByte: z.number().int().nonnegative().optional(),
+  bodyStructureComparison: z.custom<BodyComparison>().optional(),
 });
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
@@ -193,7 +195,8 @@ export const ApiResearchObservationSchema = strictObject({
     .max(RESPONSE_OBSERVATIONS_MAX)
     .default([]),
   /** Advisory only: artifact-prepared requests reduced immediately to names,
-   * lengths, and mismatch positions. No request values reach the agent. */
+   * lengths, mismatch positions and bounded structural differences. No request
+   * scalar values reach the agent. */
   requestComparisons: z.array(PreparedRequestComparisonSchema).max(32).optional(),
   result: strictObject({
     ok: z.boolean(),

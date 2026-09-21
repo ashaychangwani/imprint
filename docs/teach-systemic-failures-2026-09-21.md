@@ -8,22 +8,21 @@ strict independent audit, followed by an unchanged-code repeat and Hotels valida
 Keep each teach at a 30-minute target, assess at 60 minutes, and enforce 90 minutes.
 Audits retain a 45-minute limit. No recurring automation, MR, push or merge.
 
-Ten attempts in this September 21 campaign have ended unsuccessfully (four
-operator stops, four natural failures and two 90-minute deadlines). Flights 10 on
-`28f128e` reached its deadline at 90.012 minutes with 0/4 published. Location and
-calendar drafts existed, and useful live search and booking research succeeded,
-but repairs and planning consumed the budget. No generated-tool raw review or
-independent audit ran. The changed-handoff correction was exercised without a
-context overflow; final planning master input fell to about 52,000 characters.
-No teach or repeatability pass is claimed. Next: preserve distinct capture
-failure facts, preserve exact tested construction guidance and overlap independent
-planning, then run fresh Flights 11 after checkpoint checks.
+Eleven attempts in this September 21 campaign have ended unsuccessfully (five
+operator stops, four natural failures and two 90-minute deadlines). Flights 11
+on `5d5a770` was operator-stopped at 70.384 minutes after three separate research
+agents reconstructed malformed nested bodies. Local replay isolated the same
+extra-array issue in booking after it used a fresh search response. No tools
+were published and no independent audit ran. Location and search research were
+proven; calendar had a working page-owned initial grid but unproven window inputs.
+The new diagnostic correction reuses the existing bounded body comparator. Fresh
+validation follows its checkpoint; no teach or repeatability pass is claimed.
 
 All local evidence remains under
 `~/.imprint/experiments/reteach-systemic-2026-09-21/`. The collector is on
-127.0.0.1:6443. Latest preflight: AC power, 100% battery, 18 GiB free, original
+127.0.0.1:6443. Latest preflight: AC power, 100% battery, 17 GiB free, original
 recordings intact. No disk exhaustion, sleep, or network loss has been established
-as the cause of these ten unsuccessful attempts. No prior generated tools enter teaching.
+as the cause of these eleven unsuccessful attempts. No prior generated tools enter teaching.
 Code and prompts stay fixed within each teach. The detailed observations below
 are historical entries; the current state and attempt table take precedence.
 
@@ -56,7 +55,7 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 
 | SF-09 | Boundary refresh overwrites same-run research history | Confirmed Flights 2. Fixed in `dce493a`; later runs retain full private observations and forward bounded history. | Watch boundary-changing follow-ups; old observations must never prove a changed candidate. |
 | SF-10 | Missing recording fixtures are detected only after compilation | Flights 2 failed here. `dce493a` gives planning body availability and checks fixture references; Flights 3 demonstrated early rejection. | Preserve the guard and let agents choose comparable completed captures. |
-| SF-11 | Generated request construction changes nested array structure | Calendar in Flights 3/4 and booking in Flights 3. Extra wrappers caused bad requests before agents corrected them. | A future agent-requested prepare/compare diagnostic could expose structure before spending network/browser time. Not implemented. |
+| SF-11 | Generated request construction changes nested array structure | Calendar in Flights 3/4 and booking in Flights 3; recurred in Flights 10 and in both search and calendar in Flights 11. Template-preservation prompt guidance did not prevent it. | Reuse the existing bounded body comparator in research diagnostics to expose structural differences after preparation. Implemented with regression and bounds checks; fresh validation pending. |
 | SF-12 | Bootstrap cache ignores changed URL context | Flights 3 and Flights 5 retained a homepage jar/HTML after changing bootstrap to search. CDP browser pool does key on URL; disk jar cache does not. | Fixed in `760e3b4`; Flights 6 validated separate snapshots for distinct bootstrap URLs. |
 | SF-13 | Master invents comparisons outside the recording | Flights 3 requested another route/date. `5d7b2be` clarified the existing fixed-case policy; Flights 4 master explicitly kept the recorded route/date. | Track actual inputs, not just compliance prose. |
 | SF-14 | Inspected evidence and observations disappear at agent handoffs | Flights 3 lost completed search response 245 during follow-up; proven/partial handoffs also omitted observations. Fixed in `5d7b2be`; Flights 4 retained IDs 245/295, selected fixture 245 and repaired a bad capture matcher from history. | Fresh continuation evidence validated; still watch later boundary changes. |
@@ -67,14 +66,24 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | SF-18 | Consumer cannot inspect retained sibling raw bodies | Flights 6 booking received the producer observation but result inspection only searches its own history. | Track recurrence; a same-run read-only source lookup must remain separate from candidate-proof eligibility. Not implemented. |
 | SF-19 | Pre-action readiness confused with post-action completion | Flights 6 booking waited for a URL that its unexecuted clicks would produce, three times. | Fixed in d131a54 with zero-click regression and phase guidance. Flights 7 completed booking research without recurrence. |
 
+## Later systemic findings — current status
+
+| ID | Finding | Current status |
+| --- | --- | --- |
+| SF-20 | Each live case rereads unrelated recorded fixtures | Explicit pairs now select only their recorded response chain (3a61e14); exercised in Flights 9. |
+| SF-21 | Artifact-only repairs unnecessarily replan | Existing direct compiler-recall guidance moved earlier; continue measuring actual revisions. |
+| SF-22 | Repeated full handoffs exhaust master context | Changed-handoff delivery in 28f128e exercised in Flights 10; unchanged research omitted, no overflow. Focused inputs still reached 577k characters. |
+| SF-23 | Speculative draft completion delays blocked-research review | Flights 9 and 10 measured delays of about 3.5 and 5.5 minutes. Unchanged; later draft reuse must justify the cost. |
+| SF-24 | Saved dependent verification cases run before fresh primary producer calls | Observed in Flights 9; age versus browser context was not isolated. Repaired cold capture worked. Unchanged. |
+| SF-25 | Focused planning unnecessarily follows execution dependency waves | 5d5a770 overlaps independent planners at two workers; regression retains producer-first compilation. Flights 11 stopped before final planning; live overlap validation remains pending. |
+| SF-26 | Master chooses initial parameter contracts without underlying request quotes | Code inspection: retained discovery input gives candidate/advisor summaries and evidence counts, with no cited raw entries. Repeated wrong-mode choices in Flights 9/10 required later research repair. Candidate for better evidence delivery, not yet implemented or isolated as the sole cause. |
+| SF-27 | Turn completion at the watchdog boundary causes duplicated work | Flights 11 rollout completed at 297.969 seconds, host watchdog fired at 300 seconds, retained retry took 238.29 seconds. Completion-handling candidate; no confirmed network outage or SDK hang. |
+
 ## Code-path observations to test, not established failures
 
-- `verifyRecordingMvp` currently builds every replay fixture for each individual
-  live result. A tool with several cases can therefore re-read unrelated fixtures
-  and show the reader an asymmetric set of recorded/live sources. Watch for
-  unmatched-case rejection or repeated inspection work. A paired-fixture filter
-  would be smaller than redesigning verification, but is not implemented without
-  evidence that this is blocking the run.
+- The original all-fixtures-per-case concern became SF-20 and was repaired in
+  3a61e14. Continue checking that selected recorded/live pairs actually match;
+  filtering fixture delivery does not establish their semantic comparability.
 - Recording evidence failures become `revision_required` along the same route as
   bad artifacts. Inspect whether the master repairs the correct component or
   unnecessarily recompiles a correct parser after a proof-only failure. Existing
@@ -133,6 +142,7 @@ not used to justify a production refactor during an active run.
 | September 21 Flights 8 | 3a61e14 | Natural failure at 46.136 minutes; 0/4 published | All research proven; missing response 206 rejected, then SF-15 killed planning. SF-10 availability was absent from discovery. $14.631096 reported, no missing usage spans. |
 | September 21 Flights 9 | fddd4ec | Natural failure at 78.954 minutes; 2/4 published | SF-22 context overflow after SF-04 search parser rejection; repaired cold continuation succeeded. $24.5983104 reported; one failed model span lacks usage. |
 | September 21 Flights 10 | 28f128e | Deadline at 90.012 minutes; 0/4 published | Context dedup exercised; wrong capture substring, nested request reconstruction, producer-stage drift and serial/repeated planning consumed the budget. $19.596328 reported; one deadline span lacks usage. |
+| September 21 Flights 11 | 5d5a770 | Operator stop at 70.384 minutes; 0/4 published | SF-11 in search, calendar and fresh booking continuation. Calendar direct calls became empty; page-owned initial grid worked. SF-27 watchdog duplicate. $11.1110296 reported; two spans lack usage. |
 
 Flights 1 accounting: 2,546,811 input tokens, including 1,609,728 cache reads;
 46,340 output tokens; zero reported cache writes; $5.3190232 estimated base API
@@ -1470,3 +1480,128 @@ Checkpoint validation: 369 focused tests (2,153 assertions), type checking, lint
 website build and desktop/mobile visual inspection passed. Existing bundle-size
 warning remains. Preflight for Flights 11: 17 GiB free; original recordings and
 all failed evidence preserved. Start with a new home and unchanged recording/scope.
+
+
+Fresh Flights 11 is active on 5d5a770 in flights-11/home. Original recording,
+unchanged four-operation guidance, two workers and 90-minute deadline. New code
+and prompts stay fixed. No generated tools or examples from earlier runs supplied.
+
+
+Flights 11 early findings: the master selected four operations and includes a
+coherent round-trip pair, request 139 and booking 154 (both captured, October
+15–24), alongside the multi-city evidence. Initial concern about round-trip scope
+must not be generalized to this whole selection. Location again proved two
+recorded contrasts (airport query and city query).
+
+SF-11 recurred despite template-preservation guidance. Search's handwritten
+location helper produced five array levels where request 139 has three. Its
+first two candidates exhausted the ladder, adding current bootstrap state without
+repairing those extra layers. At 17.58 the researcher isolated the reconstructed
+body as the likely problem and switched to page-owned capture. This shows the
+prompt change has not solved structural reconstruction. Investigate bounded decoded
+structural differences when first-byte differences reflect intentional token/state
+removal; do not add site-specific nesting rules. Current run remains unchanged.
+
+
+Flights 11, 30-minute assessment: continue within 90 minutes. Location and search
+research are proven; booking is partial and calendar completed its first pass at
+31.28. The corrected calendar body returned three recorded window cases by direct
+fetch in 181/209/219 ms, with 49/7/7 date pairs. Route/anchor assumptions remain
+explicit gaps. Search matched the exact endpoint on its first capture attempt,
+but its selected body missed the 45-second completion budget; unchanged retry
+returned the raw response in 18.925s warm. No mismatch substring recurrence there.
+17 GiB free, no established outage. No tools published or independently audited.
+
+Read-only synthetic diagnostic check: the existing decodeBodyStructure and
+compareBodyStructures helpers report nested array-length and string-versus-array
+path differences even when an earlier token is intentionally replaced by null.
+Research preparedRequestComparison currently supplies only byte counts and the
+first differing byte for bodies. Reusing the existing bounded comparator is a
+small factual-evidence candidate if the structural errors keep blocking fresh runs;
+it would not choose which differences are intentional or change execution.
+
+Flights 11, minutes 40–49: narrowing search to its proven departing stage reused
+the existing observation without another live call. Calendar promoted two hidden
+anchor dates to explicit inputs. A local execution of both retained transform
+snapshots produces identical 683-byte bodies for the primary case; the workflow
+request definition is unchanged. Earlier direct fetch returned 49 date pairs,
+but the retest returned HTTP 200 with a null API result and marker [13]. CDP
+replay also returned that empty result. This is a semantic live-response failure,
+not evidence of disconnected networking; its service/session cause is not yet
+isolated. Preserve the distinction from the earlier malformed-array HTTP 400s.
+
+A separate master watchdog boundary issue occurred: the first research-review
+answer completed in the Codex rollout after 297.969 seconds (19,888 output
+characters), but the host hit its 300-second watchdog. The retry delivered a
+202,243-character user payload to the retained session and completed after
+another 238.29 seconds. The full answer and task_complete event precede the retry.
+This proves duplicated work at the completion boundary, not a network outage or
+a confirmed SDK hang. Saved safe event metadata: flights-11/watchdog-session-events.json.
+Investigate completion handling before changing global deadlines.
+
+Follow-up scheduling is intentionally serial to expose each repaired producer
+to its consumer. Calendar is ahead of booking in the master's ordered follow-up
+list, despite no observed calendar-to-booking dependency. That may add delay, but
+a correction must preserve causal producer/consumer ordering and the two-worker
+limit; the focused-planner overlap fix is a different path.
+
+Flights 11, 60-minute assessment: continue within the unchanged 90-minute
+deadline. Current-state query fields and route-specific bootstrapping did not
+restore calendar core results. Page-owned API capture then failed after 151.391
+seconds because button[aria-label="Date grid"] matched no element within the
+agent-selected 120-second action timeout. The page diagnostic showed 19 real
+flight results. The generic NETWORK error label must not be read as evidence of
+internet disconnection. The selector/capture route provides a concrete next
+repair hypothesis; booking's causal proof remains pending. No tools published,
+no independent audit, 17 GiB free. Partial accounting at minute 58: $9.0317712
+base equivalent, one missing watchdog usage span; this is not final run usage.
+
+A budget-visibility check found that the shared analyzer already supplies fresh
+runTiming.observedAt, deadlineAt and remainingMs on every model call, including
+retained turns. Do not propose adding a duplicate deadline field to fix research
+strategy. Calendar's long investigation is not explained by hidden remaining time.
+
+Flights 11, minutes 60–63: retained HTML inspection identified the actual Date
+grid selector. The corrected warm capture completed in 2.271 seconds and retained
+an 8,627-character API response with 49 date pairs. The agent then tested a
+two-request candidate: page-owned grid capture followed by the parameterized
+direct request in the same CDP session. Only the second response can prove the
+four separate window inputs. Do not accept the first successful grid as evidence
+that those windows affect the second request's result. The page-owned success
+narrows the direct-call issue to construction/session differences without
+identifying a specific missing field.
+
+Prepared a private synthetic regression for SF-11 without altering the active
+run's code: nested-body-regression.test.ts. It fails on 5d5a770 because the
+research observation lacks decoded structural facts. The fixture combines an
+intentional early token-to-null change with accidental extra nested array levels,
+showing why the first differing byte alone is insufficient. No recording bytes
+or real opaque values were used.
+
+Flights 11 final: operator-stopped at 70.3840498 minutes, exit 130. A local
+execution of the booking transform against its fresh selected-flight input
+produced 835 bytes versus request 139's 811. The generic comparator identifies
+extra nested endpoint arrays after an intentional changed token. This was the
+third separate researcher to construct this error in the run, despite guidance
+to preserve the template. All four execution rungs rejected it with HTTP 400.
+The retained candidate and operator-stop process snapshot remain private.
+
+The next correction adds optional bounded bodyStructureComparison facts to
+research observations, reusing existing decoding and comparison helpers. No
+new matching classifier, request rewrite or execution policy. The synthetic
+regression fails before and passes after the change; unsupported, oversized and
+incompletely decoded bodies preserve existing diagnostics without claiming an
+empty comparison. Active source was changed only after Flights 11 exited.
+
+Final reported Flights 11 usage: 8,380,689 input tokens including 6,737,024 cache
+reads, 92,078 output, zero reported cache writes. $11.1110296 base API equivalent,
+two missing usage spans (watchdog and operator cancellation). Eleven completed
+attempts total $198.9840496; eleven observed missing spans plus the Flights 5
+unknown unflushed tail remain excluded. No completed independent audit in this
+campaign. All recordings, logs, conversations and failed artifacts remain local.
+
+Checkpoint checks: 276 focused tests, 1,721 assertions, type checking and lint
+passed. Website build and 1440/390-width inspection passed (existing bundle-size
+warning only). All Flights 11 owned processes exited. The trace collector remains
+active for the next fresh run. Original recordings and 17 GiB available space
+were verified. No source/prompt changes will be made during Flights 12.

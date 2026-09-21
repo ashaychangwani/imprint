@@ -226,7 +226,15 @@ do not relabel page text as API proof. Absence or truncation is not proof of abs
 Each `requestComparisons` entry describes the artifact-prepared request before
 transport, after substitution and transforms, compared with its cited recording request.
 It contains only method/path equality, query and header names, byte lengths,
-and first mismatch positions—never request values. Use it with the redacted
+first mismatch positions and optional `bodyStructureComparison` facts—never
+request scalar values. The comparison decodes supported form/JSON encodings and
+reports bounded paths, types, lengths and encoding differences (left: recording;
+right: prepared request). Check these before attributing a malformed request to
+browser or session state: an intentional early token change can hide an unrelated
+nesting mistake from the first-byte diagnostic. Agents decide which differences
+are intentional. Missing comparison means decoding was unavailable or incomplete;
+truncation and an empty differences list do not establish wire or semantic proof.
+Use it with the redacted
 response preview to decide the next hypothesis. It is advisory evidence, not a
 pass/fail check: dynamic values and old recordings can differ legitimately,
 and a browser may add ordinary transport headers later. A recorded-only header

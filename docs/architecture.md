@@ -892,4 +892,13 @@ Research and master guidance distinguish coverage limits from unsupported mappin
 
 Research may batch up to three agent-selected recording-backed inputs for one request candidate. Calls remain sequential and paced, with an observation for each. A caller-owned browser pool survives researcher thinking time, closes on exit/cancellation, and is discarded on changed authentication/setup context. Tools and execution rungs remain separate. Fetch-bootstrap caches minted snapshots under the tool/rung directory plus a hash of the rendered bootstrap URL (or resolved base URL). Repeated URL contexts reuse their snapshot; changed contexts mint or seed separately. Old cache files remain untouched. Capture timeout summaries expose per-response URL-substring, method, and resource-type predicate results, separately from navigation scope; omitted predicates are null. These facts do not select a different response or weaken the matcher. Cold-start sleeps and readiness behavior are unchanged. Navigation page URL, selector, and cookie predicates run before actions; `resultSelector` runs afterward. A failed initial predicate reports the pending action count so agents can distinguish an unstarted interaction from a failed click. Research schema diagnostics include the expected site id and exact request-transform module field/path; accepted-output and proof-binding rules are unchanged.
 
+Prepared-request research diagnostics reuse the bounded body decoder/comparator
+to compare the cited recording (left) with the prepared body (right). Optional
+`bodyStructureComparison` reports paths, types, lengths, encodings and value-change
+locations without scalar values. It exposes later structural differences even
+when an earlier dynamic value accounts for the first differing byte. Unsupported
+or incomplete decoding omits this comparison; comparison limits remain explicit.
+These are advisory construction facts, not wire-equivalence or semantic proof.
+Agents decide which differences are intentional and how to repair the request.
+
 `refine` stages installed tools in a separate IMPRINT_HOME and lets an agent select the target and necessary existing dependencies. It does not enter discovery or seed a fresh teach. Publication follows independent recording/live verification and a strict staged audit, checks for concurrent original-artifact changes, and keeps recoverable backups. See refinement.md for current limits.

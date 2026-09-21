@@ -1712,3 +1712,143 @@ it('batches recorded cases without extra agent turns and closes the owned browse
   expect(closed).toBe(1);
   expect(outcome.observations).toHaveLength(2);
 });
+
+it.each([
+  ['unsupported', 'plain fixture request'],
+  ['decode limit', JSON.stringify({ payload: 'x'.repeat(512 * 1024) })],
+  ['nested decode limit', JSON.stringify({ payload: JSON.stringify(Array(2_000).fill(1)) })],
+])('omits structural comparisons when body decoding hits %s', async (_label, body) => {
+  const toolDir = mkdtempSync(join(tmpdir(), 'imprint-body-diagnostic-'));
+  const candidate = apiCandidate('bounded-diagnostic');
+  let turn = 0;
+  try {
+    const result = await researchApiMvpCall({
+      run,
+      recordingIndex,
+      session: { ...session, requests: session.requests.map((request) => ({ ...request, body })) },
+      tool,
+      evidence,
+      toolDir,
+      agent: {},
+      runDeadline: new RunDeadline(Date.now() + 60_000),
+      dependencies: {
+        requestStep: async (input) =>
+          ++turn === 1
+            ? { binding, action: 'test', candidate, reason: 'Test bounded diagnostics.' }
+            : {
+                binding,
+                action: 'proven',
+                candidate,
+                basedOnObservationId: input.observations[0]?.id,
+                reason: 'Synthetic response contains a record.',
+              },
+        runApiTool: async ({ onPreparedRequest }) => {
+          onPreparedRequest?.({
+            backend: 'fetch',
+            requestIndex: 0,
+            method: 'POST',
+            url: 'https://fixture.invalid/search',
+            headers: {},
+            body,
+          });
+          return {
+            result: { ok: true, data: { records: [{ id: 'fixture-row' }] } },
+            executionMechanism: 'fetch',
+          };
+        },
+      },
+    });
+    const comparison = result.observation.requestComparisons?.[0];
+    expect(comparison).toMatchObject({
+      status: 'checked',
+      preparedBodyBytes: Buffer.byteLength(body),
+    });
+    expect(comparison).not.toHaveProperty('bodyStructureComparison');
+  } finally {
+    rmSync(toolDir, { recursive: true, force: true });
+  }
+});
+
+it('exposes nested prepared-body differences after an earlier intentional scalar change', async () => {
+  const toolDir = mkdtempSync(join(tmpdir(), 'imprint-body-diagnostic-'));
+  const wire = (token: string | null, origin: unknown): string =>
+    `payload=${encodeURIComponent(JSON.stringify([token, JSON.stringify({ legs: [{ origin }] })]))}`;
+  const recordedBody = wire('recorded-state-fixture', [[['AAA', 0]]]);
+  const preparedBody = wire(null, [[[[['AAA', 0]]]]]);
+  const requestSession = {
+    ...session,
+    requests: session.requests.map((request) => ({
+      ...request,
+      method: 'POST',
+      body: recordedBody,
+    })),
+  };
+  const candidate = apiCandidate('structural-diagnostic');
+  let turn = 0;
+  try {
+    const result = await researchApiMvpCall({
+      run,
+      recordingIndex,
+      session: requestSession,
+      tool,
+      evidence,
+      toolDir,
+      agent: {},
+      runDeadline: new RunDeadline(Date.now() + 60_000),
+      dependencies: {
+        requestStep: async (input) => {
+          if (++turn === 1)
+            return {
+              binding,
+              action: 'test',
+              candidate,
+              reason: 'Inspect fixture request construction.',
+            };
+          const comparison = input.observations[0]?.requestComparisons?.[0];
+          expect(comparison?.bodyStructureComparison).toMatchObject({
+            differences: expect.arrayContaining([
+              expect.objectContaining({
+                kind: 'type',
+                path: '/payload/0',
+                leftType: 'string',
+                rightType: 'null',
+              }),
+              expect.objectContaining({
+                kind: 'type',
+                path: '/payload/1/legs/0/origin/0/0/0',
+                leftType: 'string',
+                rightType: 'array',
+              }),
+            ]),
+          });
+          expect(JSON.stringify(comparison)).not.toContain('recorded-state-fixture');
+          expect(JSON.stringify(comparison)).not.toContain('AAA');
+          return {
+            binding,
+            action: 'proven',
+            candidate,
+            basedOnObservationId: input.observations[0]?.id,
+            reason: 'Synthetic response contains a record.',
+          };
+        },
+        runApiTool: async ({ onPreparedRequest }) => {
+          onPreparedRequest?.({
+            backend: 'fetch',
+            requestIndex: 0,
+            method: 'POST',
+            url: 'https://fixture.invalid/search',
+            headers: {},
+            body: preparedBody,
+          });
+          return {
+            result: { ok: true, data: { records: [{ id: 'fixture-row' }] } },
+            executionMechanism: 'fetch',
+          };
+        },
+      },
+    });
+    expect(result.observation.requestComparisons?.[0]?.bodyStructureComparison).toBeDefined();
+  } finally {
+    rmSync(toolDir, { recursive: true, force: true });
+  }
+});
