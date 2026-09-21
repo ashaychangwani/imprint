@@ -2324,6 +2324,9 @@ async function requestFocusedPlannerBundles(input: {
       const plannerInput: FocusedPlannerInput = {
         run: input.discoveryRun,
         recordingIndex: input.recordingIndex,
+        recordingResponseBodySeqs: input.triagedSession.requests
+          .filter(({ response }) => response?.body !== undefined)
+          .map(({ seq }) => seq),
         masterGuidance: input.plan.decision.reason,
         tool,
         availableProducers: available.filter(({ toolId }) => toolId !== sourceTool.id),

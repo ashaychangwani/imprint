@@ -29,6 +29,7 @@ import {
   ToolSelectionAdvisorOutputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
+  apiResearchCandidateSha256,
   apiResearchInputsSha256,
   requestMasterDecision as requestValidatedMasterDecision,
 } from '../src/imprint/master-teach-agents.ts';
@@ -455,6 +456,18 @@ async function fixtureApiResearchStep(researchInput: ApiResearchInput) {
     reason: observation
       ? 'The fixture request returned the promised core data.'
       : 'Test the exact recorded fixture request.',
+  };
+}
+
+async function fixtureResearchForChangedBoundary(input: ApiResearchInput) {
+  const decision = await fixtureApiResearchStep(input);
+  const tested = input.observations.find(
+    ({ candidateSha256 }) => candidateSha256 === apiResearchCandidateSha256(decision.candidate),
+  );
+  return {
+    ...decision,
+    action: tested ? ('proven' as const) : ('test' as const),
+    basedOnObservationId: tested?.id,
   };
 }
 
@@ -1903,7 +1916,7 @@ describe('fresh foreground master controller end to end', () => {
           requestApiResearchStep: async (input) => {
             const toolName = input.tool.candidate.toolName;
             researchTurns.set(toolName, (researchTurns.get(toolName) ?? 0) + 1);
-            return await baseResearch(input);
+            return await fixtureResearchForChangedBoundary(input);
           },
           requestMasterDecision: async (input, agent, options) => {
             if (input.decisionPurpose === 'research_review' && !revisedParameter) {
@@ -6066,7 +6079,7 @@ describe('fresh foreground master controller end to end', () => {
         {
           ...base,
           requestApiResearchStep: async (input) => {
-            const decision = await baseResearch(input);
+            const decision = await fixtureResearchForChangedBoundary(input);
             const isRevisedConsumer =
               input.tool.id === CONSUMER_ID && input.tool.candidate.dependencySeqs.includes(4);
             if (

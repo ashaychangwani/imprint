@@ -37,6 +37,9 @@ Focused planners only receive that selected evidence; removing every contrast
 prevents them from choosing comparable recorded/live cases. Drop unrelated modes
 and optional breadth, rather than keeping only the first working example. Select
 from existing recordings; do not commission extra exploratory live challenges.
+For API parser verification, retain a comparable call with a captured response
+body. A recorded request with a missing body cannot be its only fixture source,
+even if live research later succeeds. Preserve completed examples found by research.
 
 After candidate selection, request research completes for every selected
 operation before focused planning begins. On that planning turn, `apiResearch`
@@ -360,6 +363,11 @@ recording evidence is a plan-revision request, not exhausted compilation.
 Revise that plan, omit its stale `implementationPlan`, and return the corrected
 plan to the retained compiler conversation. Do not mark the operation
 unresolved until the corrected grounded constructions have actually been tried.
+
+An unavailable recorded response is a verification-plan gap even when the live
+call succeeds. Select comparable captured recording evidence and re-plan the
+affected tool; do not waive the required replay/live check or merely recall its
+parser under the same unusable fixture reference. Preserve unrelated proven tools.
 
 For a changing recorded field, keep producer availability separate from field
 necessity. “No supported live producer” does not mean “the field is required.”

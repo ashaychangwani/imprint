@@ -14386,3 +14386,35 @@ Accounting for the stopped attempt: 2,546,811 input tokens (1,609,728 cached),
 46,340 output, zero reported writes, $5.3190232 estimated base cost; two analysis
 spans have missing usage. See the systemic failure ledger for mechanisms and
 follow-up evidence, rather than treating all unsuccessful attempts as one bug.
+
+
+## 2026-09-21 — Catch missing fixtures before compilation and preserve research history
+
+Fresh Flights 2 on a837d55 ran for 79.632 minutes and exited unsuccessfully with
+2 of 4 tools ready. Location lookup passed both distinct recorded/live query
+pairs; the initial calendar grid also passed independent response review. Search
+selected recorded request 206 without a response body, blocking verification.
+The master ignored that proof gap and returned an unchanged plan; the no-progress
+guard stopped the run. Booking remained blocked behind search. Separate retained
+output inspection found search triplicated 20 rows into 60. No audit pass claimed.
+
+The next small fix supplies captured-body availability to focused planning and
+rejects missing fixture references through the existing retained repair loop.
+Agents choose the replacement. It also preserves all same-run research history
+across boundary revisions while keeping compact handoffs and exact proof binding.
+Calendar and booking had each lost earlier history on disk; snapshots and trace
+payloads are retained privately where available. See the systemic failure ledger.
+
+Focused validation: 199 tests, lint and type checking passed. A fresh teach is
+required after this checkpoint. Flights 2 used 14,827,797 input tokens including
+12,445,696 cache reads, 205,778 output, zero reported writes, and $18.6222424
+estimated base API cost. Evidence is under
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-2`.
+
+
+Checkpoint validation completed: all 1,985 tests passed, lint and type checking
+passed, website build passed, and the changed copy was inspected at desktop and
+mobile widths without horizontal overflow. The first full run exposed two mocks
+that assumed cleared history; their boundary-refresh behavior now chooses current
+candidate proof. The known process-cleanup race failed once, then passed isolated
+and in the final full suite. Private logs preserve those failed checks too.

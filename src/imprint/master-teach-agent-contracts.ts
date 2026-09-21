@@ -102,6 +102,9 @@ export type FocusedPlannerRevisionContext = z.infer<typeof FocusedPlannerRevisio
 export const FocusedPlannerInputSchema = strictObject({
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,
+  /** Captured bodies available for offline parser fixtures. Omitted only by
+   * older callers; request existence alone does not establish body availability. */
+  recordingResponseBodySeqs: z.array(z.number().int().nonnegative()).optional(),
   /** The master's latest accepted/rejected/revised reasoning for this plan. */
   masterGuidance: Reason,
   tool: PlannableTeachingToolSchema,

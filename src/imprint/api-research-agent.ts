@@ -432,10 +432,12 @@ export async function researchApiMvpCall(input: {
   // retained follow-ups and the reviewer can still recover the actual tests.
   let savedObservations: ApiResearchObservation[] = [];
   const historyPath = pathJoin(input.toolDir, 'api-research.json');
-  if (input.previousProgress && existsSync(historyPath)) {
+  // toolDir belongs to this teach run. Boundary refreshes may omit a previous
+  // handoff, but must not erase the tests performed before that revision.
+  if (existsSync(historyPath)) {
     try {
       const saved = JSON.parse(readFileSync(historyPath, 'utf8'));
-      const checked = ApiResearchObservationSchema.array().max(64).safeParse(saved.observations);
+      const checked = ApiResearchObservationSchema.array().safeParse(saved.observations);
       if (checked.success) savedObservations = checked.data;
     } catch {
       input.report?.(
@@ -648,7 +650,7 @@ export async function researchApiMvpCall(input: {
         if (backend && observation.result.ok) rememberProvenCompileBackend(workflowPath, backend);
         writeFileSync(
           pathJoin(input.toolDir, 'api-research.json'),
-          `${JSON.stringify({ decision, observation, observations: observations.slice(-64) }, null, 2)}\n`,
+          `${JSON.stringify({ decision, observation, observations }, null, 2)}\n`,
           'utf8',
         );
         return {

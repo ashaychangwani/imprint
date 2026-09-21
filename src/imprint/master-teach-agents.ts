@@ -722,6 +722,16 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
           );
           return;
         }
+        if (input.recordingResponseBodySeqs) {
+          const available = new Set(input.recordingResponseBodySeqs);
+          const unavailable = test.recordedCall.requestSeqs.filter((seq) => !available.has(seq));
+          if (unavailable.length)
+            issue(
+              ctx,
+              [...path, 'recordedCall', 'requestSeqs'],
+              `Recording requests ${unavailable.join(', ')} have no captured response body. Select a comparable recorded call with an available body; a successful live call cannot replace its recording fixture.`,
+            );
+        }
         if (
           test.recordedCall.requestSeqs.length > output.implementationPlan.requestProvenance.length
         )

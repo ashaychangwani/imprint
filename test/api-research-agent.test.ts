@@ -1133,6 +1133,107 @@ describe('focused API research', () => {
     ).toThrow('request is absent from the recording');
   });
 
+  it('retains same-run history when a boundary refresh has no previous handoff', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-boundary-history-'));
+    const first = apiCandidate('before-revision');
+    const revised = apiCandidate('after-revision');
+    const common = {
+      run,
+      recordingIndex,
+      tool,
+      evidence,
+      toolDir,
+      agent: {},
+      runDeadline: new RunDeadline(Date.now() + 60_000),
+    };
+    try {
+      const original = await researchApiMvpCall({
+        ...common,
+        dependencies: {
+          requestStep: async (input) =>
+            input.observations.length === 0
+              ? { binding, action: 'test', candidate: first, reason: 'Test original request.' }
+              : {
+                  binding,
+                  action: 'proven',
+                  candidate: first,
+                  basedOnObservationId: input.observations[0]?.id,
+                  reason: 'Original request returned records.',
+                },
+          runApiTool: async () => ({
+            executionMechanism: 'fetch',
+            result: { ok: true, data: { items: [{ id: 'original' }] } },
+          }),
+        },
+      });
+      const historyPath = join(toolDir, 'api-research.json');
+      const saved = JSON.parse(readFileSync(historyPath, 'utf8'));
+      saved.observations = Array.from({ length: 65 }, (_, index) => ({
+        ...original.observation,
+        id: `saved-${index}`,
+      }));
+      writeFileSync(historyPath, JSON.stringify(saved));
+      const revisedTool = {
+        ...tool,
+        candidate: { ...tool.candidate, description: 'Revised public contract' },
+      };
+      const revisedBinding = {
+        ...binding,
+        compileInputsSha256: apiResearchInputsSha256(revisedTool),
+      };
+      let tested = false;
+      const result = await researchApiMvpCall({
+        ...common,
+        tool: revisedTool,
+        dependencies: {
+          requestStep: async (input) => {
+            expect(input.previousProgress).toBeUndefined();
+            expect(input.observations[0]?.id).toBe('saved-0');
+            if (!tested) {
+              expect(input.observations).toHaveLength(65);
+              expect(() =>
+                parseApiResearchOutput(
+                  JSON.stringify({
+                    binding: revisedBinding,
+                    action: 'proven',
+                    candidate: revised,
+                    basedOnObservationId: 'saved-0',
+                    reason: 'Incorrect old proof.',
+                  }),
+                  input,
+                ),
+              ).toThrow();
+              tested = true;
+              return {
+                binding: revisedBinding,
+                action: 'test',
+                candidate: revised,
+                reason: 'Test revised request.',
+              };
+            }
+            return {
+              binding: revisedBinding,
+              action: 'proven',
+              candidate: revised,
+              basedOnObservationId: input.observations.at(-1)?.id,
+              reason: 'Revised request has its own successful observation.',
+            };
+          },
+          runApiTool: async () => ({
+            executionMechanism: 'fetch',
+            result: { ok: true, data: { items: [{ id: 'revised' }] } },
+          }),
+        },
+      });
+      // The handoff stays bounded; the private history retains every attempt.
+      expect(result.observations).toHaveLength(64);
+      expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(revised));
+      expect(JSON.parse(readFileSync(historyPath, 'utf8')).observations).toHaveLength(66);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps a working partial candidate and resumes it with a master follow-up', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-partial-'));
     const mvp = apiCandidate('mvp');

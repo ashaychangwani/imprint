@@ -2169,6 +2169,38 @@ describe('prompts and pre-plan discovery', () => {
     );
   });
 
+  it('repairs unavailable recording bodies in the retained planner before compilation', async () => {
+    const input = { ...focusedInput(), recordingResponseBodySeqs: [18] };
+    const unavailable = focusedOutput(input);
+    const repaired = structuredClone(unavailable);
+    for (const test of repaired.implementationPlan.verificationCases) {
+      test.recordedCall = { requestSeqs: [18], freshnessChanges: 'none' };
+      test.provenance.recordingRequestSeqs = [18];
+    }
+    const seen: unknown[] = [];
+    const keys: Array<string | undefined> = [];
+    const result = await requestFocusedPlan(input, {
+      provider: 'codex-cli',
+      analyzer: {
+        async analyze(_system, payload, options) {
+          seen.push(payload);
+          keys.push(options?.conversationKey);
+          return { text: JSON.stringify(seen.length === 1 ? unavailable : repaired) };
+        },
+      },
+    });
+    expect(result).toEqual(repaired);
+    expect(seen).toHaveLength(2);
+    expect(JSON.stringify(seen[1])).toContain('have no captured response body');
+    expect(keys[0]).toBe(keys[1]);
+    expect(() =>
+      parseFocusedPlannerOutput(JSON.stringify(repaired), {
+        ...input,
+        recordingResponseBodySeqs: [],
+      }),
+    ).toThrow('have no captured response body');
+  });
+
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
     const input = focusedInput();
     const output = focusedOutput(input);

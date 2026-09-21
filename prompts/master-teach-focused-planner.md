@@ -13,6 +13,12 @@ content-addressed refs; the host stores an accepted implementation plan.
 
 Copy `validationContext.binding` exactly.
 
+When supplied, `recordingResponseBodySeqs` lists the recorded requests whose
+response bodies are available for parser fixtures. Select recorded/live pairs
+from those bodies; a request's presence in `recordingIndex` alone is insufficient.
+Use the research's completed comparable calls when its initial request lacked a
+body. Live research output cannot substitute for a missing recording fixture.
+
 The MVP runner executes and reviews every selected `live` verification case,
 using its exact inputs and expected result. The first case supplies the primary
 result for dependent tools; the runner checks other cases before that primary.

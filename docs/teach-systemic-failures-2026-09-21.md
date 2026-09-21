@@ -14,11 +14,12 @@ problem, before a full teach result. All 27 owned processes exited. No tools wer
 published or audited. Evidence remains in
 `~/.imprint/experiments/reteach-systemic-2026-09-21/flights-1`.
 
-The next checkpoint corrects two prompt contradictions, with no runtime changes:
-the planner incorrectly said only the first live case executes, and the master
-pruned away recorded contrasts while minimizing the executable path. The planner
-example now demonstrates two existing recorded/live pairs. A fresh Flights 2 will
-validate behavior; passing prompt tests alone is not a reliability result.
+Checkpoint `a837d55` corrected the two prompt contradictions. Fresh Flights 2
+then ran 79.632 minutes and exited 1: location lookup and the initial date grid
+passed recorded/live verification; search had an unavailable recording fixture
+and duplicate live rows, leaving booking blocked. The next checkpoint adds early
+fixture-availability validation and preserves research history across boundary
+changes. A fresh Flights 3 is next; no full audit or repeatability pass is claimed.
 
 The new collector uses 127.0.0.1:6443 and the campaign's spans.jsonl. Its protobuf
 export/decode/append path was tested. Preflight: AC power, 90% battery, about 20 GiB
@@ -115,3 +116,128 @@ Flights 1 accounting: 2,546,811 input tokens, including 1,609,728 cache reads;
 cost. Two interrupted analysis spans lack usage. This is an estimate, not an
 invoice. The run lasted 890.039 seconds; interrupted work and failed calls count.
 No disk exhaustion, sleep or network disconnection was established as its cause.
+
+
+## Flights 2 observations (in progress)
+
+Fresh Flights 2 started at 06:02:30 UTC on `a837d55`, run
+`1fca0e8b-ac9f-4176-b746-6dfdd00f725f`, isolated home under the new campaign.
+The master retained recorded location requests 63 and 288. Research tested both
+queries through fetch (244 and 205 ms transport), and the focused plan selected
+two unchanged recorded/live pairs. This demonstrates the prompt correction at
+planning; generated-tool verification and audit are still pending.
+
+Search's first selected request had no response body. Research inspected nearby
+completed requests and continued. The first browser-backed test spent 76.047
+seconds, including a 45-second wait for an old recorded network endpoint that the
+current page did not emit. The page did render results. The researcher changed
+the capture strategy to rendered-document evidence; the next call reused its
+same-tool browser and took 2.065 seconds. These were different capture strategies,
+so the difference is not a controlled setup/warm benchmark. This is evidence of
+an outdated capture assumption, not a demonstrated network outage or permission
+to remove setup waits. Preserve this distinction when reviewing SF-07.
+
+
+At 30 minutes, locations and search research were proven; booking had invoked
+search for fresh upstream evidence; calendar remained partial. Continue to the
+60-minute assessment because retained-agent repairs are making concrete progress.
+The 90-minute hard deadline is unchanged. This is not a passed teach.
+
+Search's first parameterized navigation used the wrong trip-mode value. Its
+follow-up researcher corrected that value from the recording and captured a fresh
+shopping API response with the full continuation data. Thus the earlier missing
+endpoint observation alone did not establish that the site removed the endpoint:
+a wrong generated request mode was also involved. Track this as an input-mapping
+error recovered within the run, not as proof of an infrastructure outage. Booking
+then called the corrected producer again for fresh output rather than reusing the
+recorded selection. Calendar's successful fixed navigation had ignored advertised
+route and range inputs; its partial status correctly exposed those no-op mappings.
+
+
+SF-09 (confirmed mechanical history loss): after the calendar boundary revision,
+`api-research.json` contained only the three new observations, replacing the
+previous seven. `researchSelectedOperations` sends no previousProgress when it
+refreshes a changed boundary; `researchApiMvpCall` loads saved history only when
+previousProgress exists. The retained provider conversation is keyed by public
+tool name and stays intact, so this is on-disk evidence loss, not a lost agent
+conversation. Prior observations are absent from the run home. Available valid
+trace observation payloads were archived privately, with source span IDs; this
+does not establish recovery of every complete raw body. Current research files
+also have content-addressed private snapshots. Fix after the active run: retain
+same-run disk history independently of whether a previous handoff is supplied,
+without allowing old-candidate observations to prove a revised request. Add a
+regression for a changed boundary and no previousProgress before another teach.
+
+
+SF-09 recurred for booking: revising the consumer from an opaque token to a
+serialized selection object replaced seven saved observations with two new ones.
+The pre-revision private content-addressed snapshot preserved all seven this time.
+
+The booking mismatch comparison demonstrated SF-04 concretely: a fresh token for
+one flight, combined with a different hardcoded flight in navigation, returned
+the hardcoded flight. The coherent same-record context returned the intended
+flight. The master revised producer and consumer together to carry route, date,
+carrier, flight number and the opaque continuation in one selection value. The
+revised consumer was proven in two tests by minute 52. These are retained-agent
+repairs, not external changes to the active teach. All four research results were
+then proven; no generated-tool or audit success was claimed at that point.
+
+
+At minute 58 the master accepted all four tools in two waves; it reused the
+matching location draft and launched search/calendar compilation. Provider
+rollout timestamps show the preceding quiet interval included focused planning
+and a second master decision, not one continuously stalled research review.
+At minute 60 continue to the unchanged hard deadline because compilation is
+active. No generated tool has passed yet.
+
+SF-10 (confirmed invalid fixture reference, recovery pending): the accepted
+search replay/live pair still names recording request 206, whose response body
+is absent in the original session. Research had already noticed this and read
+nearby completed request 245 (51,290 bytes). The planner nevertheless reverted
+to 206. `recordingFixtures` requires a body and will reject that source. Observe
+whether repair reaches planning or merely recompiles the parser. A small generic
+fixture-availability check before compilation would be appropriate if the existing
+repair path fails; no site-specific reference substitution should be automatic.
+
+
+## Flights 2 final outcome and next correction
+
+Flights 2 exited 1 naturally at 79.632 minutes (4,777.903 seconds), with locations
+and calendar published after independent recorded/live checks. Search's live call
+completed, but recording verification failed because request 206 has no body.
+The master returned the unchanged plan and no recalls, treating that evidence
+failure as ignorable. The unchanged-failure guard correctly stopped the run.
+Booking remained dependency-blocked. This is a failed four-tool teach; no external
+strict audit or repeatability pass is claimed.
+
+Inspection of the saved search live result found 60 rows containing only 20
+unique full rows and 20 unique IDs; every row appeared three times. Its compiler
+unit tests passed against a single-frame research response. The independent
+reader never reached this live parser defect because the missing recording
+fixture blocked review first. This is a new SF-04 recurrence, not evidence of
+correct search output despite the master's prose calling all 60 rows credible.
+
+Small correction: focused planning now receives the mechanically derived list
+of requests with captured bodies. Its existing schema-repair conversation rejects
+unavailable recording sources before compilation. The agent still chooses a
+comparable replacement; no runtime substitution is made. Master guidance treats
+missing fixtures as a plan gap that cannot be waived. Research also loads and
+retains the full same-run history across boundary refreshes; outward handoffs
+remain bounded and existing candidate-proof binding is unchanged. Regression
+checks cover both repairs, including rejection of old proof for a new request.
+
+Final Flights 2 accounting: 14,827,797 input tokens, including 12,445,696 cache
+reads; 205,778 output; zero reported cache writes; $18.6222424 estimated base API
+cost. No missing analysis usage was reported. Both campaign attempts together:
+$23.9412656 base estimate, with the first attempt's two missing usage spans still
+unknown. All failed calls and repair turns count. The teach process group exited;
+the task collector remains active for the next fresh run. No cron was started.
+
+
+Correction validation: 199 focused checks passed; the final full run passed all
+1,985 tests, with lint and type checking clean. Two end-to-end mocks needed to
+select current candidate proof rather than assume empty history on refresh. A
+known process-cleanup test race failed once, then passed its rerun and the final
+full suite. Website build and desktop/mobile text rendering passed. These checks
+validate mechanics, not fresh-teach reliability. Next command:
+`python3 ~/.imprint/experiments/reteach-systemic-2026-09-21/run.py flights-3 google-flights`.
