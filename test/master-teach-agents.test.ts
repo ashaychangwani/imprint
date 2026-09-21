@@ -1633,6 +1633,80 @@ describe('prompts and pre-plan discovery', () => {
     expect(JSON.stringify(second).length).toBeLessThan(20_000);
   });
 
+  it('sends changed research once to the retained master without weakening validation', async () => {
+    const base = revisionMasterInput();
+    const tool = at(base.current.plan.payload.tools, 0);
+    const blocked = ApiResearchHandoffSchema.parse({
+      toolName: tool.candidate.toolName,
+      researchInputsSha256: apiResearchInputsSha256(tool),
+      status: 'blocked',
+      summary: 'Synthetic request failed.',
+      observations: [],
+    });
+    const input: MasterDecisionInput = {
+      ...base,
+      decisionPurpose: 'research_review',
+      apiResearch: [blocked],
+    };
+    const output = revisionMasterOutput(input);
+    output.researchFollowUps = [
+      {
+        toolName: tool.candidate.toolName,
+        instruction: 'Inspect the retained failed request.',
+        missingProof: ['No successful response.'],
+        relevantToolNames: [],
+        relevantRequestSeqs: [],
+      },
+    ];
+    const seen: Array<{ input: Record<string, unknown> }> = [];
+    const keys: Array<string | undefined> = [];
+    let invalid = false;
+    const agent = {
+      provider: 'codex-cli' as const,
+      analyzer: {
+        async analyze(_prompt: string, payload: unknown, options?: { conversationKey?: string }) {
+          seen.push(payload as { input: Record<string, unknown> });
+          keys.push(options?.conversationKey);
+          return { text: JSON.stringify(invalid ? { ...output, researchFollowUps: [] } : output) };
+        },
+      },
+    };
+    await requestMasterDecision(input, agent);
+    await requestMasterDecision(structuredClone(input), { ...agent });
+    expect(seen[0]?.input.apiResearch).toEqual([blocked]);
+    expect(seen[1]?.input.apiResearch).toBeUndefined();
+    expect(seen[1]?.input.current).toBeDefined();
+    const changed = structuredClone(input);
+    changed.apiResearch = [{ ...blocked, summary: 'A new synthetic request failed.' }];
+    await requestMasterDecision(changed, agent);
+    expect(seen[2]?.input.apiResearch).toEqual(changed.apiResearch);
+    await requestMasterDecision(changed, agent, { selfContained: true });
+    expect(seen[3]?.input.apiResearch).toEqual(changed.apiResearch);
+    await requestMasterDecision(changed, agent);
+    expect(seen[4]?.input.apiResearch).toBeUndefined();
+    invalid = true;
+    await expect(requestMasterDecision(changed, agent)).rejects.toThrow(
+      'blocked research for search_catalog must return to its retained researcher',
+    );
+    const undelivered = structuredClone(changed);
+    undelivered.apiResearch = [{ ...blocked, summary: 'Not yet delivered successfully.' }];
+    await expect(requestMasterDecision(undelivered, agent)).rejects.toThrow();
+    invalid = false;
+    await requestMasterDecision(undelivered, agent);
+    expect(seen.at(-1)?.input.apiResearch).toEqual(undelivered.apiResearch);
+    await requestMasterDecision(undelivered, {
+      ...agent,
+      analyzer: { analyze: agent.analyzer.analyze },
+    });
+    expect(seen.at(-1)?.input.apiResearch).toEqual(undelivered.apiResearch);
+    const nextRun = structuredClone(undelivered);
+    nextRun.discovery.run.runId = 'synthetic-next-run';
+    await expect(requestMasterDecision(nextRun, agent)).rejects.toThrow();
+    expect(seen.at(-1)?.input.apiResearch).toEqual(undelivered.apiResearch);
+    expect(new Set(keys)).toEqual(new Set(['master']));
+    expect(input.apiResearch).toEqual([blocked]);
+  });
+
   it('rejects a second agent-facing tool ID namespace', () => {
     const input = initialMasterInput();
     const output = initialMasterOutput(input);

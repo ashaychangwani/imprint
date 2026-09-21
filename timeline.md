@@ -14588,3 +14588,23 @@ Validation: 236 focused tests (1,479 assertions), type checking, lint, website
 build, and 1440/390-width visual inspection passed. The synthetic planner failure
 regression fails on old code and succeeds through both initial and repair
 planning after the fix. Fresh Flights 9 is next; no repeatability claim yet.
+
+
+## 2026-09-21 — Stop resending unchanged master research
+
+Flights 9 on fddd4ec ended at 78.954 minutes with two of four tools published.
+Location and calendar passed. Search's repaired transport worked from a cold
+browser, but independent parser review found incorrect remaining-leg counts and
+missing aircraft labels. The next master turn failed because its context was full.
+This was an Imprint evidence-delivery failure, not established disk or network loss.
+
+Send only changed research handoffs to the same retained master conversation.
+Keep full evidence for host validation and self-contained calls, and preserve
+conversation history. Saved-input replay shrinks the failed turn's input JSON
+from about 428,000 to 76,000 characters. No parser rule, browser setup, deadline,
+provider setting or proof standard changes. Fresh Flights 10 follows the checkpoint.
+
+331 focused tests (1,940 assertions), type checking, lint, website build and
+1440/390-width visual inspection passed. No audit or repeatability pass yet.
+Nine attempts cost $168.2766920 in reported base API equivalent; missing usage is
+excluded and failed evidence is preserved in the September 21 failure ledger.

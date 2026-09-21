@@ -1262,7 +1262,10 @@ function masterDecisionPromptInput(input: MasterDecisionInput) {
 /** The Codex master is one retained conversation. The first turn establishes
  * discovery; later turns carry only what changed. Host validation continues to
  * use the complete MasterDecisionInput and is intentionally not weakened. */
-function masterDecisionConversationInput(input: MasterDecisionInput) {
+function masterDecisionConversationInput(
+  input: MasterDecisionInput,
+  previousResearch?: ReadonlyMap<string, string>,
+) {
   if (input.phase === 'discovery') {
     return {
       phase: input.phase,
@@ -1279,6 +1282,9 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
       toolSelectionAdvice: input.toolSelectionAdvice,
     };
   }
+  const changedResearch = input.apiResearch?.filter(
+    (handoff) => previousResearch?.get(handoff.toolName) !== digest(handoff),
+  );
   return {
     phase: input.phase,
     ...(input.decisionPurpose ? { decisionPurpose: input.decisionPurpose } : {}),
@@ -1294,7 +1300,7 @@ function masterDecisionConversationInput(input: MasterDecisionInput) {
       : undefined,
     ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
     ...(input.plannerFailures?.length ? { plannerFailures: input.plannerFailures } : {}),
-    ...(input.apiResearch?.length ? { apiResearch: input.apiResearch } : {}),
+    ...(changedResearch?.length ? { apiResearch: changedResearch } : {}),
     ...(input.researchNoProgress?.length ? { researchNoProgress: input.researchNoProgress } : {}),
     ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),
   };
@@ -2409,19 +2415,32 @@ export async function requestApiResearchStep(
     agent,
   });
 }
+// Only retain delivery fingerprints for an actual shared analyzer conversation.
+// Full research history remains in the host input and the provider conversation.
+const masterResearchDelivery = new WeakMap<
+  MasterTeachAnalyzer,
+  { runId: string; handoffs: Map<string, string> }
+>();
+
 export async function requestMasterDecision(
   input: MasterDecisionInput,
   agent: MasterTeachAgentOptions = {},
   options: { selfContained?: boolean } = {},
 ) {
   const checked = MasterInputSchema.parse(input);
-  return request({
+  const retainedAnalyzer = agent.provider === 'codex-cli' ? agent.analyzer : undefined;
+  const previous = retainedAnalyzer ? masterResearchDelivery.get(retainedAnalyzer) : undefined;
+  const previousResearch =
+    checked.phase === 'revision' && previous?.runId === checked.discovery.run.runId
+      ? previous.handoffs
+      : undefined;
+  const output = await request({
     role: 'master decision',
     conversationKey: 'master',
     prompt: 'master-teach-decision.md',
     input:
       agent.provider === 'codex-cli' && !options.selfContained
-        ? masterDecisionConversationInput(checked)
+        ? masterDecisionConversationInput(checked, previousResearch)
         : masterDecisionPromptInput(checked),
     validation: {
       binding: masterDecisionBinding(checked),
@@ -2430,6 +2449,18 @@ export async function requestMasterDecision(
     schema: masterOutputSchema(checked),
     agent,
   });
+  if (retainedAnalyzer) {
+    masterResearchDelivery.set(retainedAnalyzer, {
+      runId: checked.discovery.run.runId,
+      handoffs: new Map(
+        (checked.phase === 'revision' ? checked.apiResearch : []).map((handoff) => [
+          handoff.toolName,
+          digest(handoff),
+        ]),
+      ),
+    });
+  }
+  return output;
 }
 export async function requestParameterSelectionAdvice(
   input: ParameterSelectionAdvisorInput,

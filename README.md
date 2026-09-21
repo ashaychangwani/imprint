@@ -104,7 +104,9 @@ the master, which can revise the affected tool and its dependants without
 rebuilding unrelated tools. Recorded response availability is supplied before
 MVP selection. Invalid focused-planner reports return exact diagnostics to the
 master for repair while preserving successful sibling proposals; they never
-become accepted execution plans.
+become accepted execution plans. The retained master receives changed research
+handoffs without repeatedly resending unchanged history; host validation still
+uses the full evidence.
 
 Before that tool's planning, one retained researcher conversation first proves the
 smallest useful API call. If part of the selected MVP contract or a required

@@ -19,6 +19,11 @@ alone does not rerun a proven call.
 The completion reviewer also receives the original human guidance: explicit
 scope exclusions are valid, and a requested connected workflow needs compatible
 producer/consumer evidence, not just two standalone successes.
+Retained master revisions send only changed research handoffs, comparing exact
+content within the same run and analyzer conversation. Delivery fingerprints
+advance after a validated response. Stateless and self-contained calls retain
+the full input, and host validation always checks the complete current evidence.
+Prior research stays in the conversation; this does not reset agent history.
 Output repairs include the current validation metadata even in retained
 conversations. Identity mismatches name the exact field, expected value, and
 returned value so agents do not have to rediscover an opaque run identifier.
