@@ -14685,3 +14685,19 @@ turn-level input/output inspection and ranks correction candidates without
 claiming all repeated work is wasted. The research deep-dive document records
 methods, limits and verification requirements. No runtime/prompt change, new
 teach, external deployment, MR, push or deletion.
+
+## 2026-09-22 — Independent Astra review of the evidence and repair plan
+
+A user-requested GPT-6 Astra subagent independently checked raw traces, research
+artifacts and source. Timing totals and repeated-candidate counts reproduce.
+The review refined Flights 12 to layered validation feedback: outer errors were
+fixed, then previously undisclosed inner errors exhausted the single repair.
+A synthetic completed-but-open SDK stream also reproduces a watchdog failure;
+its role in Flights 11 remains unproven without host event timestamps.
+
+The proposal prioritizes coordinator repair, failed-chain response retention,
+earlier selected wire evidence, terminal-aware SDK completion, candidate references,
+then scheduling and inspection optimizations. Existing refine requires installed
+tools and cannot salvage unpublished drafts directly. The detailed report is in
+docs/teach-independent-review-2026-09-22.md and linked from the local dashboard.
+No runtime/prompt changes or new teaches.

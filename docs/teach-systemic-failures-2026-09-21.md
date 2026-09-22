@@ -14,7 +14,8 @@ on `753e6ab` ended at 69.380 minutes with no published tools. All four researche
 returned proven, including booking from freshly selected current flights. The
 master correctly found that the producer value lacked full itinerary context
 and booking retained recording literals. Its proposed contract repair then
-failed strict output validation twice: follow-ups omitted instruction and used
+failed strict output validation twice: first an invalid decision wrapper, then
+previously unreported nested follow-ups that omitted instruction and used
 suggestedExperiments. The whole teach terminated. No independent audit ran.
 
 No teach is currently running. The latest user request is a research deep dive
@@ -1769,3 +1770,11 @@ run/tool after excluding only parameters and backend. They took 111.7 worker-min
 this is affected work, not an estimate of removable time. Exact candidate references
 could preserve proof while reducing output and accidental source reconstruction.
 Synthetic binding tests and a fresh teach must validate any implementation.
+
+Independent Astra review corrected the precise Flights 12 repair sequence. First
+output put decision fields under an invalid decision wrapper. Its six parseErrors
+covered outer missing/unrecognized fields only. The repair flattened those fields,
+then validation discovered the nested follow-up errors not previously reported.
+This is layered validation feedback exhausting a single repair allowance, not
+proof that the agent ignored the same reported error twice. Parent verified both
+retained evidence records (544fac27a2eec094 and 96e5406560dd9490) independently.
