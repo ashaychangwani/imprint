@@ -8,21 +8,26 @@ strict independent audit, followed by an unchanged-code repeat and Hotels valida
 Keep each teach at a 30-minute target, assess at 60 minutes, and enforce 90 minutes.
 Audits retain a 45-minute limit. No recurring automation, MR, push or merge.
 
-Eleven attempts in this September 21 campaign have ended unsuccessfully (five
-operator stops, four natural failures and two 90-minute deadlines). Flights 11
-on `5d5a770` was operator-stopped at 70.384 minutes after three separate research
-agents reconstructed malformed nested bodies. Local replay isolated the same
-extra-array issue in booking after it used a fresh search response. No tools
-were published and no independent audit ran. Location and search research were
-proven; calendar had a working page-owned initial grid but unproven window inputs.
-The new diagnostic correction reuses the existing bounded body comparator. Fresh
-validation follows its checkpoint; no teach or repeatability pass is claimed.
+Twelve attempts in this September 21 campaign have ended unsuccessfully (five
+operator stops, five natural failures and two 90-minute deadlines). Flights 12
+on `753e6ab` ended at 69.380 minutes with no published tools. All four researchers
+returned proven, including booking from freshly selected current flights. The
+master correctly found that the producer value lacked full itinerary context
+and booking retained recording literals. Its proposed contract repair then
+failed strict output validation twice: follow-ups omitted instruction and used
+suggestedExperiments. The whole teach terminated. No independent audit ran.
+
+No teach is currently running. The latest user request is a research deep dive
+and local evidence dashboard. The [research report](teach-research-deepdive-2026-09-21.md)
+records measured turn-level costs and the smallest correction candidates.
+No runtime or prompt changes were made during that analysis. Twelve attempts
+report $211.6927424 in base API equivalent; missing usage remains excluded.
 
 All local evidence remains under
 `~/.imprint/experiments/reteach-systemic-2026-09-21/`. The collector is on
 127.0.0.1:6443. Latest preflight: AC power, 100% battery, 17 GiB free, original
 recordings intact. No disk exhaustion, sleep, or network loss has been established
-as the cause of these eleven unsuccessful attempts. No prior generated tools enter teaching.
+as the cause of these twelve unsuccessful attempts. No prior generated tools enter teaching.
 Code and prompts stay fixed within each teach. The detailed observations below
 are historical entries; the current state and attempt table take precedence.
 
@@ -78,6 +83,8 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | SF-25 | Focused planning unnecessarily follows execution dependency waves | 5d5a770 overlaps independent planners at two workers; regression retains producer-first compilation. Flights 11 stopped before final planning; live overlap validation remains pending. |
 | SF-26 | Master chooses initial parameter contracts without underlying request quotes | Code inspection: retained discovery input gives candidate/advisor summaries and evidence counts, with no cited raw entries. Repeated wrong-mode choices in Flights 9/10 required later research repair. Candidate for better evidence delivery, not yet implemented or isolated as the sole cause. |
 | SF-27 | Turn completion at the watchdog boundary causes duplicated work | Flights 11 rollout completed at 297.969 seconds, host watchdog fired at 300 seconds, retained retry took 238.29 seconds. Completion-handling candidate; no confirmed network outage or SDK hang. |
+| SF-28 | Tested partial producers cannot be invoked by sibling researchers | Controller exposes only proven handoffs/results through call_producer. Flights 12 search returned live outbound records but lacked return-date proof. Watch whether this prevents downstream research from supplying that proof; no change or deadlock claim yet. |
+| SF-29 | A later request failure loses the complete earlier response | Flights 12 booking obtained live continuation data, then local extraction failed. Runtime emits onRawResponses only after the entire request loop; the failed tool directory has no live-results files. A preview cannot prove absence. Preserve failed-attempt intermediate bodies separately from successful proof. Unfixed. |
 
 ## Code-path observations to test, not established failures
 
@@ -142,7 +149,8 @@ not used to justify a production refactor during an active run.
 | September 21 Flights 8 | 3a61e14 | Natural failure at 46.136 minutes; 0/4 published | All research proven; missing response 206 rejected, then SF-15 killed planning. SF-10 availability was absent from discovery. $14.631096 reported, no missing usage spans. |
 | September 21 Flights 9 | fddd4ec | Natural failure at 78.954 minutes; 2/4 published | SF-22 context overflow after SF-04 search parser rejection; repaired cold continuation succeeded. $24.5983104 reported; one failed model span lacks usage. |
 | September 21 Flights 10 | 28f128e | Deadline at 90.012 minutes; 0/4 published | Context dedup exercised; wrong capture substring, nested request reconstruction, producer-stage drift and serial/repeated planning consumed the budget. $19.596328 reported; one deadline span lacks usage. |
-| September 21 Flights 11 | 5d5a770 | Operator stop at 70.384 minutes; 0/4 published | SF-11 in search, calendar and fresh booking continuation. Calendar direct calls became empty; page-owned initial grid worked. SF-27 watchdog duplicate. $11.1110296 reported; two spans lack usage. |
+| September 21 Flights 11 | 5d5a770 | Operator stop at 70.384 minutes; 0/4 published | SF-11 in search, calendar and fresh booking continuation. Calendar direct calls became empty; page-owned initial grid worked. SF-27 watchdog duplicate. $11.7279648 including one recovered provider usage record; one cancelled span still lacks usage. |
+| September 21 Flights 12 | 753e6ab | Natural failure at 69.380 minutes; 0/4 published | All four research reports proven, but master found missing itinerary context. Its contract repair used invalid follow-up fields after one repair and terminated the teach. $12.0917576 reported; no missing usage spans. |
 
 Flights 1 accounting: 2,546,811 input tokens, including 1,609,728 cache reads;
 46,340 output tokens; zero reported cache writes; $5.3190232 estimated base API
@@ -1605,3 +1613,159 @@ passed. Website build and 1440/390-width inspection passed (existing bundle-size
 warning only). All Flights 11 owned processes exited. The trace collector remains
 active for the next fresh run. Original recordings and 17 GiB available space
 were verified. No source/prompt changes will be made during Flights 12.
+
+Flights 12 launched at 18:50:04 UTC on 753e6ab. New isolated home, original
+recording and unchanged four-operation guidance. Target 19:20, assess 19:50,
+hard deadline 20:20 UTC. Driver process 46128; collector retained on port 6443.
+Disk 16.55 GiB free. Watch whether structural comparisons reach the actual
+researcher and shorten repairs, then complete strict independent audit before
+any pass claim. No earlier generated tools or examples supplied.
+
+Flights 11 critical-path accounting (elapsed boundaries, not summed parallel
+worker durations): discovery/initial master ended at 9.77 minutes; first research
+passes finished at 31.28; master plus watchdog retry finished at 40.27; search
+boundary refresh finished at 41.22; calendar follow-up returned partial at 65.45;
+booking continued until the operator stop at 70.384. Calendar's follow-up alone
+occupied about 24.2 minutes of the serial follow-up path. New structural evidence
+addresses construction repair latency; it does not claim to solve that scheduling
+choice or the downstream itinerary-stage mismatch.
+
+Accounting recovery after Flights 12 launch: the Flights 11 master rollout
+contains the completed watchdog turn's last_token_usage. Both adjacent successful
+turns exactly match their OTLP input/output/cache counts, validating the source.
+Recovered 119,499 input, 6,528 cache reads, 8,122 output and zero reported writes,
+adding $0.6169352. The private accounting helper supplements only that missing
+trace/span pair; it never overwrites emitted usage or double counts ancestors.
+Flights 11 revised total: 8,500,188 input, 6,743,552 cache reads, 100,200 output,
+zero reported writes, $11.7279648, one remaining missing cancelled span. Eleven
+completed attempts now total $199.6009848; ten observed missing spans and the
+Flights 5 unflushed tail remain excluded. Flights 12 active usage is separate.
+
+Flights 12 discovery ended at minute 12.11: triage 48.04 seconds, detector
+225.80, advisor 251.23, initial master 200.53. Four tools selected. Date grid
+starts with route and departure/return anchors, avoiding the previous eight-input
+window contract. SF-26 recurs as a scope risk: search selects [295,730] and
+round-trip inputs, while booking selects the multi-city [308,317]. The advisor
+had also listed the coherent round-trip [139,154] among available selection/
+booking evidence. Research must resolve the chosen cross-mode scope before
+claiming a fresh chain. This is not yet a failed tool or parser verdict.
+
+Additional SF-26 source check: discoveryEvidenceDocuments explicitly removes
+request headers, bodies and response previews, retaining indices/digests. The
+retained master's discovery projection further supplies evidence counts with
+no cited entries. Thus merely forwarding the current discovery evidence would
+not supply the missing wire facts. A future bounded, agent-selected request
+inspection before committing parameters may address this; no implementation
+change is made during Flights 12. Avoid adding a site-mode classifier.
+
+Flights 12 at minute 19: location has made no API call. Its first batch omitted
+candidate.parameterValues; the repair supplied them but both versions omitted
+workflow.requestTransformModule while supplying transform source. The base schema
+error therefore hid a later cross-field error until the single repair was spent.
+The controller retained a blocked advisory handoff and continued other research.
+This exercises the earlier invalid-report recovery path; master repair is pending.
+The batch prompt says testCases replaces the single input, while the schema also
+requires a redundant candidate.parameterValues. If this keeps recurring, normalize
+the primary batch input mechanically or clarify the contract; do not accept
+missing transform linkage or invalidate historical proof.
+
+Search's first candidate preserved request 730 structure, returned real outbound
+results through CDP after a fetch-bootstrap failure, and correctly excluded
+request 295's multi-city route. It returned partial at 17.59 because the complete
+raw response lacked the requested return date. Booking is testing the separately
+recorded multi-city selection/booking flow as a diagnostic, with its second token
+derived from the preceding live response. That does not prove the declared fresh
+round-trip producer chain. Controller inspection confirms partial producer
+candidates are unavailable to call_producer; record as SF-28 until its actual
+effect on this repair is known.
+
+Flights 12, minutes 21–25: bodyStructureComparison is present in actual model
+inputs. Booking used it to confirm request 308's structure matched the recording,
+and repaired its local base64/escaped-padding extraction instead of changing the
+wire body. Later it claimed the recorded second-flight token was absent, then
+corrected that claim during blocker review: only a truncated response preview
+was available. The exact full response cannot be inspected. Code inspection
+confirms runtime invokes onRawResponses only after all requests finish, while
+research retains result text only on success. The failed booking directory has
+only workflow.json and request-transform.ts, no live-results files. Record SF-29
+as actual lost intermediate evidence, distinct from SF-18 inaccessible sibling
+evidence. Any correction must retain attempt/request identity and never treat a
+partial failed chain as a successful result or overwrite earlier useful captures
+with the final failed rung.
+
+Booking's historical exact-flight requirement is also a comparability risk:
+recorded user query constraints must remain comparable, but a current producer
+can return different result-derived selection fields. The blocker review correctly
+withdraws absence claims based on a truncated preview. Investigate whether
+freshness guidance is being interpreted as replacing only an opaque token while
+pinning all historical response-derived identity fields. No new case or prompt
+change has been supplied during this run.
+
+Flights 12, 30-minute checkpoint: calendar research proven at 28.55 after a
+34.466-second cold page-owned API call and a 2.191-second warm repeat. Its four
+route/anchor parameters avoid the prior eight-input window contract. Search is
+partial, location is blocked on report format, booking is blocked on fresh
+upstream state and inaccessible intermediate evidence. No published tools or
+independent audit. Continue within the existing deadline; the master has concrete
+repairable handoffs. Structural diagnostics are reaching live model calls and
+were used to rule out a body mismatch, but a full reliability gain is unproven.
+
+SF-23 recurred in Flights 12: all initial research returned by 28.55, but the
+last independent calendar handoff started a speculative focused planner, which
+finished at 31.08 (151.70 seconds), before its draft compile. The master still
+awaited this work while three other handoffs needed repair. A smaller scheduling
+correction than a global concurrency rewrite may be to skip speculative drafting
+when no other initial research remains to overlap; test preservation of early
+drafting when genuine overlap exists. No source change during the run.
+
+Flights 12 master research review began around minute 36 after the calendar
+draft completed, roughly 7.5 minutes after all research had returned. The early
+draft used 26 completed MCP calls: read_session_summary 1, read_request 2,
+read_event 1, read_response_body 1, read_file 8, write_file 7, run_tests 3,
+run_bash 2, done 1. This was active compilation, not a stalled process. The
+existing analyze-compile-log.ts reported zero calls because these logs contain
+Codex item.completed/mcp_tool_call events; do not use that zero as timing or
+activity evidence. Native events lack timestamps here, so macro trace timings
+remain the reliable elapsed boundaries.
+
+Flights 12 master at 40.38 resolved the cross-mode contract: search now accepts
+a scalar legs JSON string for recorded request 295; booking explicitly returns
+next-leg choices for an incomplete ordered selection and offers for a completed
+selection. It directs booking to choose a second-leg option actually present in
+the fresh response, rather than require historical B61190. This corrects the
+freshness interpretation without a source/prompt change. It also correctly
+returns the location formatting error to the retained researcher. Location
+subsequently passed both recorded queries via fetch in 291/201 ms and returned
+proven at 42.37. The invalid-handoff recovery path is now exercised through an
+actual successful repair. Search research continues before the causal booking
+follow-up. No publication or independent audit yet.
+
+Flights 12 at 51.27 minutes: revised request-295 multi-city search returned
+protocol error [13] through fetch-bootstrap and CDP request replay despite a
+matching 581-byte body and decoded 80-node structure. The researcher then
+parameterized the recorded page navigation and captured its generated API
+response: both ordered legs were present, with first-leg records and fresh
+selection values. It is repeating the unchanged recorded input to check reuse.
+This is current transport-context sensitivity, not established malformed body,
+network loss, or a completed search tool. Location repair remains proven; booking
+and final parser verification remain pending. At this checkpoint 16 GiB is free.
+
+Measured timing for all eleven completed attempts is now recorded in [the stage report](teach-stage-timing-2026-09-21.md): 701.2 run minutes, 72.7% exclusively discovery/research/planning, 96.7 minutes of completed live backend durations with overlap kept separate, and no final independent audit. Do not treat uncovered intervals as idle or infer a precise setup/network split.
+
+Flights 12 final: search succeeded by page-owned API capture with a warm repeat.
+Booking called that producer freshly, selected a currently present second flight,
+and obtained offers via ordinary fetch. Research proof did not settle the reusable
+contract: the master found that selected_flights omitted full ordered query legs,
+so the booking transform hardcoded route/date context. Both final master outputs
+failed the follow-up schema; the repair still used suggestedExperiments rather
+than instruction, despite the master prompt documenting instruction. This is a
+coordinator-output failure after a valid semantic concern, not a site outage.
+All evidence is retained. No 4/4 publication or audit. Timing and cost are included
+in the twelve-attempt local dashboard.
+
+SF-30 candidate: research repeatedly serializes full candidate definitions. Across
+12 attempts, 112 research turns returned a definition previously seen in the same
+run/tool after excluding only parameters and backend. They took 111.7 worker-minutes;
+this is affected work, not an estimate of removable time. Exact candidate references
+could preserve proof while reducing output and accidental source reconstruction.
+Synthetic binding tests and a fresh teach must validate any implementation.

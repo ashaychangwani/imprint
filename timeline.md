@@ -14658,3 +14658,30 @@ also preserves the unresolved master-watchdog completion race and research
 follow-up scheduling delay. Eleven completed attempts cost $198.9840496 in
 reported base API equivalent; missing usage remains excluded. Evidence is retained.
 No MR, push, merge, automation or deletion.
+
+## 2026-09-21 — Measure where the unsuccessful teaches spend time
+
+Deduplicated trace intervals and backend logs for eleven completed attempts.
+701.2 minutes were inside teaches; 84.2 minutes fell between them. Discovery,
+research-agent work and planning/repair alone occupied 72.7% of run wall time.
+330 completed backend attempts reported 96.7 minutes including setup and failures;
+these overlap agent work and are not added to the exclusive wall-time table.
+No final independent audit ran. Detailed methodology, gaps and per-run values
+are in docs/teach-stage-timing-2026-09-21.md. No source or prompt change; Flights 12
+continues on 753e6ab.
+
+## 2026-09-22 — Inspect research work and build a local evidence dashboard
+
+Flights 12 ended at 69.380 minutes on 753e6ab. Four researchers returned proven,
+but the master found missing itinerary context in the booking handoff. Its own
+repair output used invalid follow-up fields twice and terminated the teach.
+No tools published or audit; all failed evidence remains intact.
+
+The requested local dashboard analyzes all twelve attempts: 457 research calls,
+417.2 worker-minutes, with 69.3% of that work in test-candidate decisions. Exact
+candidate-definition comparison found 112 repeated outputs; format repairs took
+12.3 worker-minutes. The dashboard separates wall/worker/backend clocks, offers
+turn-level input/output inspection and ranks correction candidates without
+claiming all repeated work is wasted. The research deep-dive document records
+methods, limits and verification requirements. No runtime/prompt change, new
+teach, external deployment, MR, push or deletion.
