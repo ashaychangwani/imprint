@@ -3399,105 +3399,128 @@ async function discoverAndPlan(input: {
     { bundle: HostedPlannerBundle; research: ApiResearchResult; boundary: string }
   >();
 
-  const firstPassResearch = await researchSelectedOperations({
-    plan: initialPlan,
-    run,
-    recordingIndex,
-    triagedSession: input.triage.session,
-    independent: input.independent,
-    seeds: input.seeds,
-    stagingRoot: input.stagingRoot,
-    agent: input.agent,
-    deps: input.deps,
-    runDeadline: input.runDeadline,
-    signal: input.signal,
-    report: input.report,
-    onProven: async (tool, result, handoff, evidence, canDraft) => {
-      // Consumers still wait for their declared producers and normal build
-      // waves. Early work must not bypass the existing producer-first checks.
-      if (
-        !canDraft() ||
-        tool.candidate.dependsOnTools.length > 0 ||
-        initialPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id)
-      )
-        return;
-      try {
-        const [bundle] = await requestFocusedPlannerBundles({
-          plan: initialPlan,
-          discoveryRun: run,
-          recordingIndex,
-          triagedSession: input.triage.session,
-          independent: input.independent,
-          seeds: input.seeds,
-          agent: input.agent,
-          deps: input.deps,
-          apiResearch: [handoff],
-          evidenceByTool: new Map([[tool.id, evidence]]),
-          toolIds: new Set([tool.id]),
-        });
-        if (!bundle) return;
-        const proposed = bundle.proposal.payload.tool;
-        if (!apiResearchMatchesPlan(proposed, bundle.output.implementationPlan, result)) return;
-        earlyPlans.set(tool.id, {
-          bundle,
-          research: result,
-          boundary: teachingToolCompileInputsSha256({
-            ...tool,
-            strategy: undefined,
-            evidenceRefs: [],
+  const nativeDrafts: Promise<void>[] = [];
+  let draftFailure: unknown;
+  const prepareEarlyDraft: NonNullable<
+    Parameters<typeof researchSelectedOperations>[0]['onProven']
+  > = async (tool, result, handoff, evidence, canDraft) => {
+    // Consumers still wait for their declared producers and normal build
+    // waves. Early work must not bypass the existing producer-first checks.
+    if (
+      !canDraft() ||
+      tool.candidate.dependsOnTools.length > 0 ||
+      initialPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id)
+    )
+      return;
+    try {
+      const [bundle] = await requestFocusedPlannerBundles({
+        plan: initialPlan,
+        discoveryRun: run,
+        recordingIndex,
+        triagedSession: input.triage.session,
+        independent: input.independent,
+        seeds: input.seeds,
+        agent: input.agent,
+        deps: input.deps,
+        apiResearch: [handoff],
+        evidenceByTool: new Map([[tool.id, evidence]]),
+        toolIds: new Set([tool.id]),
+      });
+      if (!bundle) return;
+      const proposed = bundle.proposal.payload.tool;
+      if (!apiResearchMatchesPlan(proposed, bundle.output.implementationPlan, result)) return;
+      earlyPlans.set(tool.id, {
+        bundle,
+        research: result,
+        boundary: teachingToolCompileInputsSha256({
+          ...tool,
+          strategy: undefined,
+          evidenceRefs: [],
+        }),
+      });
+      if (!canDraft()) return;
+      input.report?.(
+        `${tool.candidate.toolName}: compiling a draft while other research continues`,
+      );
+      const compiled = await input.deps.compileFocusedTool({
+        tool: proposed,
+        implementationPlan: bundle.output.implementationPlan,
+        triage: input.triage,
+        ...input.compileInput,
+        stagingDir: pathJoin(input.stagingRoot, 'research-drafts', tool.id),
+        apiResearchDir: result.toolDir,
+        apiResearchSummary: result.summary,
+        resumeSessionId: input.compileSessionsByToolId.get(tool.id),
+        onSessionId: (id) => input.compileSessionsByToolId.set(tool.id, id),
+        runDeadline: input.runDeadline,
+        signal: input.signal,
+      });
+      earlyDrafts.set(tool.id, {
+        compiled,
+        compileInputsSha256: bundle.proposal.payload.binding.compileInputsSha256,
+        implementationSha256: teachingPlanContentSha256(bundle.output.implementationPlan),
+      });
+    } catch (error) {
+      if (input.signal?.aborted) throw abortSignalError(input.signal);
+      const controlError = providerControlError(error);
+      if (controlError) throw controlError;
+      input.report?.(
+        `${tool.candidate.toolName}: early draft needs another pass (${boundedTerminalMessage(error)})`,
+      );
+    }
+  };
+  let research: Awaited<ReturnType<typeof reviewApiResearchBeforePlanning>>;
+  try {
+    const firstPassResearch = await researchSelectedOperations({
+      plan: initialPlan,
+      run,
+      recordingIndex,
+      triagedSession: input.triage.session,
+      independent: input.independent,
+      seeds: input.seeds,
+      stagingRoot: input.stagingRoot,
+      agent: input.agent,
+      deps: input.deps,
+      runDeadline: input.runDeadline,
+      signal: input.signal,
+      report: input.report,
+      onProven: async (...args) => {
+        const draft = prepareEarlyDraft(...args);
+        // Native admission belongs to Codex. Its unrelated draft must not hold
+        // completed research behind another barrier before master review.
+        if (!currentNativeTeachAgents()) return await draft;
+        nativeDrafts.push(
+          draft.catch((error) => {
+            draftFailure ??= error;
           }),
-        });
-        if (!canDraft()) return;
-        input.report?.(
-          `${tool.candidate.toolName}: compiling a draft while other research continues`,
         );
-        const compiled = await input.deps.compileFocusedTool({
-          tool: proposed,
-          implementationPlan: bundle.output.implementationPlan,
-          triage: input.triage,
-          ...input.compileInput,
-          stagingDir: pathJoin(input.stagingRoot, 'research-drafts', tool.id),
-          apiResearchDir: result.toolDir,
-          apiResearchSummary: result.summary,
-          resumeSessionId: input.compileSessionsByToolId.get(tool.id),
-          onSessionId: (id) => input.compileSessionsByToolId.set(tool.id, id),
-          runDeadline: input.runDeadline,
-          signal: input.signal,
-        });
-        earlyDrafts.set(tool.id, {
-          compiled,
-          compileInputsSha256: bundle.proposal.payload.binding.compileInputsSha256,
-          implementationSha256: teachingPlanContentSha256(bundle.output.implementationPlan),
-        });
-      } catch (error) {
-        if (input.signal?.aborted) throw abortSignalError(input.signal);
-        const controlError = providerControlError(error);
-        if (controlError) throw controlError;
-        input.report?.(
-          `${tool.candidate.toolName}: early draft needs another pass (${boundedTerminalMessage(error)})`,
-        );
-      }
-    },
-  });
-  const research = await reviewApiResearchBeforePlanning({
-    initialPlan,
-    initialResearch: firstPassResearch,
-    discoveryInput,
-    discoveryEvidence,
-    toolAdvice: advice,
-    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
-    triagedSession: input.triage.session,
-    independent: input.independent,
-    seeds: input.seeds,
-    stagingRoot: input.stagingRoot,
-    agent: input.agent,
-    deps: input.deps,
-    runDeadline: input.runDeadline,
-    signal: input.signal,
-    report: input.report,
-    now: input.now,
-    selfContainedFirstReview: Boolean(input.selected),
-  });
+      },
+    });
+    research = await reviewApiResearchBeforePlanning({
+      initialPlan,
+      initialResearch: firstPassResearch,
+      discoveryInput,
+      discoveryEvidence,
+      toolAdvice: advice,
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
+      triagedSession: input.triage.session,
+      independent: input.independent,
+      seeds: input.seeds,
+      stagingRoot: input.stagingRoot,
+      agent: input.agent,
+      deps: input.deps,
+      runDeadline: input.runDeadline,
+      signal: input.signal,
+      report: input.report,
+      now: input.now,
+      selfContainedFirstReview: Boolean(input.selected),
+    });
+  } finally {
+    // Keep ownership until every started draft settles, including failure paths.
+    // Final planning may then reuse exact drafts without overlapping compilers.
+    await Promise.all(nativeDrafts);
+  }
+  if (draftFailure !== undefined) throw draftFailure;
   const researchRefs = research.handoffs.map((handoff) =>
     addBootstrap(input.seeds, jsonRef(handoff)),
   );

@@ -15044,3 +15044,63 @@ flights-17/home. PID 97342. Target 14:21, assess 14:51, hard stop 15:21 UTC.
 Eleven GiB free; both source recordings and collector 6443 verified. The prior
 website preview was stopped. No old generated tools or cross-run memory are
 supplied. Runtime and prompts remain unchanged through this teach and its audit.
+
+Flights 17 initial selection took 21.5 minutes. The advisor kept trip modes
+together, but the master chose nine tools: lookup and selected-location details,
+three purpose-specific searches, date grid, and three matching booking tools.
+All nine research tasks were dispatched natively. The thirty-minute target was
+missed; lookup is proven and drafting, and location details also has live evidence.
+Retained schema repair corrected missing transform-module fields. One-way research
+used decoded request comparison to identify an extra nesting layer. No provider
+capacity failure has been recorded at this point. No audited result is claimed.
+
+A read-only review found that human scope is delivered to the master but omitted
+from the earlier tool-selection advisor, which spent 424 seconds reviewing all
+seven discovered operations. This is a candidate source of avoidable work, not a
+measured speed fix. No runtime or prompt changes were made during Flights 17.
+
+Flights 17 sixty-minute assessment: retain the original ninety-minute deadline.
+Round-trip research has demonstrated initial and selected-return branches, so
+there is fresh producer progress to review. One-way booking has called its current
+producer but the returned rendered page does not expose the required complete
+selection envelope. This is a producer/consumer contract gap, not disk, power
+or provider-capacity evidence. About eleven GiB remains available.
+
+By minute 74 all research has returned, but the one-way speculative compiler
+still prevents master research review. The last research handoff completed at
+14:53:42 UTC; this repeats SF-23's draft barrier. A separate preparation worktree
+now has a regression that fails on the old barrier and passes after moving native
+draft settlement behind master review, with exact reuse and error-path settlement
+checked. No new pool or admission policy is added; non-native four-worker behavior
+is preserved. The running validation worktree's code and prompts remain unchanged.
+
+The same preparation worktree reuses the verifier's pure-data projection for
+research inspection. The one-way consumer received a 3,041,549-character page and
+spent multiple turns reading 2000-character excerpts. Whole-response queries stay
+offline, bounded, labelled and tied to the same observation/evidence reference.
+Errors return for repair; failed evidence cannot become successful proof. 273
+affected tests passed after both prepared changes. Live benefit remains unproven.
+
+
+Flights 17 ended at 15:21:02 UTC after 90.03 minutes, exit 1, zero ready and nine
+not ready. The final fresh round-trip producer call took 34.601 seconds; the
+retained booking researcher reached the deadline before inspection and consumer
+proof. No tools were published, so no audit is possible. The native family closed
+and its process group is empty. The terminal provider-deadline error is the teach
+limit, not a capacity failure.
+
+Wall shares were 23.88% initial selection, 63.00% first-pass research plus overlapping
+drafts, and 13.12% master revision/follow-up work. The measured draft barrier delayed
+master review 15.52 minutes. Reported usage: 40,465,228 input including 37,872,512
+cache reads, 283,788 output, zero reported writes, $31.1956288 base equivalent.
+Twenty family totals are snapshots; one analysis usage span is missing. Campaign
+trace total is $324.9149432, excluding $3.6264408 separate native smokes and unknown
+usage. The retrospective retains limitations and full local evidence paths.
+
+After Flights 17 stopped, integrated prepared checkpoint 7c4f069: master review can
+proceed while native drafts finish, and research reuses bounded offline projection
+for complete retained-response inspection. No new scheduler, site rule, publication
+waiver or proof shortcut. 273 affected tests and lint/typecheck/web checks passed in
+the preparation checkout. Runtime and prompt contents match that tested checkpoint.
+This is the third native-path repair checkpoint; avoid an unlimited sequence of
+architecture repairs. A fresh run is still required to measure any live benefit.

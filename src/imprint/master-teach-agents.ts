@@ -369,6 +369,15 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
     if (output.action === 'inspect_result') {
       if (!output.resultQuery) issue(ctx, ['resultQuery'], 'result inspection requires a query');
       else {
+        if (
+          output.resultQuery.project !== undefined &&
+          (output.resultQuery.offset !== 0 || output.resultQuery.search !== undefined)
+        )
+          issue(
+            ctx,
+            ['resultQuery'],
+            'a projection queries the complete retained text; omit search and nonzero offset',
+          );
         const observation = input.observations.find(
           ({ id }) => id === output.resultQuery?.observationId,
         );

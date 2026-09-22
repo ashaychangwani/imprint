@@ -19,6 +19,7 @@ import { compareBodyStructures, decodeBodyStructure } from './body-structure.ts'
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
+import { inspectEvidenceText } from './evidence-inspection.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import {
   ApiResearchInputSchema,
@@ -609,29 +610,25 @@ export async function researchApiMvpCall(input: {
             ? retainedResultPath(input.toolDir, observation.id)
             : retainedResponseEvidencePath(input.toolDir, observation.id, query.evidenceRef);
         const text = readFileSync(source, 'utf8');
-        const match =
-          query.search === undefined ? query.offset : text.indexOf(query.search, query.offset);
-        const offset = match < 0 ? query.offset : match;
-        const slice = match < 0 ? '' : text.slice(offset, offset + query.length);
+        const inspected = inspectEvidenceText(text, query);
         resultInspection = {
           observationId: observation.id,
           ...(query.evidenceRef === undefined ? {} : { evidenceRef: query.evidenceRef }),
-          offset,
-          totalCharacters: text.length,
-          text: slice,
-          nextOffset:
-            match < 0 || offset + slice.length >= text.length ? null : offset + slice.length,
-          ...(query.search === undefined ? {} : { matchFound: match >= 0 }),
+          ...inspected,
         };
         retainedTurnDelta = { kind: 'result_inspection', resultInspection };
-        if (slice.length)
+        if (inspected.text.length || inspected.projection)
           observation.resultInspections = [
             ...(observation.resultInspections ?? []).filter(
-              (entry) => entry.offset !== offset || entry.evidenceRef !== query.evidenceRef,
+              (entry) =>
+                entry.offset !== inspected.offset ||
+                entry.evidenceRef !== query.evidenceRef ||
+                entry.projection?.source !== inspected.projection?.source,
             ),
             {
-              offset,
-              text: slice,
+              offset: inspected.offset,
+              text: inspected.text,
+              ...(inspected.projection ? { projection: inspected.projection } : {}),
               ...(query.evidenceRef === undefined ? {} : { evidenceRef: query.evidenceRef }),
             },
           ].slice(-8);

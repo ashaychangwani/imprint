@@ -2,9 +2,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
-import { Script } from 'node:vm';
 import { z } from 'zod';
 import { decodeBodyStructure } from './body-structure.ts';
+import { projectEvidence } from './evidence-inspection.ts';
+export { projectEvidence } from './evidence-inspection.ts';
 import { importModuleFresh } from './import-module-fresh.ts';
 import { resolveProvider } from './llm.ts';
 import {
@@ -63,17 +64,6 @@ const hash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string =>
   typeof value === 'string' ? value : (JSON.stringify(value) ?? 'null');
-
-/** Bounded pure-data inspection; no network, file handles, or parser module. */
-export function projectEvidence(value: unknown, source: string): string {
-  const script = new Script(`JSON.stringify((${source})(JSON.parse(raw)))`);
-  return String(
-    script.runInNewContext(
-      { raw: JSON.stringify(value) },
-      { timeout: 1_000, contextCodeGeneration: { strings: false, wasm: false } },
-    ) ?? 'null',
-  );
-}
 
 /** Reuse the mechanical wire decoder; expose limits instead of guessing semantics. */
 export function decodeEvidenceResponses(responses: unknown[], format: unknown = 'auto'): unknown[] {

@@ -954,3 +954,19 @@ unknown references and out-of-range offsets are rejected. Failed observations
 cannot prove a candidate. Compiler history copies only explicitly listed bodies.
 The existing completed-chain callback remains compatible. Evidence-hook failures
 cannot change tool execution; research reports failed persistence explicitly.
+
+
+Research response inspection shares the verifier's pure-data projection helper.
+An `inspect_result` query can supply a function over the full saved text, with
+a one-second CPU limit and no filesystem/network/parser access. The response
+keeps at most 2000 output characters, labels the projection and its full output
+size, and returns errors to the retained researcher. Failed response bodies use
+the same observation/evidence-reference validation. Inspections do not change
+test outcomes, candidate hashes, or proof bindings. Raw excerpt reads remain
+compatible; projection reads omit search and nonzero offsets.
+
+Native draft work no longer holds the first research pass open. Completed handoffs
+reach master review while compatible drafts finish under provider-owned admission.
+All started drafts settle before final planning reuses or replaces their artifacts,
+including when master review fails. Non-native providers retain their existing
+four-worker path. This does not publish drafts early or weaken producer ordering.

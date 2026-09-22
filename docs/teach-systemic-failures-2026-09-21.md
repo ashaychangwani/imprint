@@ -1908,3 +1908,24 @@ See [the measured retrospective](teach-flights-16-retrospective-2026-09-22.md).
 Neither correction adds a worker pool or scheduler. Full fresh validation remains
 outstanding. The upstream search/booking contract mismatch and unattempted recorded
 variants remain unresolved; native delegation alone does not solve them.
+
+
+## Flights 17 observed delays — September 22
+
+All first-pass research had returned at 14:53:42 UTC, but master review waited
+until 15:09:13 for the one-way speculative compiler. This repeats SF-23: about
+15.52 minutes of avoidable review delay. The compiler was actively building and
+testing a parser, not stuck after an SDK terminal event. A preparation checkpoint
+moves draft settlement after master review while retaining owned cleanup and exact
+reuse. The old-code regression fails; normal and review-error paths pass afterward.
+
+| ID | Systemic defect | Evidence and correction |
+| --- | --- | --- |
+| SF-37 | Bounded excerpts force many turns to query a large retained response | A fresh consumer received a 3,041,549-character document and repeatedly searched 2000-character slices. Reuse the existing verifier's bounded offline projection for research inspection, preserving observation identity and failed status. Regression tests pass; fresh teach benefit remains unproven. |
+
+Native concurrency reached nine active child turns, including tool waits; no
+capacity failure was recorded. The master split recorded user purposes into nine
+tools and shared findings were published. These mechanics do not prove full
+coverage, cross-tool reuse or a net reduction in runtime code. First-pass research
+still left fresh booking contracts incomplete. See the Flights 17 retrospective
+for the eventual terminal result and cost accounting.

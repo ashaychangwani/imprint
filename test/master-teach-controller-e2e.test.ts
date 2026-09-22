@@ -44,7 +44,12 @@ import {
   ImplementationPlanPayloadSchema,
 } from '../src/imprint/master-teach-plan.ts';
 import { FreshTeachJournalStateSchema } from '../src/imprint/master-teach-store.ts';
-import { ProviderDeadlineError, ProviderUnavailableError } from '../src/imprint/provider-retry.ts';
+import { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
+import {
+  ProviderDeadlineError,
+  ProviderUnavailableError,
+  RunDeadline,
+} from '../src/imprint/provider-retry.ts';
 import {
   buildToolCandidatePayload,
   validateToolCandidateDetection,
@@ -1371,6 +1376,84 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.status).toBe('failed');
     });
   });
+
+  for (const failReview of [false, true]) {
+    it(`reviews completed native research while a compatible draft is still compiling: failReview=${failReview}`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const base = lifecycleFailureFixture({
+          runId: 'native-draft-overlap',
+          events: [],
+          promotionBatches: [],
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        });
+        let releaseConsumer!: () => void;
+        const draftStarted = new Promise<void>((resolve) => {
+          releaseConsumer = resolve;
+        });
+        let releaseDraft!: () => void;
+        const reviewed = new Promise<void>((resolve) => {
+          releaseDraft = resolve;
+        });
+        let finished = false;
+        let reviewedBeforeDraft = false;
+        let producerCompiles = 0;
+        const family = new NativeTeachAgents(
+          {
+            root: join(root, 'native-family'),
+            model: 'fixture',
+            deadline: new RunDeadline(Date.now() + 5000),
+          },
+          async () => {
+            throw new Error('Fixture must not use a provider');
+          },
+        );
+        await family.run(() =>
+          runFreshMasterTeach(
+            {
+              site: SITE,
+              fromSession: syntheticSessionPath(root),
+              noInteractive: true,
+              provider: 'codex-cli',
+              maxDurationMs: 5000,
+            },
+            {
+              ...base,
+              requestApiResearchStep: async (input, ...rest) => {
+                if (!base.requestApiResearchStep) throw new Error('Missing researcher');
+                if (input.tool.id === CONSUMER_ID) await draftStarted;
+                return await base.requestApiResearchStep(input, ...rest);
+              },
+              compileFocusedTool: async (input) => {
+                if (!base.compileFocusedTool) throw new Error('Missing compiler');
+                if (input.tool.id === PRODUCER_ID) {
+                  producerCompiles++;
+                  releaseConsumer();
+                  await Promise.race([
+                    reviewed,
+                    new Promise<void>((resolve) => setTimeout(resolve, 150)),
+                  ]);
+                  finished = true;
+                }
+                return await base.compileFocusedTool(input);
+              },
+              requestMasterDecision: async (input, options) => {
+                if (!base.requestMasterDecision) throw new Error('Missing master');
+                if (input.decisionPurpose === 'research_review') {
+                  reviewedBeforeDraft = !finished;
+                  releaseDraft();
+                  if (failReview) throw new Error('Fixture master review failure');
+                }
+                return await base.requestMasterDecision(input, options);
+              },
+            },
+          ),
+        );
+        expect(reviewedBeforeDraft).toBeTrue();
+        expect(finished).toBeTrue();
+        expect(producerCompiles).toBe(1);
+      });
+    });
+  }
 
   it('pages to omitted requests and sends sequential inspections without repeating prior evidence', async () => {
     await withTemporaryImprintHome(async (root) => {

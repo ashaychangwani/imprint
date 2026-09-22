@@ -152,8 +152,19 @@ describe('focused API research', () => {
           },
           requestStep: async (input) => {
             turns++;
-            if (turns === 1 || turns === 4)
+            if (turns === 1) return { binding, action: 'test', candidate, reason: 'Run fixture.' };
+            if (turns === 4) {
+              expect(input.resultInspection).toMatchObject({
+                text: '{"value":"retained-1"}',
+                projection: { source: 'text => ({value: text})', outputCharacters: 22 },
+              });
+              expect(input.observations[0]?.result.ok).toBeFalse();
+              expect(input.observations[0]?.resultInspections?.at(-1)?.projection?.source).toBe(
+                'text => ({value: text})',
+              );
+              expect(calls).toBe(1);
               return { binding, action: 'test', candidate, reason: 'Run fixture.' };
+            }
             const observation = input.observations[0];
             const evidenceRef = observation?.responseEvidence?.[0]?.evidenceRef;
             if (!observation || !evidenceRef) throw new Error('Missing retained fixture evidence');
@@ -191,7 +202,13 @@ describe('focused API research', () => {
             if (turns === 3) {
               expect(input.resultInspection).toMatchObject({ evidenceRef, text: 'retained-1' });
               expect(calls).toBe(1);
-              return parseApiResearchOutput(JSON.stringify(query), input);
+              return parseApiResearchOutput(
+                JSON.stringify({
+                  ...query,
+                  resultQuery: { ...query.resultQuery, project: 'text => ({value: text})' },
+                }),
+                input,
+              );
             }
             const second = input.observations[1];
             if (!second) throw new Error('Missing second observation');
@@ -1196,6 +1213,102 @@ describe('focused API research', () => {
       } finally {
         rmSync(compilerDir, { recursive: true, force: true });
       }
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
+  it('queries a whole retained response and repairs projection errors without another live call', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-projection-'));
+    const candidate = apiCandidate('projection');
+    const body = JSON.stringify({
+      rows: Array.from({ length: 1000 }, (_, id) => ({ id, padding: 'x'.repeat(100) })),
+    });
+    let calls = 0;
+    let turns = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          runApiTool: async () => {
+            calls++;
+            return { executionMechanism: 'fetch', result: { ok: true, data: body } };
+          },
+          requestStep: async (input) => {
+            turns++;
+            if (turns === 1)
+              return { binding, action: 'test', candidate, reason: 'Fetch synthetic rows.' };
+            const observation = input.observations[0];
+            if (!observation) throw new Error('Missing observation');
+            const query = (project: string) =>
+              parseApiResearchOutput(
+                JSON.stringify({
+                  binding,
+                  action: 'inspect_result',
+                  resultQuery: { observationId: observation.id, project },
+                  reason: 'Query saved data.',
+                }),
+                input,
+              );
+            if (turns === 2) {
+              for (const extra of [{ search: 'rows' }, { offset: 1 }])
+                expect(() =>
+                  parseApiResearchOutput(
+                    JSON.stringify({
+                      binding,
+                      action: 'inspect_result',
+                      resultQuery: {
+                        observationId: observation.id,
+                        project: 'text => text',
+                        ...extra,
+                      },
+                      reason: 'Ambiguous query.',
+                    }),
+                    input,
+                  ),
+                ).toThrow();
+              return query('() => process.env');
+            }
+            if (turns === 3) {
+              expect(input.resultInspection?.projection?.error).toContain('process');
+              expect(input.resultInspection?.text).toBe('');
+              expect(input.resultInspection?.nextOffset).toBeNull();
+              return query(
+                'text => { const rows = JSON.parse(text).rows; return {count: rows.length, last: rows.at(-1).id}; }',
+              );
+            }
+            if (turns === 4) {
+              expect(JSON.parse(input.resultInspection?.text ?? '')).toEqual({
+                count: 1000,
+                last: 999,
+              });
+              expect(input.resultInspection?.totalCharacters).toBe(body.length);
+              expect(input.resultInspection?.projection?.outputCharacters).toBe(25);
+              return query('text => text');
+            }
+            expect(input.resultInspection?.text.length).toBe(2000);
+            expect(input.resultInspection?.projection?.outputCharacters).toBeGreaterThan(2000);
+            expect(input.resultInspection?.nextOffset).toBeNull();
+            expect(observation.resultInspections?.at(-1)?.projection?.source).toBe('text => text');
+            return {
+              binding,
+              action: 'proven',
+              candidate,
+              basedOnObservationId: observation.id,
+              reason: 'Synthetic data inspected; actual test binding unchanged.',
+            };
+          },
+        },
+      });
+      expect(result.observation.result.ok).toBeTrue();
+      expect(calls).toBe(1);
+      expect(turns).toBe(5);
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }

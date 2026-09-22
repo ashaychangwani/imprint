@@ -190,6 +190,11 @@ export const RetainedResponseEvidenceSchema = strictObject({
   readError: utf8Text(0, 4_000).optional(),
 });
 export type RetainedResponseEvidence = z.infer<typeof RetainedResponseEvidenceSchema>;
+const EvidenceProjectionSchema = strictObject({
+  source: utf8Text(1, 8_000),
+  outputCharacters: z.number().int().nonnegative(),
+  error: utf8Text(1, 8_000).optional(),
+});
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
   producerToolName: SemanticToolCandidateSchema.shape.toolName.optional(),
@@ -204,6 +209,7 @@ export const ApiResearchObservationSchema = strictObject({
       strictObject({
         offset: z.number().int().nonnegative(),
         text: utf8Text(0, 8_000),
+        projection: EvidenceProjectionSchema.optional(),
         evidenceRef: PromptIdSchema.optional(),
       }),
     )
@@ -337,6 +343,7 @@ export const ApiResearchInputSchema = strictObject({
     text: utf8Text(0, 8_000),
     nextOffset: z.number().int().nonnegative().nullable(),
     matchFound: z.boolean().optional(),
+    projection: EvidenceProjectionSchema.optional(),
   }).optional(),
 });
 export type ApiResearchInput = z.infer<typeof ApiResearchInputSchema>;
@@ -368,6 +375,7 @@ export const ApiResearchOutputSchema = strictObject({
     offset: z.number().int().nonnegative().default(0),
     length: z.number().int().min(1).max(2_000).default(2_000),
     search: utf8Text(1, 256).optional(),
+    project: utf8Text(1, 8_000).optional(),
   }).optional(),
   candidate: ApiResearchCandidateSchema.optional(),
   testCases: z
