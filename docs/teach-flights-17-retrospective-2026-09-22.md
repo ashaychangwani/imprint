@@ -100,3 +100,21 @@ Hotels acceptance has been established. The prepared correction is the third
 native-path repair checkpoint after interface/parallel repair and stable compiler
 identity/immediate verification. Do not interpret the switch from the former
 adaptive scheduler as permission for unlimited repair experiments.
+
+
+## Coverage correction from direct recording inspection
+
+The term one-way above describes the Flights 17 agent's selected tool label, not
+verified one-way fixture coverage. Flights 18 independently classified request 245
+as multi-city. Direct read-only inspection confirms that request 245 has the same
+trip-mode field value as 295/308, while the actual recorded one-way shopping
+requests 206/235 have a different value and no response bodies. There are no other
+shopping requests with that one-way field value in the source recording.
+
+Flights 17 therefore misattributed its parser fixture before research. Its live
+rendered-page result does not establish comparability to a recorded one-way response.
+The runtime correctly had not published that draft, but earlier progress wording
+must not count it as proven one-way coverage. Flights 18 excluded one-way purposes
+before live testing on this evidence limitation; that is an explicit untested
+variant, not a demonstrated live failure. This correction is diagnostic only and
+is not a site-specific runtime/prompt rule or an input injected into the fresh run.

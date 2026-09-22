@@ -1929,3 +1929,8 @@ tools and shared findings were published. These mechanics do not prove full
 coverage, cross-tool reuse or a net reduction in runtime code. First-pass research
 still left fresh booking contracts incomplete. See the Flights 17 retrospective
 for the eventual terminal result and cost accounting.
+
+
+| ID | Systemic defect | Evidence and status |
+| --- | --- | --- |
+| SF-38 | Agent tool-purpose labels can disagree with the selected recording fixture | Flights 17 treated request 245 as one-way even though it belongs with the multi-city requests. Flights 18 independently identified the actual one-way requests 206/235 and their missing response bodies. Direct source inspection confirms that distinction. No one-way coverage was published or audited. Preserve explicit purpose/fixture comparability and report the coverage correction; no site-specific runtime classifier is added. |

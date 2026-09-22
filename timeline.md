@@ -15130,3 +15130,14 @@ website build and desktop/mobile checks pass. Real-provider smoke and a fresh te
 remain pending. Flights 18 code/prompts remain unchanged; no runtime integration
 during this run. This is the fourth native-path preparation checkpoint, not an
 unlimited new repair allowance.
+
+
+Flights 18 selected ten tools and dispatched ten native researchers around minute
+22: location lookup/details, round-trip and multi-city search/booking, three
+recorded filter purposes, and the date grid. It excluded one-way because recorded
+requests 206/235 have no response bodies. Direct source inspection confirms those
+are the only shopping requests with that trip-mode value, while request 245 shares
+the multi-city value with 295/308. This corrects Flights 17's mislabeled one-way
+fixture and earlier progress wording: that research did not prove recorded one-way
+coverage. No correction was injected into the fresh teach. SF-38 records the
+purpose/fixture attribution failure without adding a site-specific rule.
