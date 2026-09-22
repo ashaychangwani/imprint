@@ -1934,3 +1934,21 @@ for the eventual terminal result and cost accounting.
 | ID | Systemic defect | Evidence and status |
 | --- | --- | --- |
 | SF-38 | Agent tool-purpose labels can disagree with the selected recording fixture | Flights 17 treated request 245 as one-way even though it belongs with the multi-city requests. Flights 18 independently identified the actual one-way requests 206/235 and their missing response bodies. Direct source inspection confirms that distinction. No one-way coverage was published or audited. Preserve explicit purpose/fixture comparability and report the coverage correction; no site-specific runtime classifier is added. |
+
+
+## Flights 18 terminal lock failure — September 22
+
+SF-39: The research executor's shared file lock starved date-grid research for ten
+minutes. Its generic timeout aborted the first research phase; unrelated planners
+then settled before failure became visible. No calendar request executed. Independent
+synthetic reproduction confirms later arrivals can overtake an earlier waiter.
+Remove the research-only lock and reserve existing origin-pacing starts before
+waiting, retaining per-tool/rung state isolation and other lock users. This is the
+fifth bounded native-path correction, not a new scheduler. Fresh validation pending.
+
+The time-window researcher also invented an unrecorded contrast despite explicit
+fixed-case guidance, and based its proven handoff on it. This remains a coverage
+and instruction-following defect; no tool was published. Booking still lacked
+complete fresh producer selections. See the Flights 18 retrospective for scope,
+timings, failed response evidence and usage. Native delegation alone is not full
+MVP acceptance or a claim of whole-runtime simplification.

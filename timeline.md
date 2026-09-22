@@ -15141,3 +15141,32 @@ the multi-city value with 295/308. This corrects Flights 17's mislabeled one-way
 fixture and earlier progress wording: that research did not prove recorded one-way
 coverage. No correction was injected into the fresh teach. SF-38 records the
 purpose/fixture attribution failure without adding a site-specific rule.
+
+
+Flights 18 thirty-minute snapshot: two proven research results, lookup planning,
+zero published tools. Native rollout intervals reached ten active child turns;
+these include tool waits, not simultaneous model calls, and no capacity failure
+was recorded. Four shared findings were published. Reported usage: 18,364,693 input
+including 16,722,816 cache reads, 118,705 output, zero reported cache writes;
+$15.6307344 base equivalent, partial. The thirty-minute target was missed. Original
+sixty-minute assessment and ninety-minute deadline remain unchanged.
+
+
+Flights 18 failed at 16:15 UTC after 51.856 minutes: zero published, ten not ready,
+no audit. Calendar research never executed because it timed out acquiring the
+shared research file lock. Seven sibling research handoffs returned proven, both
+booking handoffs remained blocked, and master review never started. The family
+closed; its process group is empty. No capacity failure; eleven GiB free. SF-39
+and the retrospective preserve the actual error and independent reproduction.
+An invented time-window contrast violated the fixed-recording policy and cannot
+count toward acceptance. Reported usage: 32,526,293 input (29,959,552 cache reads),
+207,195 output, zero reported writes, $26.3946848 base equivalent. Campaign trace
+total $351.309628 plus separate native smokes and unknown usage.
+
+After this run stopped, the persistent native-research provider smoke passed in
+86.556 seconds: three actions, two assignments, same retained child, including
+paged context. Cost $0.3022704, reported snapshots, separate from teach accounting.
+The final bounded native-path correction removes research-only file locking and
+fixes existing pacing reservations/cancellation. Three regressions fail before
+and pass after. No new worker scheduler or site-specific rule is added. Integration
+and fresh-teach validation remain pending; this is not repeated audited success.
