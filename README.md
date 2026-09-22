@@ -110,6 +110,8 @@ uses the full evidence. Codex teaches use one native agent family, with up to te
 concurrent children. Agents can delegate further and continue the same conversations
 through repairs. Each research pass stays in one native assignment: test and
 inspection results return directly to that researcher, with the same host validation.
+Independent research calls keep separate browser state and reserve paced start times
+without holding a shared site lock through slow responses.
 Master-directed follow-ups resume the same child. Codex owns child lifecycle and concurrency; Imprint retains
 provider retries, deadlines, execution tools and strict evidence checks. Other
 providers retain their existing execution paths with four focused workers.

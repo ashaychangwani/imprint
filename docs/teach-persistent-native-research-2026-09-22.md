@@ -1,6 +1,6 @@
 # Persistent native research checkpoint
 
-**Prepared; provider and fresh-teach validation pending.** Each native research pass
+**Prepared; provider smoke passed, fresh-teach validation pending.** Each native research pass
 now uses one assignment. Its actions and observations stay with the same running
 child through the existing assignment-tools bridge. Master-directed follow-ups
 start a new pass on that retained child. This reduces orchestration; it is not a
@@ -58,3 +58,11 @@ Whole native lifecycle parity remains incomplete: individual child interruption
 and transient child failure with siblings active need real-provider evidence.
 The former adaptive capacity policy was intentionally removed. This checkpoint
 introduces no replacement admission machinery.
+
+
+The real-provider synthetic smoke completed September 22 at 16:17:18 UTC in 86.556
+seconds. Three actions across two passes used one retained native child and exactly
+two assignments, including a paged continuation. Reported snapshots: 399,674 input
+including 372,096 cache reads, 2,156 output, zero reported writes, $0.3022704 base
+API equivalent. This is protocol validation, not website acceptance. Private
+artifacts are under the campaign's native-research-pass-smoke-1 directory.

@@ -15170,3 +15170,25 @@ The final bounded native-path correction removes research-only file locking and
 fixes existing pacing reservations/cancellation. Three regressions fail before
 and pass after. No new worker scheduler or site-specific rule is added. Integration
 and fresh-teach validation remain pending; this is not repeated audited success.
+
+
+Prepared the fifth and final bounded native-path correction after Flights 18's
+confirmed same-site research lock timeout. Removed only the research executor's
+lock; its actions, proof checks, response retention, producer directories and
+browser cleanup remain unchanged. Existing origin pacing reserves before waiting,
+uses existing cancellation support, and keeps the configured spacing. Authentication
+and integration locks remain. No new scheduler or site rule. Long calls may overlap;
+resource effects need the next fresh run.
+
+Three synthetic regressions fail on old code and pass after: sibling overlap with
+separate pools, distinct paced starts while an earlier call remains open, and
+cancellation before execution. Supplied synthetic credentials to isolate pacing
+from keychain setup. An existing end-to-end assertion expected an unnecessary draft
+that the old lock delay enabled; immediate fixtures now finish together, so it
+expects the two final dependency waves. Dedicated early-draft regressions still pass.
+Removed the now-unused sleep helper and restored test environment state. Final
+checks: 383 affected tests, 2118 assertions, zero failures, lint/typecheck pass,
+website build and desktop/mobile checks pass with no errors or horizontal overflow.
+The existing bundle-size warning remains. Independent code review found no blocking
+issue; the noted environment cleanup was fixed. Fresh teach and audited repeatability
+remain pending. Persistent-pass smoke passed separately; see its checkpoint doc.

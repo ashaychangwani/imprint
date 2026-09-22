@@ -115,6 +115,70 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('allows isolated sibling research calls to overlap without a site file lock', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-research-overlap-'));
+    let releaseFirst!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let firstStarted!: () => void;
+    const started = new Promise<void>((resolve) => {
+      firstStarted = resolve;
+    });
+    let secondEntered = false;
+    const pools = new Set<unknown>();
+    const execute = (name: string) => {
+      const candidate = apiCandidate('overlap', 'fetch');
+      candidate.workflow.toolName = name;
+      const ownTool = { ...tool, id: name, candidate: { ...tool.candidate, toolName: name } };
+      const ownBinding = {
+        ...binding,
+        toolName: name,
+        compileInputsSha256: apiResearchInputsSha256(ownTool),
+      };
+      return researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool: ownTool,
+        evidence,
+        toolDir: join(root, name),
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 3000),
+        dependencies: {
+          requestStep: async (input) =>
+            input.observations.length
+              ? {
+                  binding: ownBinding,
+                  action: 'proven',
+                  candidate,
+                  basedOnObservationId: input.observations[0]?.id,
+                  reason: 'Exact isolated evidence.',
+                }
+              : { binding: ownBinding, action: 'test', candidate, reason: 'Recorded fixture.' },
+          runApiTool: async ({ cdpPool }) => {
+            pools.add(cdpPool);
+            if (name === 'first_fixture') {
+              firstStarted();
+              await gate;
+            } else secondEntered = true;
+            return { result: { ok: true, data: { name } }, executionMechanism: 'fetch' };
+          },
+        },
+      });
+    };
+    const first = execute('first_fixture');
+    await started;
+    const second = execute('second_fixture');
+    try {
+      await Promise.race([second, new Promise((resolve) => setTimeout(resolve, 100))]);
+      expect(secondEntered).toBe(true);
+      expect(pools.size).toBe(2);
+    } finally {
+      releaseFirst();
+      await Promise.allSettled([first, second]);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('keeps validated actions, repairs, memory and fresh producer calls in one native assignment per pass', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-native-research-integration-'));
     const candidate = apiCandidate('native', 'fetch');

@@ -989,3 +989,20 @@ Early acknowledgement cannot supply proof, and cancellation settles owned work.
 Per-step inputs, outputs and timestamps remain in private `native-research-*.jsonl`
 files; provider usage remains accounted once through the native family. No new
 scheduler, provider policy or site-specific interpretation is introduced.
+
+
+### Independent research execution
+
+Each research pass already serializes its own actions and owns its browser pool.
+Independent tools no longer hold a shared site file lock during research calls.
+The existing process-local origin pacing reserves a distinct start before waiting;
+slow requests may overlap without causing all queued starts to wake together.
+Pacing waits honor cancellation and leave cancelled slots unused. Default spacing
+and the explicit zero-spacing setting are unchanged. This is invocation pacing,
+not a global or cross-process request limit; fallback rungs stay inside an invocation.
+Integration verification and authentication-refresh file locks remain unchanged.
+
+Flights 18 confirmed that the old polling lock could starve one researcher for ten
+minutes and terminate the whole teach. Synthetic regressions fail before this
+correction and pass afterward for sibling overlap, distinct reservations and prompt
+cancellation. Fresh-teach reliability and resource use still require measurement.

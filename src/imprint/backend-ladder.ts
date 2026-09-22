@@ -33,7 +33,7 @@ import {
   seedJarFromRecording,
 } from './cdp-jar-cache.ts';
 import { proxyUrl } from './chromium.ts';
-import { abortSignalError, withAbortSignal } from './concurrency.ts';
+import { abortSignalError, abortableDelay, withAbortSignal } from './concurrency.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
@@ -252,9 +252,6 @@ function compileActSpacingMs(): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 const compileLastRequestAt = new Map<string, number>();
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
 
 function playbookBackendTimeoutMs(): number {
   return positiveEnvMs('IMPRINT_PLAYBOOK_BACKEND_TIMEOUT_MS', DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS);
@@ -288,18 +285,23 @@ function withWorkflowDefaults(
 /** Await the per-origin min spacing before a compile-path live request. The
  *  first call to an origin never waits (last=0); subsequent ones within the
  *  window are delayed so the suite paces itself under the rate-flag. */
-async function paceCompileRequest(origin: string): Promise<void> {
+async function paceCompileRequest(origin: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortSignalError(signal);
   const spacing = compileActSpacingMs();
   if (spacing <= 0) return;
   const last = compileLastRequestAt.get(origin) ?? 0;
-  const waitMs = last + spacing - Date.now();
+  const now = Date.now();
+  const scheduledAt = Math.max(now, last + spacing);
+  // Reserve before awaiting so concurrent callers cannot take the same slot.
+  // Cancellation leaves a gap; later reservations keep their original order.
+  compileLastRequestAt.set(origin, scheduledAt);
+  const waitMs = scheduledAt - now;
   if (waitMs > 0) {
     log(
       `compile pacing: waiting ${Math.round(waitMs / 1000)}s before next live request to ${origin}`,
     );
-    await sleepMs(waitMs);
+    await abortableDelay(waitMs, signal);
   }
-  compileLastRequestAt.set(origin, Date.now());
 }
 export function __resetCompilePacingForTest(): void {
   compileLastRequestAt.clear();
@@ -1769,11 +1771,13 @@ export async function runWorkflowWithLadder(opts: {
   }
 
   try {
+    let origin: string | undefined;
     try {
-      await paceCompileRequest(new URL(pickBaseUrl(tool, opts.params, opts.credentials)).origin);
+      origin = new URL(pickBaseUrl(tool, opts.params, opts.credentials)).origin;
     } catch {
       // no parseable base URL → nothing to pace
     }
+    if (origin) await paceCompileRequest(origin, opts.signal);
 
     // ── Pinned rung: skip the probe + memo entirely ─────────────────────────
     // A caller that requires a specific rung (the 2FA auth verifier → cdp-replay

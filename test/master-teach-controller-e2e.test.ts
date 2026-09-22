@@ -3280,8 +3280,9 @@ describe('fresh foreground master controller end to end', () => {
         'Keep the semantic description revision and replan only its stale implementation.',
       ]);
       expect(focusedProposalDecisions).toBe(3);
+      // Immediate research fixtures now finish together, leaving no useful
+      // overlap for a speculative draft. Both final dependency waves still run.
       expect(events.filter((event) => event.startsWith('compile:'))).toEqual([
-        `compile:${PRODUCER_ID}`,
         `compile:${PRODUCER_ID}`,
         `compile:${CONSUMER_ID}`,
       ]);

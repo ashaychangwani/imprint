@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
   __resetCompileCdpPoolForTest,
+  __resetCompilePacingForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
@@ -3321,5 +3322,104 @@ describe('pickBaseUrl', () => {
     const tool = toolWith([{ method: 'GET', url: 'https://api.example.com/items' }]);
     tool.workflow.bootstrap = { url: '${param.bootstrap_url}' };
     expect(() => pickBaseUrl(tool)).toThrow();
+  });
+});
+
+describe('concurrent compile pacing', () => {
+  function fixture(url: string, name: string) {
+    const dir = pathJoin(root, name);
+    mkdirSync(dir, { recursive: true });
+    const workflowPath = pathJoin(dir, 'workflow.json');
+    writeFileSync(
+      workflowPath,
+      JSON.stringify({
+        toolName: name,
+        site: 'pacing-fixture',
+        intent: { description: 'Synthetic pacing evidence.' },
+        parameters: [],
+        requests: [{ method: 'GET', url, headers: {} }],
+      }),
+    );
+    return workflowPath;
+  }
+
+  it('reserves distinct start slots while earlier calls remain in flight', async () => {
+    const previousSpacing = process.env.IMPRINT_COMPILE_ACT_SPACING_MS;
+    __resetCompilePacingForTest();
+    process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '100';
+    const starts: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        starts.push(Date.now());
+        if (starts.length === 1) await gate;
+        return Response.json({ ok: true });
+      },
+    });
+    const calls = [0, 1, 2].map((i) =>
+      runWorkflowWithLadder({
+        workflowPath: fixture(`http://127.0.0.1:${server.port}/fixture`, `paced_${i}`),
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+      }),
+    );
+    try {
+      await Promise.all(calls.slice(1));
+      expect(starts).toHaveLength(3);
+      const [first = Number.NaN, second = Number.NaN, third = Number.NaN] = starts;
+      expect(second - first).toBeGreaterThanOrEqual(70);
+      expect(third - second).toBeGreaterThanOrEqual(70);
+    } finally {
+      release();
+      await Promise.allSettled(calls);
+      server.stop(true);
+      __resetCompilePacingForTest();
+      process.env.IMPRINT_COMPILE_ACT_SPACING_MS = previousSpacing;
+    }
+  });
+
+  it('cancels a pacing wait promptly without executing its request', async () => {
+    const previousSpacing = process.env.IMPRINT_COMPILE_ACT_SPACING_MS;
+    __resetCompilePacingForTest();
+    process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '1000';
+    let calls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        calls++;
+        return Response.json({ ok: true });
+      },
+    });
+    const workflowPath = fixture(`http://127.0.0.1:${server.port}/fixture`, 'cancel_pacing');
+    try {
+      await runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+      });
+      const abort = new AbortController();
+      const startedAt = Date.now();
+      const pending = runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+        signal: abort.signal,
+      });
+      setTimeout(() => abort.abort(new Error('cancel paced request')), 20);
+      await expect(pending).rejects.toThrow('cancel paced request');
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(calls).toBe(1);
+    } finally {
+      server.stop(true);
+      __resetCompilePacingForTest();
+      process.env.IMPRINT_COMPILE_ACT_SPACING_MS = previousSpacing;
+    }
   });
 });

@@ -17,7 +17,6 @@ import {
 } from './backend-ladder.ts';
 import { compareBodyStructures, decodeBodyStructure } from './body-structure.ts';
 import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
-import { acquireSiteLiveLock } from './compile-verification.ts';
 import { abortSignalError } from './concurrency.ts';
 import { inspectEvidenceText } from './evidence-inspection.ts';
 import { redactFreeformText } from './freeform-redact.ts';
@@ -780,93 +779,88 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
           : input.toolDir,
         candidate,
       );
-      const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
-      try {
-        const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
-        let rawResponses: unknown[] | undefined;
-        const observationId = randomUUID();
-        const candidateSha256 = apiResearchCandidateSha256(candidate);
-        const responseEvidence: NonNullable<ApiResearchObservation['responseEvidence']> = [];
-        const observed = await input.dependencies.runApiTool({
-          cdpPool,
-          workflowPath,
-          parameters: candidate.parameterValues,
-          backend: candidate.testBackend,
-          signal: input.signal,
-          onRawResponses: (responses) => {
-            rawResponses = responses;
-          },
-          onResponseEvidence: (evidence) => {
-            try {
-              const retained = retainResponseEvidence(
-                input.toolDir,
-                observationId,
-                candidateSha256,
-                evidence,
-              );
-              if (responseEvidence.length >= 256) responseEvidence.shift();
-              responseEvidence.push(retained);
-            } catch (error) {
-              input.report?.(
-                `${input.tool.candidate.toolName}: response evidence could not be retained: ${error instanceof Error ? error.message : String(error)}`,
-              );
-            }
-          },
-          onPreparedRequest: (observation) => {
-            if (requestComparisons.length >= 32) requestComparisons.shift();
-            requestComparisons.push(
-              preparedRequestComparison(observation, candidate.workflow, input.session),
+      // This pass already executes sequentially and owns its browser pool and
+      // tool state. Independent passes share only the ladder's origin pacing.
+      const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
+      let rawResponses: unknown[] | undefined;
+      const observationId = randomUUID();
+      const candidateSha256 = apiResearchCandidateSha256(candidate);
+      const responseEvidence: NonNullable<ApiResearchObservation['responseEvidence']> = [];
+      const observed = await input.dependencies.runApiTool({
+        cdpPool,
+        workflowPath,
+        parameters: candidate.parameterValues,
+        backend: candidate.testBackend,
+        signal: input.signal,
+        onRawResponses: (responses) => {
+          rawResponses = responses;
+        },
+        onResponseEvidence: (evidence) => {
+          try {
+            const retained = retainResponseEvidence(
+              input.toolDir,
+              observationId,
+              candidateSha256,
+              evidence,
             );
-          },
-        });
-        const observation: ApiResearchObservation = {
-          id: observationId,
-          responseEvidence,
-          ...(producer ? { producerToolName: producer.toolName } : {}),
-          invocationParameters: candidate.parameterValues,
-          candidateSha256,
-          requestDefinitionSha256: teachingPlanContentSha256({
-            workflow: candidate.workflow,
-            requestTransformSource: candidate.requestTransformSource,
-          }),
-          executionMechanism: observed.executionMechanism,
-          backendAttempts: observed.backendAttempts ?? [],
-          responseObservations: observed.responseObservations ?? [],
-          requestComparisons,
-          result: resultFact(observed.result, observed.credentialValues),
-        };
-        if (observed.result.ok) {
-          const text = resultText(observed.result.data, observed.credentialValues);
-          const resultDir = pathJoin(input.toolDir, 'live-results');
-          mkdirSync(resultDir, { recursive: true });
-          writeFileSync(retainedResultPath(input.toolDir, observation.id), text, {
-            encoding: 'utf8',
-            flag: 'wx',
-          });
-          observation.resultTextLength = text.length;
-        }
-        if (rawResponses) {
-          mkdirSync(pathJoin(input.toolDir, 'live-results'), { recursive: true });
-          writeFileSync(
-            retainedResponsesPath(input.toolDir, observation.id),
-            JSON.stringify(rawResponses, (_key, value) =>
-              typeof value === 'string' ? resultText(value, observed.credentialValues) : value,
-            ),
-            { encoding: 'utf8', flag: 'wx' },
+            if (responseEvidence.length >= 256) responseEvidence.shift();
+            responseEvidence.push(retained);
+          } catch (error) {
+            input.report?.(
+              `${input.tool.candidate.toolName}: response evidence could not be retained: ${error instanceof Error ? error.message : String(error)}`,
+            );
+          }
+        },
+        onPreparedRequest: (observation) => {
+          if (requestComparisons.length >= 32) requestComparisons.shift();
+          requestComparisons.push(
+            preparedRequestComparison(observation, candidate.workflow, input.session),
           );
-        }
-        observations.push(observation);
-        retainedTurnDelta = {
-          kind: 'observation',
-          latestObservation: observation,
-          ...(batchStart === undefined
-            ? {}
-            : { batchObservations: observations.slice(batchStart) }),
-        };
-        if (!pendingTests.length) batchStart = undefined;
-      } finally {
-        release();
+        },
+      });
+      const observation: ApiResearchObservation = {
+        id: observationId,
+        responseEvidence,
+        ...(producer ? { producerToolName: producer.toolName } : {}),
+        invocationParameters: candidate.parameterValues,
+        candidateSha256,
+        requestDefinitionSha256: teachingPlanContentSha256({
+          workflow: candidate.workflow,
+          requestTransformSource: candidate.requestTransformSource,
+        }),
+        executionMechanism: observed.executionMechanism,
+        backendAttempts: observed.backendAttempts ?? [],
+        responseObservations: observed.responseObservations ?? [],
+        requestComparisons,
+        result: resultFact(observed.result, observed.credentialValues),
+      };
+      if (observed.result.ok) {
+        const text = resultText(observed.result.data, observed.credentialValues);
+        const resultDir = pathJoin(input.toolDir, 'live-results');
+        mkdirSync(resultDir, { recursive: true });
+        writeFileSync(retainedResultPath(input.toolDir, observation.id), text, {
+          encoding: 'utf8',
+          flag: 'wx',
+        });
+        observation.resultTextLength = text.length;
       }
+      if (rawResponses) {
+        mkdirSync(pathJoin(input.toolDir, 'live-results'), { recursive: true });
+        writeFileSync(
+          retainedResponsesPath(input.toolDir, observation.id),
+          JSON.stringify(rawResponses, (_key, value) =>
+            typeof value === 'string' ? resultText(value, observed.credentialValues) : value,
+          ),
+          { encoding: 'utf8', flag: 'wx' },
+        );
+      }
+      observations.push(observation);
+      retainedTurnDelta = {
+        kind: 'observation',
+        latestObservation: observation,
+        ...(batchStart === undefined ? {} : { batchObservations: observations.slice(batchStart) }),
+      };
+      if (!pendingTests.length) batchStart = undefined;
     }
   } finally {
     const browsers = [...cdpPool.values()];
