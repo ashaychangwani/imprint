@@ -37,6 +37,21 @@ the user-approved change. This is not a claimed live reliability improvement yet
 
 ## Next validation
 
+Flights 14 started at 08:42:13 UTC on runtime `a8601a5`, using a new isolated
+home and the original recording/scope. Teach PID 45458; inspected driver PID 45442.
+Target 09:12 UTC, assess 09:42 UTC, hard deadline 10:12 UTC. No runtime or prompt
+edits are permitted during this experiment; documentation may record progress.
+
+The user added a complexity bound while this run started: permit **at most five
+adaptive-scheduler bug-fix rounds**, each with a fresh teach, then remove adaptive
+scheduling if it remains problematic. Current count: **0 of 5**; Flights 14 is
+the initial validation. Fall back sooner if complexity is not justified. Preserve
+all unrelated fixes and evidence. The fallback is a static four-worker limit,
+then three and two if concurrency/provider-capacity failures persist. Diagnose
+unrelated request/parser/proof failures separately rather than claiming that lower
+concurrency repairs them. Every fallback setting gets fresh validation and its
+own recorded configuration; never reset or resume this failed run to compare it.
+
 Private evidence root:
 `/Users/ashaychangwani/.imprint/experiments/reteach-systemic-2026-09-21`.
 Original Flights/Hotels recordings were verified; disk has 11 GiB available.

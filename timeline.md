@@ -14811,3 +14811,11 @@ passing checks. No live capacity/reliability claim is made from these regression
 Disk has 11 GiB, both original recordings exist and collector 6443 is healthy.
 Fresh Flights 14 is next after the checkpoint commit. No teach is active yet.
 Continuation and remaining work: docs/teach-shared-research-2026-09-22.md.
+
+Fresh Flights 14 started 08:42:13 UTC on a8601a5, with the original recording,
+unchanged four-operation guidance and isolated flights-14/home. Teach PID 45458;
+driver 45442. Target 09:12, assess 09:42, hard deadline 10:12 UTC. Disk 11 GiB.
+The user limited adaptive-scheduler repair to five bug-fix rounds maximum. None
+has been used yet. If it proves too complicated, remove only adaptive scheduling
+and test static 4, then 3 and 2 as needed. Preserve the other approved changes and
+all evidence. Provider-capacity failures and unrelated teach defects stay distinct.
