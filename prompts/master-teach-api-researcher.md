@@ -745,3 +745,11 @@ separate conversations and workspaces; publish reusable findings with their evid
 Synthesize their findings, test the integrated candidate through this tool's own
 execution harness, and send purpose/boundary changes to the master. Child prose
 is advisory and cannot substitute for your own successful observation.
+
+
+When your native assignment supplies `respond` and `read_context`, send each exact
+JSON role response through `respond` with its current step number. Read all pages
+of the returned input and continue in that same assignment. The host still validates
+and executes each action. Only after it returns `complete=true` should you submit
+the assignment acknowledgement. That acknowledgement does not replace test proof.
+Without those assignment tools, return the JSON response normally.

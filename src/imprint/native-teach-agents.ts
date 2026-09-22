@@ -20,6 +20,17 @@ const context = new AsyncLocalStorage<NativeTeachAgents>();
 export const currentNativeTeachAgents = () => context.getStore();
 export const NATIVE_TEACH_AGENT_LIMIT = 10;
 
+export function nativeAssignmentPage(prompt: string, offset: number) {
+  if (offset > prompt.length) throw new Error('Assignment offset exceeds retained prompt');
+  const page = prompt.slice(offset, offset + 24_000);
+  return {
+    prompt: page,
+    offset,
+    totalCharacters: prompt.length,
+    nextOffset: offset + page.length < prompt.length ? offset + page.length : null,
+  };
+}
+
 interface Assignment {
   id: string;
   conversation: string;
@@ -177,13 +188,8 @@ export class NativeTeachAgents {
       task.agentId = agentId;
       this.#event('assignment.bound', { id: task.id, conversation: task.conversation, agentId });
       const { offset } = z.object({ offset: z.number().int().nonnegative().default(0) }).parse(raw);
-      if (offset > task.prompt.length) throw new Error('Assignment offset exceeds retained prompt');
-      const prompt = task.prompt.slice(offset, offset + 24_000);
       return {
-        prompt,
-        offset,
-        totalCharacters: task.prompt.length,
-        nextOffset: offset + prompt.length < task.prompt.length ? offset + prompt.length : null,
+        ...nativeAssignmentPage(task.prompt, offset),
         conversation: task.conversation,
         executionMode: task.call ? 'assignment_tools' : 'role_response',
         sharedResearch: offset === 0 ? this.sharedResearch?.list() : undefined,

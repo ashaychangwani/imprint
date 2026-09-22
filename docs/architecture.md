@@ -628,9 +628,9 @@ The public teaching path is one fresh foreground controller:
    Baseline reviewers also trace ambiguous keyword or unit matches to their
    source context. Matching strings alone cannot establish a field's meaning
    or which nested record owns it; unsupported metadata returns to the master.
-   A proven independent tool can plan and compile a draft in its existing
-   worker slot while another tool continues researching. This adds no extra
-   agent concurrency. Declared consumers wait for the normal producer-first
+   A proven independent tool can plan and compile a draft while another tool
+   continues researching. Native admission stays with Codex; other providers
+   retain the existing four-worker bound. Declared consumers wait for the normal producer-first
    build waves. The final master review can replace an early proposal; a draft
    is reused only when both its compile inputs and implementation plan match.
    Verification and publication still follow master approval, not research alone.
@@ -970,3 +970,22 @@ reach master review while compatible drafts finish under provider-owned admissio
 All started drafts settle before final planning reuses or replaces their artifacts,
 including when master review fails. Non-native providers retain their existing
 four-worker path. This does not publish drafts early or weaken producer ordering.
+
+
+### Persistent native research passes
+
+A native researcher receives one `assignment_tools` task for a complete research
+pass. Its `respond` call supplies the existing JSON action and receives the next
+observation, schema repair, shared-memory result or requested evidence directly.
+Large inputs reuse the bridge's explicit paging through `read_context`. The parent
+routes the pass once instead of routing each test and inspection. Genuine master
+follow-ups reuse the same child and start another pass.
+
+The adapter implements the existing analyzer interface; the research executor,
+validators, exact observation bindings and shared-findings exchange are unchanged.
+A pass-local step number rejects delayed duplicates and simultaneous responses.
+Host completion settles the outstanding tool call before child acknowledgement.
+Early acknowledgement cannot supply proof, and cancellation settles owned work.
+Per-step inputs, outputs and timestamps remain in private `native-research-*.jsonl`
+files; provider usage remains accounted once through the native family. No new
+scheduler, provider policy or site-specific interpretation is introduced.

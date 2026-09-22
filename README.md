@@ -108,7 +108,9 @@ become accepted execution plans. The retained master receives changed research
 handoffs without repeatedly resending unchanged history; host validation still
 uses the full evidence. Codex teaches use one native agent family, with up to ten
 concurrent children. Agents can delegate further and continue the same conversations
-through repairs. Codex owns child lifecycle and concurrency; Imprint retains
+through repairs. Each research pass stays in one native assignment: test and
+inspection results return directly to that researcher, with the same host validation.
+Master-directed follow-ups resume the same child. Codex owns child lifecycle and concurrency; Imprint retains
 provider retries, deadlines, execution tools and strict evidence checks. Other
 providers retain their existing execution paths with four focused workers.
 Independent research repairs share the master’s parallel waves; dependent repairs,

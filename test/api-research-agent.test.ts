@@ -17,10 +17,13 @@ import {
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
   parseApiResearchOutput,
+  requestApiResearchStep,
 } from '../src/imprint/master-teach-agents.ts';
 import { teachingPlanContentSha256 as digest } from '../src/imprint/master-teach-plan.ts';
 import { PromptEvidenceProjectionSchema } from '../src/imprint/master-teach-prompt-projections.ts';
+import { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
 import { RunDeadline } from '../src/imprint/provider-retry.ts';
+import { TeachResearchMemory } from '../src/imprint/teach-research-memory.ts';
 
 const recordingSha256 = `sha256:${'1'.repeat(64)}`;
 const evidencePayload = { entries: [] };
@@ -112,6 +115,215 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('keeps validated actions, repairs, memory and fresh producer calls in one native assignment per pass', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-native-research-integration-'));
+    const candidate = apiCandidate('native', 'fetch');
+    const deadline = new RunDeadline(Date.now() + 10_000);
+    const objects = new Map<string, unknown>();
+    const memory = new TeachResearchMemory(run.runId, {
+      put: (value) => {
+        const sha256 = digest(value);
+        objects.set(sha256, value);
+        return { path: `objects/${sha256}.json`, sha256 };
+      },
+      read: (ref) => {
+        if (!objects.has(ref.sha256)) throw new Error('Unknown object');
+        return objects.get(ref.sha256);
+      },
+    });
+    let assignments = 0;
+    const invocations: Array<{ workflowPath: string; query: unknown }> = [];
+    const family = new NativeTeachAgents(
+      { root: join(toolDir, 'native'), model: 'fixture', deadline },
+      async (native, signal) => {
+        while (!signal.aborted) {
+          const offered = (await native.handle('assignments', {})) as {
+            stopped: boolean;
+            tasks: Array<{ id: string; retainedAgentId?: string }>;
+          };
+          if (offered.stopped) break;
+          for (const task of offered.tasks) {
+            assignments++;
+            if (assignments === 2) expect(task.retainedAgentId).toBe('/root/researcher');
+            const call = (name: string, args: Record<string, unknown>) =>
+              native.handle('call_assignment_tool', { id: task.id, name, args });
+            await native.handle('read_assignment', { id: task.id, agentId: '/root/researcher' });
+            let step = 1;
+            const respond = async (value: unknown) => {
+              const page = (await call('respond', { step, text: JSON.stringify(value) })) as {
+                complete: boolean;
+                step: number;
+                prompt?: string;
+                nextOffset?: number | null;
+              };
+              if (page.complete) return page;
+              step = page.step;
+              let text = page.prompt ?? '';
+              let offset = page.nextOffset;
+              while (offset !== null && offset !== undefined) {
+                const more = (await call('read_context', { step, offset })) as {
+                  prompt: string;
+                  nextOffset: number | null;
+                };
+                text += more.prompt;
+                offset = more.nextOffset;
+              }
+              const payload = JSON.parse(
+                text.split('<user_payload_json>')[1]?.split('</user_payload_json>')[0] ?? '{}',
+              );
+              return payload;
+            };
+            const invalid = await respond({ action: 'test' });
+            expect(invalid.parseErrors.length).toBeGreaterThan(0);
+            const shared = await respond({
+              sharedResearch: { runId: run.runId, query: { action: 'list' } },
+            });
+            expect(shared.sharedResearchResult).toBeDefined();
+            const tested = await respond({
+              binding,
+              action: 'test',
+              candidate,
+              testCases: [
+                {
+                  parameterValues: { query: 'alpha' },
+                  recordingRequestSeqs: [12],
+                  freshnessChanges: 'Synthetic recorded fixture, no freshness change.',
+                },
+                {
+                  parameterValues: { query: 'beta' },
+                  recordingRequestSeqs: [12],
+                  freshnessChanges: 'Synthetic recorded fixture, no freshness change.',
+                },
+              ],
+              reason: 'Check the two synthetic recorded values.',
+            });
+            const observations = tested.input.batchObservations;
+            expect(observations).toHaveLength(2);
+            const inspected = await respond({
+              binding,
+              action: 'inspect_result',
+              resultQuery: {
+                observationId: observations[0].id,
+                project: 'text => ({value: text})',
+              },
+              reason: 'Inspect the retained output without another call.',
+            });
+            expect(inspected.input.resultInspection.projection).toBeDefined();
+            const invalidProof = await respond({
+              binding,
+              action: 'proven',
+              candidate: { ...candidate, parameterValues: { query: 'beta' } },
+              basedOnObservationId: observations[0].id,
+              reason: 'Deliberately mismatched test proof.',
+            });
+            expect(invalidProof.parseErrors.length).toBeGreaterThan(0);
+            const producer = await respond({
+              binding,
+              action: 'call_producer',
+              producerCall: { toolName: 'source_fixture', parameters: { query: 'alpha' } },
+              reason: 'Obtain the current upstream value.',
+            });
+            expect(producer.input.latestObservation.producerToolName).toBe('source_fixture');
+            const fresh = {
+              ...candidate,
+              parameterValues: { query: producer.input.latestObservation.result.preview },
+            };
+            const consumed = await respond({
+              binding,
+              action: 'test',
+              candidate: fresh,
+              reason: 'Use the actual current producer value.',
+            });
+            expect(
+              await respond({
+                binding,
+                action: 'proven',
+                candidate: fresh,
+                basedOnObservationId: consumed.input.latestObservation.id,
+                reason: 'Exact fresh consumer invocation succeeded.',
+              }),
+            ).toEqual({ complete: true });
+            await native.handle('submit', {
+              id: task.id,
+              text: 'Host-validated research pass complete.',
+            });
+          }
+        }
+      },
+    );
+    try {
+      await family.run(async () => {
+        let previousProgress: ReturnType<typeof ApiResearchHandoffSchema.parse> | undefined;
+        for (let pass = 0; pass < 2; pass++) {
+          const result = await researchApiMvpCall({
+            run,
+            recordingIndex,
+            tool,
+            evidence,
+            toolDir,
+            agent: { provider: 'codex-cli', sharedResearch: memory, runDeadline: deadline },
+            runDeadline: deadline,
+            previousProgress,
+            ...(pass
+              ? {
+                  followUp: {
+                    masterDirection: 'Repeat with fresh upstream evidence.',
+                    missingProof: ['Fresh repeat'],
+                    siblingResearch: [],
+                    relevantRequestSeqs: [12],
+                  },
+                }
+              : {}),
+            producers: () => [
+              {
+                toolName: 'source_fixture',
+                candidate: {
+                  ...candidate,
+                  workflow: { ...candidate.workflow, toolName: 'source_fixture' },
+                },
+                toolDir: join(toolDir, 'source'),
+                summary: 'Synthetic upstream source.',
+              },
+            ],
+            dependencies: {
+              requestStep: requestApiResearchStep,
+              runApiTool: async ({ workflowPath, parameters }) => {
+                invocations.push({ workflowPath, query: parameters.query });
+                return {
+                  executionMechanism: 'fetch',
+                  result: {
+                    ok: true,
+                    data: workflowPath.includes('producer-calls')
+                      ? `fresh-${invocations.length}`
+                      : String(parameters.query),
+                  },
+                };
+              },
+            },
+          });
+          expect(result.parameters.query).toBe(`fresh-${pass * 4 + 3}`);
+          expect(result.observation.result.ok).toBeTrue();
+          previousProgress = ApiResearchHandoffSchema.parse({
+            toolName: tool.candidate.toolName,
+            researchInputsSha256: result.researchInputsSha256,
+            status: 'proven',
+            summary: result.summary,
+            candidate: result.candidate,
+            observation: result.observation,
+            observations: result.observations,
+          });
+        }
+      });
+      expect(assignments).toBe(2);
+      expect(invocations).toHaveLength(8);
+      expect(invocations[2]?.workflowPath).toContain('/producer-calls/source_fixture/');
+      expect(invocations[6]?.workflowPath).toContain('/producer-calls/source_fixture/');
+      expect(invocations[2]?.workflowPath).not.toBe(invocations[6]?.workflowPath);
+    } finally {
+      await family.close();
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
   it('inspects retained failed responses without another call and rejects unrelated references as proof', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-failed-evidence-'));
     const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-failed-copy-'));

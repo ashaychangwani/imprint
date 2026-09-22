@@ -48,6 +48,8 @@ import type {
   RecordingIndex,
   RunIdentity,
 } from './master-teach-prompt-projections.ts';
+import { runNativeResearchPass } from './native-research-pass.ts';
+import { currentNativeTeachAgents } from './native-teach-agents.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
 import {
   retainResponseEvidence,
@@ -430,7 +432,7 @@ function concreteBackend(value: string): ConcreteBackend | undefined {
     : undefined;
 }
 
-export async function researchApiMvpCall(input: {
+interface ApiResearchCallInput {
   run: RunIdentity;
   recordingIndex: RecordingIndex;
   /** Host-only recording used to reduce artifact-prepared requests to value-free
@@ -463,7 +465,26 @@ export async function researchApiMvpCall(input: {
   signal?: AbortSignal;
   report?: (message: string) => void;
   dependencies: ApiResearchDependencies;
-}): Promise<ApiResearchOutcome> {
+}
+
+export async function researchApiMvpCall(input: ApiResearchCallInput): Promise<ApiResearchOutcome> {
+  const family = currentNativeTeachAgents();
+  if (!family) return researchApiMvpCallImpl(input);
+  return runNativeResearchPass({
+    family,
+    conversation: `${input.agent.conversationPrefix ?? ''}tool:${input.tool.candidate.toolName}:api-researcher`,
+    signal: input.signal,
+    logPath: pathJoin(input.toolDir, `native-research-${randomUUID()}.jsonl`),
+    run: (analyzer, signal) =>
+      researchApiMvpCallImpl({
+        ...input,
+        signal,
+        agent: { ...input.agent, analyzer, signal },
+      }),
+  });
+}
+
+async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiResearchOutcome> {
   let evidence = input.evidence;
   let requestCatalog = [...(input.requestCatalog ?? [])];
   let requestCatalogPage = input.requestCatalogPage;
