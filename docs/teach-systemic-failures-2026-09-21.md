@@ -1778,3 +1778,93 @@ then validation discovered the nested follow-up errors not previously reported.
 This is layered validation feedback exhausting a single repair allowance, not
 proof that the agent ignored the same reported error twice. Parent verified both
 retained evidence records (544fac27a2eec094 and 96e5406560dd9490) independently.
+
+
+## Flights 13 — coordinator repair validation (in progress)
+
+Fresh run started September 22 at 05:48:40 UTC on 620129d, with the original
+recording and four-operation scope. User explicitly authorized proceeding on
+battery. Private evidence: `reteach-systemic-2026-09-21/flights-13/`.
+
+Observed through minute 28 (not a completion or audit result):
+
+- Initial discovery/master selection took 8.94 minutes. Four scoped operations
+  were accepted. Location and search later reached proven research handoffs.
+- Search and calendar independently constructed extra nested array layers. The
+  factual request-body comparisons let each researcher correct those errors.
+  Both first exhausted four execution rungs, so malformed request construction
+  also consumed browser setup time; browser escalation did not repair the shape.
+  This is recurrent agent request-construction failure, not evidence of an outage.
+- The calendar report omitted baseline candidate values for a batch. New
+  schema-derived field feedback was delivered at minute 22.62; the same retained
+  researcher corrected the report by minute 24.01. No invalid report executed.
+  Multi-layer coordinator recovery has not yet been exercised by this live run.
+- Search research explicitly distinguished recorded trip modes, but focused
+  planning selected a fixture from the different mode. This is a comparability
+  concern to check in independent verification, not yet a demonstrated parser bug.
+- Booking invoked the current search producer and inspected its fresh response.
+  Its initial direct calls returned an error envelope, not booking offers. No
+  dependent-tool success is claimed. Selection/context completeness remains open.
+- Location/search early planning and compilation held research slots until
+  calendar/booking started around minute 20, illustrating the existing scheduling
+  concern. Some draft work may be reused; do not count all overlap delay as waste.
+
+An offline synthetic reproduction, `failed-chain-before.ts` and `.log` in the
+private campaign root, confirms that later HTTP failure, required-capture failure,
+and cancellation after reading a body leave no complete-chain response evidence.
+Read failure also leaves no explicit retained body-availability record. It makes
+no external calls and does not modify the live runtime. The planned per-request
+retention checkpoint will be verified against these cases after this run ends.
+
+
+Flights 13 finished at the 90-minute deadline, exit 1: two ready, two unfinished.
+Location lookup and the date grid published after independent raw-first evidence
+checks: five location records and 49 date pairs respectively. Search and booking
+remain unpublished. A separate strict audit of the two published tools has begun;
+it cannot establish the required four-operation pass.
+
+Later findings:
+- The master correctly narrowed calendar to route plus anchor dates and repaired
+  booking to require six same-record producer values. Fresh booking research
+  succeeded. All four research handoffs were accepted around minute 49.
+- Search compilation was rejected because the planner changed its captured-response
+  provenance from a bodyless source to a populated fixture. Resolving the distinction
+  required another research, planning and master cycle; compilation began only at
+  minute 76. The populated fixture has a different recorded request mode. Agents
+  explicitly justified structural parser comparability without claiming identical
+  modes. That distinction still requires independent verification.
+- The search compiler selected the wrong of two distinct values in the same record.
+  The consumer needed a price-adjacent token, but the parser emitted a serialized
+  selection object. Master inspection caught this at minute 85 and requested a
+  parser-only correction. The corrected live call completed, but independent
+  evidence review did not finish before the deadline. The generated booking chain
+  was never tested. Same field names and string types do not establish a correct
+  producer/consumer representation; exact tested consumer evidence must reach the
+  producer compiler and reviewer.
+- One evidence-reader call received a deterministic provider prompt-policy rejection.
+  Preserve it separately from API/parser failures; it was not treated as successful
+  verification or a transient capacity outage. No bypass or model switch was used.
+- Coordinator format repair did not terminate this run. The new schema-derived
+  feedback successfully repaired a research report; the live run did not exercise
+  more than one repair for the same coordinator decision. Unit regressions remain
+  the evidence for the layered-repair case. Fresh-teach reliability is not proven.
+
+Reported teach usage: 14,980,857 input tokens including 11,431,552 cache reads,
+200,868 output, zero reported cache writes, $22.7872008 base API equivalent using
+this campaign's existing rates. Two analysis calls lack usage; interrupted or
+rejected-call usage remains unknown. Elapsed 90.0126 minutes. Source, failed
+attempts, drafts, transcripts and evidence are retained in flights-13. No power
+shutdown or network disconnect terminated the run; disk still has 11 GiB.
+
+
+Strict partial audit finished in 1.7413 minutes, exit 2 / inconclusive. Two actual
+invocations were correct; three of five public parameters were graded working,
+while calendar origin and destination were untestable. No broken calls, no-op
+parameters, infrastructure exclusions or bad inputs. The displayed 100% covers
+five graded units only and is not a strict pass. The complete four-tool scope is
+also absent. Fixed recording-backed cases are preserved; do not invent contrast
+calls or weaken strictness to erase this gap. Agents must either provide relevant
+recording-grounded evidence for advertised inputs or narrow the public contract.
+Audit usage: 126,198 input including 108,672 cache reads, 1,646 output, zero
+reported writes; $0.1464928 base estimate. Teach plus audit: $22.9336936 reported
+base estimate, with the teach's two missing-usage calls still unknown.

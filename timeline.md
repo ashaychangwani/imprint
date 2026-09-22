@@ -14724,3 +14724,50 @@ remaining, insufficient for the 90-minute teach. Disk has 13 GiB available. Both
 original recordings exist; prior evidence remains intact. No teach or audit is
 running. Do not advance implementation checkpoints before this fresh validation.
 Continuation details: docs/teach-reliability-checkpoints-2026-09-22.md.
+
+
+## 2026-09-22 — Fresh Flights 13 starts on the coordinator repair
+
+The user explicitly directed continuing on battery. Power is no longer a launch
+gate. Fresh Flights 13 started 05:48:40 UTC on 620129d, PID 104, with the original
+recording, unchanged four-operation guidance and a new isolated flights-13/home.
+The inspected driver retains evidence and enforces the 90-minute deadline.
+Target 06:18 UTC, assess 06:48 UTC, hard deadline 07:18 UTC. Disk 13 GiB;
+collector 6443 is receiving this run's trace. No other teach or audit is active.
+Runtime stays unchanged while this checkpoint is measured. No cron or deletion.
+
+
+Flights 13 assessment at 60 minutes: all four research contracts are accepted,
+including fresh coherent booking inputs. Master finalized four tools in two
+waves, corrected a producer path mismatch, and accepted a refreshed search plan.
+Location's retained compiler has reached its done check; calendar compilation
+is active. No published tools or independent audit yet. Continue within the
+remaining 30 minutes because compilation/verification is progressing; no deadline
+extension. Research-only success is not completion. Runtime remains 620129d.
+
+
+Flights 13 ended after 90.0126 minutes, exit 1, with location and calendar published
+and search/booking unfinished. No coordinator-format terminal failure. Search lost
+time to a research/plan provenance mismatch and then needed a parser correction to
+emit the exact consumer token instead of another serialized same-record value.
+Its repaired live call worked, but evidence review was interrupted by the deadline.
+One earlier evidence-reader call had a provider prompt-policy rejection. No policy
+bypass, resumed old run, timeout extension or artifact promotion was used.
+
+Teach usage: 14,980,857 input (11,431,552 cache reads), 200,868 output, zero reported
+cache writes; $22.7872008 base API estimate. Two calls lack reported usage. Strict
+partial audit flights-13-audit has started on unchanged runtime 620129d, same home.
+The four-operation goal remains incomplete; all failed evidence stays local.
+
+
+Strict partial audit finished in 1.7413 minutes, exit 2 / inconclusive. Two actual
+invocations were correct; three of five public parameters were graded working,
+while calendar origin and destination were untestable. No broken calls, no-op
+parameters, infrastructure exclusions or bad inputs. The displayed 100% covers
+five graded units only and is not a strict pass. The complete four-tool scope is
+also absent. Fixed recording-backed cases are preserved; do not invent contrast
+calls or weaken strictness to erase this gap. Agents must either provide relevant
+recording-grounded evidence for advertised inputs or narrow the public contract.
+Audit usage: 126,198 input including 108,672 cache reads, 1,646 output, zero
+reported writes; $0.1464928 base estimate. Teach plus audit: $22.9336936 reported
+base estimate, with the teach's two missing-usage calls still unknown.
