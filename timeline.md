@@ -14884,3 +14884,9 @@ The website builds and its changed copy was inspected at desktop/mobile widths,
 with no horizontal overflow. The existing bundle-size warning remains. No fresh
 website teach has run on this checkpoint yet. Acceptance still requires repeated,
 independently audited Flights and Hotels teaches on unchanged code.
+
+Fresh Flights 15 began at 10:21:04 UTC on c4898d5 with a new isolated home and
+the original combined recording. Four operation groups remain in scope; guidance
+now explicitly says their count is not the tool count. Teach PID 68836. Target
+10:51, assess 11:21, hard deadline 11:51 UTC. Collector 6443 is healthy and disk
+has 10 GiB free. No code/prompt changes while this run is active.
