@@ -14771,3 +14771,20 @@ recording-grounded evidence for advertised inputs or narrow the public contract.
 Audit usage: 126,198 input including 108,672 cache reads, 1,646 output, zero
 reported writes; $0.1464928 base estimate. Teach plus audit: $22.9336936 reported
 base estimate, with the teach's two missing-usage calls still unknown.
+
+## 2026-09-22 — Flights 13 failure retrospective
+
+Documented the full failure chain before the next runtime change. Search research
+was proven at minute 17 but compilation started at minute 76 after recording
+provenance repairs. A different producer/consumer value mismatch was caught at
+minute 85. The deadline ended unfinished verification and booking never compiled.
+This was not a power, disk or network termination. One provider policy rejection
+is recorded separately. Coordinator repair helped but did not establish reliability.
+
+Deduplicated trace intervals produce an exclusive wall-time partition: discovery
+9.9%, research turns 29.7%, planning/repair 26.4%, code/local tests 9.2%, parser/MVP
+review 9.4%, cross-stage overlap 7.2%, outside completed categorized spans 8.3%.
+The 36 duration-bearing backend entries total 11.76 call-minutes, not additional
+wall time. The retrospective links each observed gap to a small general correction
+and a verification target. Next approved checkpoint is still response retention;
+no new runtime changes, teach, dashboard changes, or evidence deletion in this entry.

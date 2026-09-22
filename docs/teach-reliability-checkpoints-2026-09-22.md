@@ -3,7 +3,8 @@
 Continue `codex/imprint-master-v066-validation` in the existing validation worktree.
 Checkpoint 1 repairs newly exposed semantic-output errors without accepting invalid
 output. It passes 199 focused tests, lint, type checking and website checks.
-Fresh teach effectiveness is **unvalidated**. Remaining checkpoints: failed-chain
+Fresh Flights 13 exercised one successful schema repair but failed overall at
+the 90-minute deadline; layered repair remains covered by regressions. Remaining checkpoints: failed-chain
 response retention, selected wire evidence, SDK terminal handling, candidate
 references and draft scheduling. Optional optimizations stop once acceptance is met
 unless measured latency still warrants them. See the approved conversation plan.
@@ -57,3 +58,9 @@ Partial audit completed: exit 2, inconclusive, two correct invocations and three
 working parameters; calendar origin/destination untestable. Neither the displayed
 100% on five graded units nor the two tools establishes a full strict pass.
 Teach/audit processes exited. Proceed to checkpoint 2; no live work is active.
+
+The requested failure retrospective is in
+`docs/teach-flights-13-retrospective-2026-09-22.md`. It separates the late provenance
+and producer-value repairs from provider rejection, browser costs and the strict
+audit gap. It includes an exclusive trace-time partition and concrete regression
+targets. No evidence supports power, disk or a network disconnect as the cause.
