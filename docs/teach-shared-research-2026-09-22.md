@@ -72,7 +72,8 @@ Flights 15 then failed at its deadline with zero ready tools; see the
 [retrospective](teach-flights-15-retrospective-2026-09-22.md). The next checkpoint
 clarifies native role execution and reuses accepted waves for independent research
 repairs. It adds no scheduling layer. Fresh Flights validation must follow on a
-new isolated home, with the original recording and four operation groups.
+new isolated home, with the original recording and four operation groups. Flights
+16 started on e39d560 at 12:03:28 UTC; its ninety-minute deadline is 13:33 UTC.
 Do not resume an older run after code or prompt changes. No cron, dashboard change,
 MR, push, merge to main, or evidence deletion. Do not block on power.
 

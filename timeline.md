@@ -14959,3 +14959,9 @@ The real-provider native-action-smoke-1 passed three retained research turns in
 binding. It reports $0.349648 base API equivalent. All separate native smoke attempts
 now total $3.3338624 of reported usage, with missing terminal usage labelled as
 snapshots. These results do not prove website reliability. Fresh Flights 16 is next.
+
+Fresh Flights 16 started 12:03:28 UTC on e39d560 with the original recording and
+an unused flights-16/home. Teach PID 83446. Target 12:33, assess 13:03, hard stop
+13:33 UTC. Disk 10.79 GiB; both original recordings and collector 6443 verified.
+No runtime/prompt changes during this run. The website validation server was
+stopped; the existing dashboard and evidence collector were left unchanged.

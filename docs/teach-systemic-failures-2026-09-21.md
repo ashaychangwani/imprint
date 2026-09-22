@@ -4,8 +4,8 @@
 
 Flights 15 on `c4898d5` reached the 90.02-minute deadline: zero ready tools, nine
 not ready, one compiled draft and no audit. The [retrospective](teach-flights-15-retrospective-2026-09-22.md)
-records measured stages, retained evidence, accounting and corrections. No teach
-is active while those corrections are tested. The branch remains
+records measured stages, retained evidence, accounting and corrections. Fresh Flights 16 started at 12:03:28 UTC on e39d560 after the corrections passed
+checks. Its target is 12:33, assessment 13:03 and hard deadline 13:33 UTC. The branch remains
 `codex/imprint-master-v066-validation`; no cron, MR, push or deletion.
 
 Native delegation preserved retained conversations, and malformed research reached
