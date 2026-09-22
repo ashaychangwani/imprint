@@ -15257,3 +15257,10 @@ $0.2479872 respectively, separate from teach accounting. Checkpoint commit prece
 the next fresh teach.
 The repeated Flights/Hotels audit acceptance remains outstanding. No deletion,
 cron, dashboard change, push or MR. Latest disk preflight5.5GiB; power is no gate.
+
+
+Fresh Flights20 started 2026-09-22T18:48:14.490790+00:00 on0894a94, PID/PGID30645,
+original recording and empty flights-20/home. Target30minutes, assess60, hard90;
+audit45 if the required tools publish. Both recording paths/sizes and collector
+6443 verified. Native research memory starts empty; no prior generated tools
+or evidence supplied. Code/prompts stay fixed through the run. No cron or MR.
