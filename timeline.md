@@ -15264,3 +15264,28 @@ original recording and empty flights-20/home. Target30minutes, assess60, hard90;
 audit45 if the required tools publish. Both recording paths/sizes and collector
 6443 verified. Native research memory starts empty; no prior generated tools
 or evidence supplied. Code/prompts stay fixed through the run. No cron or MR.
+
+
+## September 22 — review Flights20 and restart at user request
+
+Flights20 had already ended at20:18:16UTC after90.029minutes: zero published,
+eight not ready, no audit. Owned process group30645 is empty; no kill needed.
+Verified its implementation was0894a94, still current;3b5c50c is documentation
+only. The user explicitly requested a fresh repeat. The review records separate
+one-way/round-trip/multi-city tools, successful fresh multi-city booking research,
+and the remaining round-trip gap: initial outbound-only producer claims, then
+empty protocol-error responses during late two-stage repair. No provider capacity
+failure was recorded. No runtime correction was inferred from that site response.
+
+Wall shares:26.17% initial work,12.54% first research/drafts,61.29% revisions and
+follow-ups.25native assignments,49retained responses; no audited success. Reported
+33,481,959input including30,717,952cache reads;228,568output,zero reported writes;
+$27.9145688base equivalent,zero missing completed-trace analysis usage spans.
+Private review/timing/accounting and failed evidence retained. Fixed only a local
+diagnostic JSONL reader's Unicode line splitting; original evidence is valid.
+
+Flights21 started20:48:47UTC,PID/PGID60360,HEAD3b5c50c/runtime0894a94. New isolated
+flights-21/home,empty research memory,original recording and unchanged scope.
+Target21:18:47,assess21:48:47,hard22:18:47UTC. Recording/collector verified,7GiBfree.
+Code/prompts remain unchanged. No cron,MR,push,deletion,or power gate.
+See docs/teach-flights-20-review-2026-09-22.md for findings and limitations.
