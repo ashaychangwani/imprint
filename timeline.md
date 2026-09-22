@@ -15038,3 +15038,9 @@ usage is 348,601 input including 317,696 cache reads, 2,094 output and zero cach
 writes, $0.2925784 base equivalent; both native thread totals are snapshots.
 This intentionally exercises give-up on an empty synthetic recording, not a
 website pass. Prior smoke accounting remains retained separately.
+
+Fresh Flights 17 started at 13:51:00 UTC on a0a995d, original recording and new
+flights-17/home. PID 97342. Target 14:21, assess 14:51, hard stop 15:21 UTC.
+Eleven GiB free; both source recordings and collector 6443 verified. The prior
+website preview was stopped. No old generated tools or cross-run memory are
+supplied. Runtime and prompts remain unchanged through this teach and its audit.
