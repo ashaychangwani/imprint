@@ -15104,3 +15104,11 @@ waiver or proof shortcut. 273 affected tests and lint/typecheck/web checks passe
 the preparation checkout. Runtime and prompt contents match that tested checkpoint.
 This is the third native-path repair checkpoint; avoid an unlimited sequence of
 architecture repairs. A fresh run is still required to measure any live benefit.
+
+
+Fresh Flights 18 started at 15:23:08 UTC on 57d8d32, original recording and a new
+flights-18/home, PID/PGID 9803. Target 15:53, assess 16:23, hard stop 16:53 UTC.
+Eleven GiB free, both recordings and collector 6443 checked. No previous generated
+tools or research memory are supplied. Code and prompts remain unchanged through
+this run. An independent read-only architecture review is checking whether native
+routing really reduces runtime complexity and preserves the prior capabilities.

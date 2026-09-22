@@ -8,7 +8,8 @@ not yet demonstrated by this change.
 ## What changed
 
 The user superseded the adaptive scheduler with native delegation on September 22.
-The former five-round scheduler allowance has not been consumed. Flights 14 was
+The earlier five-round cap applied to the former adaptive scheduler; the native
+replacement must not be treated as an unlimited new repair allowance. Flights 14 was
 intentionally stopped after 21.93 minutes, not a demonstrated capacity failure.
 Its evidence remains in `reteach-systemic-2026-09-21/flights-14`.
 
@@ -82,3 +83,13 @@ two Hotels destination/date teaches and audits on unchanged code. Report exclude
 recorded variants and every failed attempt. Guest count remains excluded until
 proven. Target thirty minutes, assess at sixty, hard stop at ninety; audits have
 forty-five minutes. Check disk, recordings and collector before launching.
+
+
+Latest validation: Flights 17 reached nine active native child turns but failed
+at ninety minutes with no published tools. Its draft barrier delayed master review
+15.52 minutes. Checkpoint 57d8d32 removes that barrier and shares existing bounded
+offline evidence queries with research. Fresh Flights 18 started at 15:23:08 UTC;
+its original hard deadline is 16:53 UTC. No improvement is claimed before its result.
+The switch removes the 280-line adaptive scheduler, but bridge/accounting code and
+other requested evidence features increased overall runtime size. Concurrency
+ownership is simpler; major overall runtime simplification is not yet demonstrated.
