@@ -12,6 +12,7 @@ import {
   boundedRunDeadline,
   providerControlError,
   providerReportedError,
+  providerRetryAfterMs,
   resolvedRunDeadline,
   retryTransientProviderFailure,
 } from './provider-retry.ts';
@@ -245,6 +246,7 @@ function enrichAnthropicApiError(err: unknown, config: { model: string }): Error
         (item): item is string => typeof item === 'string',
       ),
       messages: [msg],
+      retryAfterMs: providerRetryAfterMs(value.headers),
     },
     err,
   );

@@ -1,5 +1,10 @@
 # Reliability checkpoints — September 22, 2026
 
+The later user-approved plan and current continuation are in
+`docs/teach-shared-research-2026-09-22.md`: adaptive ten-worker scheduling first,
+then response retention, shared research/separate tools, and SDK/delegation work.
+The chronological notes below describe the earlier coordinator checkpoint.
+
 Continue `codex/imprint-master-v066-validation` in the existing validation worktree.
 Checkpoint 1 repairs newly exposed semantic-output errors without accepting invalid
 output. It passes 199 focused tests, lint, type checking and website checks.

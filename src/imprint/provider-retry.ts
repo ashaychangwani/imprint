@@ -1,4 +1,5 @@
 import { abortSignalError, abortableDelay } from './concurrency.ts';
+import { currentTeachScheduler } from './teach-scheduler.ts';
 
 export interface ProviderRetryEvent {
   attempt: number;
@@ -29,6 +30,23 @@ export interface ProviderFailureFacts {
   statuses?: readonly number[];
   codes?: readonly string[];
   messages?: readonly string[];
+  retryAfterMs?: number;
+}
+
+/** Only explicit provider headers supply a retry delay; never infer one from
+ * arbitrary response prose or a website's error. */
+export function providerRetryAfterMs(headers: unknown, now = Date.now()): number | undefined {
+  if (!headers || typeof headers !== 'object') return undefined;
+  const value =
+    headers instanceof Headers
+      ? headers.get('retry-after')
+      : Object.entries(headers).find(([key]) => key.toLowerCase() === 'retry-after')?.[1];
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  if (String(value).trim() === '') return undefined;
+  const seconds = Number(value);
+  if (Number.isFinite(seconds)) return Math.max(0, seconds * 1_000);
+  const date = Date.parse(String(value));
+  return Number.isFinite(date) ? Math.max(0, date - now) : undefined;
 }
 
 export class ProviderReportedError extends Error {
@@ -37,6 +55,7 @@ export class ProviderReportedError extends Error {
   readonly codes: readonly string[];
   readonly providerMessages: readonly string[];
   readonly interruption?: ProviderInterruptionReason;
+  readonly retryAfterMs?: number;
 
   constructor(
     provider: string,
@@ -52,6 +71,7 @@ export class ProviderReportedError extends Error {
     this.codes = facts.codes ?? [];
     this.providerMessages = messages;
     this.interruption = interruption;
+    this.retryAfterMs = facts.retryAfterMs;
   }
 
   facts(): ProviderFailureFacts {
@@ -59,6 +79,7 @@ export class ProviderReportedError extends Error {
       statuses: this.statuses,
       codes: this.codes,
       messages: this.providerMessages,
+      ...(this.retryAfterMs === undefined ? {} : { retryAfterMs: this.retryAfterMs }),
     };
   }
 }
@@ -307,7 +328,26 @@ export async function retryTransientProviderFailure<T>(
       options.onDeadlineReached,
     );
     try {
-      return await operation(active.signal);
+      const scheduler = currentTeachScheduler();
+      const invoke = async () => {
+        try {
+          return await operation(active.signal);
+        } catch (error) {
+          const reported = providerReportedError(error);
+          // Process/safety interruptions may be retryable, but are not evidence
+          // of provider capacity. Website errors never enter this typed path.
+          if (
+            reported &&
+            !hasDeterministicProviderFailureFacts(reported.facts()) &&
+            (reported.interruption === 'capacity_or_overload' ||
+              isTransientProviderFailureFacts(reported.facts()))
+          ) {
+            scheduler?.capacityFailure(reported.retryAfterMs);
+          }
+          throw error;
+        }
+      };
+      return await (scheduler ? scheduler.providerAttempt(invoke, active.signal) : invoke());
     } catch (error) {
       if (options.signal?.aborted) throw abortSignalError(options.signal);
       const reported = providerReportedError(error);
@@ -331,14 +371,19 @@ export async function retryTransientProviderFailure<T>(
       if (remaining <= 0) continue;
       const delayMs = Math.min(
         remaining,
-        jitteredBackoffMs(attempt, initialDelayMs, maxDelayMs, random()),
+        Math.max(
+          jitteredBackoffMs(attempt, initialDelayMs, maxDelayMs, random()),
+          Number.isFinite(reported.retryAfterMs) ? Math.max(0, reported.retryAfterMs ?? 0) : 0,
+        ),
       );
       options.onRetry?.({
         attempt,
         delayMs,
         reason: reported.interruption ?? 'capacity_or_overload',
       });
-      await sleep(delayMs, options.signal);
+      const scheduler = currentTeachScheduler();
+      const wait = () => sleep(delayMs, options.signal);
+      await (scheduler ? scheduler.retryWait(wait) : wait());
     } finally {
       active.dispose();
     }

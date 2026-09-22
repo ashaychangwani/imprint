@@ -8,6 +8,7 @@
 
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  appendFileSync,
   copyFileSync,
   cpSync,
   existsSync,
@@ -132,6 +133,7 @@ import { DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS, runPlaybook } from './playbook-run
 import { persistRuntimeBackendsCache } from './probe-backends.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import {
+  ProviderDeadlineError,
   ProviderUnavailableError,
   RunDeadline,
   type RunDeadlineRef,
@@ -164,7 +166,9 @@ import {
   type Workflow,
 } from './types.ts';
 
-const FOCUSED_COMPILE_CONCURRENCY = 2;
+import { MAX_TEACH_WORKERS, TeachScheduler, currentTeachScheduler } from './teach-scheduler.ts';
+
+const FOCUSED_COMPILE_CONCURRENCY = MAX_TEACH_WORKERS;
 const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
 const TOOL_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
@@ -309,6 +313,15 @@ export async function compileEveryToolInBuildWaves<Value>(
   plan: Pick<DesiredTeachingPlan, 'tools' | 'buildWaves'>,
   dependencies: BuildWaveDependencies<Value>,
 ): Promise<BuildWaveResult<Value>> {
+  const work = () => compileToolWaves(plan, dependencies);
+  const scheduler = currentTeachScheduler();
+  return await (scheduler ? scheduler.yieldWorker(work) : work());
+}
+
+async function compileToolWaves<Value>(
+  plan: Pick<DesiredTeachingPlan, 'tools' | 'buildWaves'>,
+  dependencies: BuildWaveDependencies<Value>,
+): Promise<BuildWaveResult<Value>> {
   const tools = new Map(plan.tools.map((tool) => [tool.id, tool]));
   const completed: BuildWaveResult<Value>['completed'] = [];
   const failures: BuildWaveFailure[] = [];
@@ -337,7 +350,9 @@ export async function compileEveryToolInBuildWaves<Value>(
         }
         let value: Value;
         try {
-          value = await dependencies.compileTool(tool, waveIndex);
+          const work = () => dependencies.compileTool(tool, waveIndex);
+          const scheduler = currentTeachScheduler();
+          value = await (scheduler ? scheduler.worker(work) : work());
         } catch (error) {
           // A compiler can make a bad artifact, but it cannot repair the host's
           // disk or permissions. Keep those failures out of master planning.
@@ -5379,7 +5394,7 @@ interface ParameterFinesseLane {
   stop: (reason: string) => Promise<Record<ParameterFinesseStatus, number>>;
 }
 
-/** Keep at most two optional parameter advisors beside the core teach work. */
+/** Optional advisors share the run's worker budget with core teach work. */
 export class ParameterAdvisorLane {
   private active = 0;
   private readonly waiters: Array<{
@@ -5431,6 +5446,8 @@ export class ParameterAdvisorLane {
   }
 
   async run<Value>(signal: AbortSignal, work: () => Promise<Value>): Promise<Value> {
+    const scheduler = currentTeachScheduler();
+    if (scheduler) return await scheduler.worker(work, signal);
     await this.acquire(signal);
     try {
       if (signal.aborted) throw abortSignalError(signal, 'Optional parameter advice cancelled');
@@ -6012,6 +6029,59 @@ export async function runFreshMasterTeach(
   const stagingRoot = pathJoin(runRoot, 'staging');
   mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
   const deadline = new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
+  let schedulingTelemetryAvailable = true;
+  const scheduler = new TeachScheduler({
+    deadline,
+    deadlineError: () => new ProviderDeadlineError(deadline.deadlineMs),
+    signal: opts.signal,
+    onEvent: (event) => {
+      if (schedulingTelemetryAvailable) {
+        try {
+          appendFileSync(pathJoin(runRoot, 'scheduling.jsonl'), `${JSON.stringify(event)}\n`, {
+            mode: 0o600,
+          });
+        } catch {
+          schedulingTelemetryAvailable = false;
+          reportProgress(
+            opts,
+            'Scheduler timing could not be saved; subsequent scheduling measurements are unavailable.',
+          );
+        }
+      }
+      if (event.type === 'limit_changed')
+        reportProgress(
+          opts,
+          `provider concurrency ${event.previousLimit} → ${event.limit}: ${event.reason}`,
+        );
+    },
+  });
+  try {
+    return await scheduler.run(() =>
+      runScheduledFreshTeach(opts, deps, {
+        site,
+        runId,
+        runRoot,
+        stagingRoot,
+        deadline,
+      }),
+    );
+  } finally {
+    scheduler.dispose();
+  }
+}
+
+async function runScheduledFreshTeach(
+  opts: FreshTeachOptions,
+  deps: FreshTeachControllerDependencies,
+  context: {
+    site: string;
+    runId: string;
+    runRoot: string;
+    stagingRoot: string;
+    deadline: RunDeadline;
+  },
+): Promise<FreshTeachTerminalResult> {
+  const { site, runId, runRoot, stagingRoot, deadline } = context;
   const agents = agentOptions(opts, deadline);
   let journal: FreshTeachJournal | undefined;
   let finesse: ParameterFinesseLane | undefined;

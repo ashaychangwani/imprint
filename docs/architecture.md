@@ -25,8 +25,23 @@ advance after a validated response. Stateless and self-contained calls retain
 the full input, and host validation always checks the complete current evidence.
 Prior research stays in the conversation; this does not reset agent history.
 Focused planners share the accepted plan and research, rather than consuming each
-other's output. Their calls overlap at the existing two-worker limit; only actual
+other's output. Their calls overlap within the run's shared adaptive worker budget;
 compilation and execution retain the master's dependency waves.
+
+Fresh teaches start with ten focused worker slots and ten provider admissions.
+Researchers, planners, compilers and optional advisors share the worker budget;
+master/reviewer calls also pass through provider admission. Three distinct provider
+capacity failures in sixty seconds halve the admission limit, down to one. Existing
+work drains without cancellation; a thirty-second cooldown precedes new admissions.
+Explicit longer provider Retry-After delays are honored. After sixty healthy seconds
+and five successful attempts, queued demand can raise the limit by one, up to ten.
+Failures from an older admission generation cannot cascade another reduction.
+Nested recovery wrappers share an attempt identity; backoff releases provider
+permits, and parents awaiting child waves release worker slots. Website errors,
+schema errors and deterministic provider rejection do not reduce capacity.
+The retained `scheduling.jsonl` records admission/release timestamps, queue time,
+capacity events and limit changes. Concurrency is an observed operating estimate,
+not a provider quota guarantee. Site pacing and browser isolation remain separate.
 Capture timeout summaries keep up to twelve distinct displayed response facts,
 ordered by latest occurrence. Identical facts are grouped with a count; differing
 matcher results or navigation scopes remain distinct. The total and omitted

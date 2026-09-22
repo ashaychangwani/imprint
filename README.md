@@ -106,8 +106,10 @@ MVP selection. Invalid focused-planner reports return exact diagnostics to the
 master for repair while preserving successful sibling proposals; they never
 become accepted execution plans. The retained master receives changed research
 handoffs without repeatedly resending unchanged history; host validation still
-uses the full evidence. Focused planning overlaps within the same two-worker
-limit; compilation and execution still follow the accepted dependencies.
+uses the full evidence. Focused work starts with a shared ten-worker budget;
+repeated provider capacity failures lower admissions, and healthy calls gradually
+raise the limit again. Provider retries release their permits during backoff.
+Compilation and execution still follow the accepted dependencies.
 Capture timeouts group repeated endpoint facts so telemetry does not crowd out
 distinct responses, while keeping matching and readiness rules unchanged.
 Research request diagnostics also show bounded decoded body differences, helping
@@ -122,7 +124,7 @@ waits for the later best-effort pass. Once all first passes finish, the master
 can send the exact missing question back to that same conversation with only
 the relevant sibling results and recorded requests.
 An independent proven tool can prepare its plan and compile a draft while
-other research continues, using the same two worker slots. The master still
+other research continues, using the same adaptive worker budget. The master still
 reviews the complete plan before normal verification and publication; only an
 exactly matching draft is reused. Declared consumers retain producer-first ordering.
 Researchers can call proven sibling requests with fresh inputs before testing a

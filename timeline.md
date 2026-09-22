@@ -14788,3 +14788,26 @@ The 36 duration-bearing backend entries total 11.76 call-minutes, not additional
 wall time. The retrospective links each observed gap to a small general correction
 and a verification target. Next approved checkpoint is still response retention;
 no new runtime changes, teach, dashboard changes, or evidence deletion in this entry.
+
+## 2026-09-22 — Adaptive scheduling checkpoint
+
+Implemented the user's revised first checkpoint: ten shared focused workers and
+provider admissions, halving on three distinct capacity failures in sixty seconds,
+with thirty-second cooldown and cautious healthy recovery. Backoff releases
+permits, old failures cannot cascade reductions, nested recovery avoids duplicate
+admissions, and parent waves yield slots to children. Optional advisors share the
+budget; master and verifier calls also respect provider admission. Longer explicit
+Retry-After delays are retained. Target-site and deterministic errors do not lower
+the limit. Per-run scheduling events record queue time and every limit change.
+
+296 focused tests pass across scheduler, provider, compiler recovery, controller,
+semantic agent and researcher checks (1,473 assertions). Typecheck, lint and web
+build pass. Desktop/mobile views have no page errors or overflow; the changed text
+was visually checked. Existing web bundle-size warning remains. Initial web/provider
+checks lacked Bun in PATH and passed after correction. Two early scheduler tests
+had an assertion-wait deadlock in the test harness; it was corrected before the
+passing checks. No live capacity/reliability claim is made from these regressions.
+
+Disk has 11 GiB, both original recordings exist and collector 6443 is healthy.
+Fresh Flights 14 is next after the checkpoint commit. No teach is active yet.
+Continuation and remaining work: docs/teach-shared-research-2026-09-22.md.

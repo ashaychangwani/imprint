@@ -39,8 +39,9 @@ IMPRINT_HOME=<same-isolated-home> bun run src/cli.ts audit <site> \
 
 ## Hard rules
 
-- Keep the configured two-worker concurrency. Run validation teaches and audits
-  sequentially to avoid changing provider/browser load between comparisons.
+- Fresh teaches start with the configured ten-worker adaptive limit and reduce
+  admissions on repeated provider capacity failures. Preserve scheduling history
+  when comparing runs. Run validation teaches and audits sequentially.
 - Respect the user's deadline. In this experiment the target is about 30 minutes,
   a reasoned progress decision at 60 minutes, and a 90-minute hard deadline.
   These are not universal defaults or permission to extend a run silently.
