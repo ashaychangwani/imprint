@@ -15192,3 +15192,12 @@ website build and desktop/mobile checks pass with no errors or horizontal overfl
 The existing bundle-size warning remains. Independent code review found no blocking
 issue; the noted environment cleanup was fixed. Fresh teach and audited repeatability
 remain pending. Persistent-pass smoke passed separately; see its checkpoint doc.
+
+
+Integrated persistent research as 39d66e5 and the lock/pacing correction as fd153b8
+only after Flights 18 stopped. Resolved an append-only timeline conflict by keeping
+both histories; runtime, prompts, tests and website match the tested preparation.
+Fresh Flights 19 started 16:24:43 UTC, PID/PGID 21080, original recording and empty
+flights-19/home. Target 16:54:43, assess 17:24:43, hard stop 17:54:43 UTC. Eleven
+GiB free, both recordings and collector6443 verified. No old generated tools or
+memory supplied. Code/prompts stay unchanged throughout this run. No cron or MR.
