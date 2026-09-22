@@ -1770,118 +1770,151 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('runs master-ordered retained follow-ups with each prior result visible', async () => {
-    await withTemporaryImprintHome(async (root) => {
-      const recordingPath = syntheticSessionPath(root);
-      const base = lifecycleFailureFixture({
-        runId: 'run-e2e-retained-follow-up-no-refresh',
-        events: [],
-        promotionBatches: [],
-        requestBaselineMvpReview: credibleBaselineMvpReview,
-      });
-      const baseResearch = base.requestApiResearchStep;
-      const baseMaster = base.requestMasterDecision;
-      const basePlanner = base.requestFocusedPlan;
-      if (!baseResearch || !baseMaster || !basePlanner) {
-        throw new Error('fixture research roles are missing');
-      }
+  for (const independent of [false, true]) {
+    it(`runs retained follow-ups in accepted waves (independent=${independent})`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const recordingPath = syntheticSessionPath(root);
+        const base = lifecycleFailureFixture({
+          runId: 'run-e2e-retained-follow-up-no-refresh',
+          events: [],
+          promotionBatches: [],
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        });
+        const baseResearch = base.requestApiResearchStep;
+        const baseMaster = base.requestMasterDecision;
+        const basePlanner = base.requestFocusedPlan;
+        if (!baseResearch || !baseMaster || !basePlanner) {
+          throw new Error('fixture research roles are missing');
+        }
 
-      const returnedPartial = new Set<string>();
-      const initialTurns = new Map<string, number>();
-      const retainedFollowUps = new Map<string, number>();
-      const followUpOrder: string[] = [];
-      const plannedNames: string[] = [];
-      const terminal = await runFreshMasterTeach(
-        {
-          site: SITE,
-          fromSession: recordingPath,
-          noInteractive: true,
-          provider: 'codex-cli',
-          maxDurationMs: 5_000,
-        },
-        {
-          ...base,
-          requestApiResearchStep: async (input, agent, retainedTurnDelta) => {
-            const toolName = input.tool.candidate.toolName;
-            if (retainedTurnDelta?.kind === 'master_follow_up') {
-              retainedFollowUps.set(toolName, (retainedFollowUps.get(toolName) ?? 0) + 1);
-              followUpOrder.push(toolName);
-              if (toolName === CONSUMER_NAME) {
-                expect(input.followUp?.siblingResearch[0]?.summary).toBe(
-                  'Updated producer proof from this same ordered follow-up cycle.',
-                );
-              }
-            }
-            if (!input.followUp) initialTurns.set(toolName, (initialTurns.get(toolName) ?? 0) + 1);
-            const decision = await baseResearch(input, agent, retainedTurnDelta);
-            if (!input.followUp && decision.action === 'proven' && !returnedPartial.has(toolName)) {
-              returnedPartial.add(toolName);
-              return {
-                ...decision,
-                action: 'partial' as const,
-                missingProof: [`Review the revised core promise for ${toolName}.`],
-                reason: 'The recorded call works; the master will refine its core result promise.',
-              };
-            }
-            return toolName === PRODUCER_NAME && input.followUp
-              ? {
-                  ...decision,
-                  reason: 'Updated producer proof from this same ordered follow-up cycle.',
+        const returnedPartial = new Set<string>();
+        const initialTurns = new Map<string, number>();
+        const retainedFollowUps = new Map<string, number>();
+        const followUpOrder: string[] = [];
+        let releaseIndependent!: () => void;
+        const independentStarted = new Promise<void>((resolve) => {
+          releaseIndependent = resolve;
+        });
+        let overlapped = false;
+        const plannedNames: string[] = [];
+        const terminal = await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: recordingPath,
+            noInteractive: true,
+            provider: 'codex-cli',
+            maxDurationMs: 5_000,
+          },
+          {
+            ...base,
+            requestApiResearchStep: async (input, agent, retainedTurnDelta) => {
+              const toolName = input.tool.candidate.toolName;
+              if (retainedTurnDelta?.kind === 'master_follow_up') {
+                retainedFollowUps.set(toolName, (retainedFollowUps.get(toolName) ?? 0) + 1);
+                followUpOrder.push(toolName);
+                if (independent && toolName === CONSUMER_NAME) releaseIndependent();
+                if (independent && toolName === PRODUCER_NAME) {
+                  overlapped = await Promise.race([
+                    independentStarted.then(() => true),
+                    new Promise<false>((resolve) => setTimeout(() => resolve(false), 150)),
+                  ]);
                 }
-              : decision;
-          },
-          requestMasterDecision: async (input, agent, options) => {
-            if (
-              input.decisionPurpose === 'research_review' &&
-              (input.apiResearch ?? []).every(({ status }) => status === 'partial')
-            ) {
-              const desiredPlan = desiredFromCurrent(input);
-              for (const tool of desiredPlan.tools) {
-                tool.candidate.expectedOutput = `${tool.candidate.expectedOutput} Revised core result.`;
+                if (!independent && toolName === CONSUMER_NAME) {
+                  expect(input.followUp?.siblingResearch[0]?.summary).toBe(
+                    'Updated producer proof from this same ordered follow-up cycle.',
+                  );
+                }
               }
-              return MasterDecisionOutputSchema.parse({
-                binding: input.current?.run ?? input.discovery.run,
-                outcome: 'revised',
-                reason: 'Revise both core result promises and continue their retained researchers.',
-                recallToolNames: [],
-                researchFollowUps: desiredPlan.tools.map((tool) => ({
-                  toolName: tool.candidate.toolName,
-                  instruction: `Check the revised result promise for ${tool.candidate.toolName}.`,
-                  missingProof: [`Review the revised core promise for ${tool.candidate.toolName}.`],
-                  relevantToolNames: desiredPlan.tools
-                    .filter(({ id }) => id !== tool.id)
-                    .map(({ candidate }) => candidate.toolName),
-                  relevantRequestSeqs: [...tool.candidate.requestSeqs],
-                })),
-                desiredPlan,
-              });
-            }
-            return await baseMaster(input, agent, options);
+              if (!input.followUp)
+                initialTurns.set(toolName, (initialTurns.get(toolName) ?? 0) + 1);
+              const decision = await baseResearch(input, agent, retainedTurnDelta);
+              if (
+                !input.followUp &&
+                decision.action === 'proven' &&
+                !returnedPartial.has(toolName)
+              ) {
+                returnedPartial.add(toolName);
+                return {
+                  ...decision,
+                  action: 'partial' as const,
+                  missingProof: [`Review the revised core promise for ${toolName}.`],
+                  reason:
+                    'The recorded call works; the master will refine its core result promise.',
+                };
+              }
+              return toolName === PRODUCER_NAME && input.followUp
+                ? {
+                    ...decision,
+                    reason: 'Updated producer proof from this same ordered follow-up cycle.',
+                  }
+                : decision;
+            },
+            requestMasterDecision: async (input, agent, options) => {
+              if (
+                input.decisionPurpose === 'research_review' &&
+                (input.apiResearch ?? []).every(({ status }) => status === 'partial')
+              ) {
+                const desiredPlan = desiredFromCurrent(input);
+                for (const tool of desiredPlan.tools) {
+                  tool.candidate.expectedOutput = `${tool.candidate.expectedOutput} Revised core result.`;
+                }
+                return MasterDecisionOutputSchema.parse({
+                  binding: input.current?.run ?? input.discovery.run,
+                  outcome: 'revised',
+                  reason:
+                    'Revise both core result promises and continue their retained researchers.',
+                  recallToolNames: [],
+                  researchFollowUps: desiredPlan.tools.map((tool) => ({
+                    toolName: tool.candidate.toolName,
+                    instruction: `Check the revised result promise for ${tool.candidate.toolName}.`,
+                    missingProof: [
+                      `Review the revised core promise for ${tool.candidate.toolName}.`,
+                    ],
+                    relevantToolNames: desiredPlan.tools
+                      .filter(({ id }) => id !== tool.id)
+                      .map(({ candidate }) => candidate.toolName),
+                    relevantRequestSeqs: [...tool.candidate.requestSeqs],
+                  })),
+                  desiredPlan,
+                });
+              }
+              const decision = await baseMaster(input, agent, options);
+              if (independent && input.phase === 'discovery') {
+                decision.desiredPlan.chainEdges = [];
+                decision.desiredPlan.buildWaves = [decision.desiredPlan.tools.map(({ id }) => id)];
+                for (const tool of decision.desiredPlan.tools) {
+                  tool.candidate.dependsOnTools = [];
+                  tool.candidate.dependencySeqs = [];
+                }
+              }
+              return decision;
+            },
+            requestFocusedPlan: async (input) => {
+              plannedNames.push(input.tool.candidate.toolName);
+              return await basePlanner(input);
+            },
           },
-          requestFocusedPlan: async (input) => {
-            plannedNames.push(input.tool.candidate.toolName);
-            return await basePlanner(input);
-          },
-        },
-      );
+        );
 
-      expect(initialTurns).toEqual(
-        new Map([
-          [PRODUCER_NAME, 2],
-          [CONSUMER_NAME, 2],
-        ]),
-      );
-      expect(retainedFollowUps).toEqual(
-        new Map([
-          [PRODUCER_NAME, 1],
-          [CONSUMER_NAME, 1],
-        ]),
-      );
-      expect(followUpOrder).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
-      expect(plannedNames).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
-      expect(terminal.status).toBe('failed');
+        expect(initialTurns).toEqual(
+          new Map([
+            [PRODUCER_NAME, 2],
+            [CONSUMER_NAME, 2],
+          ]),
+        );
+        expect(retainedFollowUps).toEqual(
+          new Map([
+            [PRODUCER_NAME, 1],
+            [CONSUMER_NAME, 1],
+          ]),
+        );
+        expect(followUpOrder).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
+        if (independent) expect(overlapped).toBeTrue();
+        expect(plannedNames).toEqual([PRODUCER_NAME, CONSUMER_NAME]);
+        expect(terminal.status).toBe('failed');
+      });
     });
-  });
+  }
 
   it('plans directly after an edge-only research-review revision', async () => {
     await withTemporaryImprintHome(async (root) => {

@@ -73,6 +73,7 @@ describe('native teach family bridge', () => {
       const pending = family.submit(prompt);
       const id = (await tasks(family)).tasks[0]?.id;
       const first = (await family.handle('read_assignment', { id, agentId: 'native-fixture' })) as {
+        executionMode: string;
         prompt: string;
         nextOffset: number;
       };
@@ -84,6 +85,10 @@ describe('native teach family bridge', () => {
         prompt: string;
         nextOffset: null;
       };
+      expect(first.executionMode).toBe('role_response');
+      await expect(family.handle('list_assignment_tools', { id })).rejects.toThrow(
+        'submit the role JSON action',
+      );
       expect(first.prompt.length).toBe(24_000);
       expect(first.prompt + next.prompt).toBe(prompt);
       expect(next.nextOffset).toBeNull();

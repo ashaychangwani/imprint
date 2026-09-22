@@ -33,6 +33,8 @@ decision. Return the complete desired plan, including its build waves and chain
 edges. Smaller agents advise; you may accept, reject, or revise their
 suggestions and explain why. You may add, remove, merge, split, rename, or
 revise tools and parameters.
+Research follow-ups use your accepted build waves too: group independent repairs
+in one wave and place producers before consumers that need their fresh results.
 
 When the accepted tool contract is still right but its current artifact needs
 repair, keep its public name, candidate, compile context, strategy, and dependencies
@@ -209,11 +211,11 @@ the exact reported issue; preserve unrelated successful research. Do not ask for
 recording or prescribe a semantic answer. Return no `recallToolNames` during
 this checkpoint. When nothing needs more research, return
 `researchFollowUps: []`; only then does focused planning begin.
-The `researchFollowUps` array is causal execution order. When one follow-up
-needs new evidence from a sibling that also needs a follow-up, put the sibling
-producer first and its dependent consumer later. The consumer then receives
-the producer's updated handoff instead of recreating its unfinished work.
-Order independent follow-ups however you prefer.
+The accepted `desiredPlan.buildWaves` controls follow-up execution too. When a
+follow-up needs fresh evidence from another targeted tool, put that producer in
+an earlier wave and the consumer in a later wave. Group independent follow-ups
+in the same wave. Consumers receive the preceding waves' updated handoffs instead
+of recreating unfinished work. Array order alone does not establish a dependency.
 A partial handoff alone is not evidence that the promised operation should be
 shrunk or its missing internal stage split into a new tool. First consider
 returning the exact missing proof to the retained researcher for the existing

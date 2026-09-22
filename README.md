@@ -111,7 +111,8 @@ concurrent children. Agents can delegate further and continue the same conversat
 through repairs. Codex owns child lifecycle and concurrency; Imprint retains
 provider retries, deadlines, execution tools and strict evidence checks. Other
 providers retain their existing execution paths with four focused workers.
-Compilation and execution still follow the accepted dependencies.
+Independent research repairs share the master’s parallel waves; dependent repairs,
+compilation and execution follow the accepted producer ordering.
 Capture timeouts group repeated endpoint facts so telemetry does not crowd out
 distinct responses, while keeping matching and readiness rules unchanged.
 Research request diagnostics also show bounded decoded body differences, helping

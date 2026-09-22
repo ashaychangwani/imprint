@@ -1,6 +1,20 @@
 # Fresh-teach failure ledger
 
-## Current work
+## Current work — September 22 native validation
+
+Flights 15 on `c4898d5` reached the 90.02-minute deadline: zero ready tools, nine
+not ready, one compiled draft and no audit. The [retrospective](teach-flights-15-retrospective-2026-09-22.md)
+records measured stages, retained evidence, accounting and corrections. No teach
+is active while those corrections are tested. The branch remains
+`codex/imprint-master-v066-validation`; no cron, MR, push or deletion.
+
+Native delegation preserved retained conversations, and malformed research reached
+the master with its observations. Failed responses were retained. Reliability is
+still unproven: the controller serialized independent follow-ups, native wording
+blurred two execution interfaces, and research did not establish complete fresh
+producer-to-consumer flows. Provider capacity, power and disk were not the cause.
+
+## Historical status — September 21 analysis checkpoint
 
 The user requested continued fresh teaches on September 20 (PDT), superseding the
 previous campaign stop. The goal is a working four-operation Flights teach and
@@ -85,7 +99,7 @@ changes remain mechanical. Existing setup waits, isolation and rate limits stay.
 | SF-26 | Master chooses initial parameter contracts without underlying request quotes | Code inspection: retained discovery input gives candidate/advisor summaries and evidence counts, with no cited raw entries. Repeated wrong-mode choices in Flights 9/10 required later research repair. Candidate for better evidence delivery, not yet implemented or isolated as the sole cause. |
 | SF-27 | Turn completion at the watchdog boundary causes duplicated work | Flights 11 rollout completed at 297.969 seconds, host watchdog fired at 300 seconds, retained retry took 238.29 seconds. Completion-handling candidate; no confirmed network outage or SDK hang. |
 | SF-28 | Tested partial producers cannot be invoked by sibling researchers | Controller exposes only proven handoffs/results through call_producer. Flights 12 search returned live outbound records but lacked return-date proof. Watch whether this prevents downstream research from supplying that proof; no change or deadlock claim yet. |
-| SF-29 | A later request failure loses the complete earlier response | Flights 12 booking obtained live continuation data, then local extraction failed. Runtime emits onRawResponses only after the entire request loop; the failed tool directory has no live-results files. A preview cannot prove absence. Preserve failed-attempt intermediate bodies separately from successful proof. Unfixed. |
+| SF-29 | A later request failure loses the complete earlier response | Fixed in c4898d5: each response is retained immediately with attempt/backend/request identity. Flights 15 retains failed 400/protocol-error bodies across execution rungs. Synthetic downstream-failure regressions pass. Complete teach reliability remains unproven. |
 
 ## Code-path observations to test, not established failures
 
@@ -1868,3 +1882,12 @@ recording-grounded evidence for advertised inputs or narrow the public contract.
 Audit usage: 126,198 input including 108,672 cache reads, 1,646 output, zero
 reported writes; $0.1464928 base estimate. Teach plus audit: $22.9336936 reported
 base estimate, with the teach's two missing-usage calls still unknown.
+
+## Native validation findings — September 22
+
+| ID | Finding | Correction / status |
+| --- | --- | --- |
+| SF-30 | Native task instructions blur semantic actions and direct MCP execution | Flights 15 round-trip follow-up cited absent direct tools as a blocker. Task metadata/instructions now distinguish JSON host actions from compiler tools; real-provider action/retained-proof smoke passes. Fresh validation pending. |
+| SF-31 | Research repair imposes serial order on independent tools | Flights 15 requested six repairs but round-trip delayed all siblings. Reuse accepted plan waves; an independent-overlap regression failed before and passes after, with producer freshness preserved. Fresh validation pending. |
+| SF-32 | Native task delivery repeats large immutable packets | Flights 15 made 887 reads for 297 pages of unique packets. Cache guidance and removal of redundant dispatch waiting are measured correction candidates; no speed improvement claimed yet. |
+| SF-33 | Shared findings interface is unused | No findings published in Flights 15. Agents must choose applicability; do not auto-classify endpoints or claim memory reuse until observed. |

@@ -28,6 +28,13 @@ Focused planners share the accepted plan and research, rather than consuming eac
 other's output. Codex delegates their work within one native agent family;
 compilation and execution retain the master's dependency waves.
 
+Research follow-ups reuse the master’s accepted build waves, allowing independent
+repairs to overlap while consumers receive results from earlier producer waves.
+Semantic roles request execution by returning their typed JSON actions; compiler
+roles call their scoped MCP tools directly. Native task metadata distinguishes these
+interfaces. Agents cache unchanged task packets and exact candidate objects when
+possible; strict proof binding still rejects altered candidates.
+
 Codex teaches use one run-owned native coordinator and up to ten concurrent
 native children, which can themselves delegate. Imprint delivers typed role tasks
 through a local MCP bridge; the provider owns spawning, follow-ups, waiting and
@@ -658,7 +665,7 @@ The public teaching path is one fresh foreground controller:
     repair can return directly to the retained compiler. If a failure disproves
     a research claim, the master may explicitly send the unchanged tool back to
     its retained researcher with the actual failure evidence. Requested research
-    follow-ups run in the master's order, with updated sibling handoffs, then
+    follow-ups use the master's parallel/dependency waves, with updated handoffs, then
     return for review and focused replanning. A changed tool
     invalidates only itself and the consumers that depend on it. Unrelated
     verified tools stay current.

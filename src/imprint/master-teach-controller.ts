@@ -3143,33 +3143,46 @@ async function reviewApiResearchBeforePlanning(input: {
     }
 
     researchNoProgress = [];
-    let repeatedState: ApiResearchNoProgress | undefined;
-    // The master orders causal follow-ups. Merge each result before building
-    // the next input so a consumer sees a producer repaired earlier this cycle.
-    for (const followUp of followUps) {
+    const directed = new Map(
+      followUps.map((directive) => {
+        const tool = plan.tools.find(({ candidate }) => candidate.toolName === directive.toolName);
+        if (!tool)
+          throw new Error(`API research follow-up target "${directive.toolName}" is absent`);
+        return [tool.id, directive] as const;
+      }),
+    );
+    // Reuse the master's waves and the existing research executor. Later waves
+    // receive repaired producer handoffs; independent repairs run together.
+    for (const wave of plan.buildWaves) {
       const latestHandoffs = plan.tools.flatMap((tool) => {
         const handoff = handoffs.get(tool.candidate.toolName);
         return handoff ? [handoff] : [];
       });
-      const handoff = handoffs.get(followUp.toolName);
-      if (handoff?.status === 'partial') {
-        const followUpStateSha256 = apiResearchFollowUpStateSha256(plan, latestHandoffs, followUp);
-        if (attemptedFollowUpStates.has(followUpStateSha256)) {
-          repeatedState = {
-            toolName: followUp.toolName,
-            partialHandoffSha256: teachingPlanContentSha256(handoff),
-            followUpStateSha256,
-            reason:
-              'The same partial handoff, public boundary, relevant sibling research, and master direction already completed without progress.',
-          };
-          break;
+      const ready = wave.flatMap((id) => {
+        const followUp = directed.get(id);
+        if (!followUp) return [];
+        const handoff = handoffs.get(followUp.toolName);
+        if (handoff?.status === 'partial') {
+          const followUpStateSha256 = apiResearchFollowUpStateSha256(
+            plan,
+            latestHandoffs,
+            followUp,
+          );
+          if (attemptedFollowUpStates.has(followUpStateSha256)) {
+            researchNoProgress.push({
+              toolName: followUp.toolName,
+              partialHandoffSha256: teachingPlanContentSha256(handoff),
+              followUpStateSha256,
+              reason:
+                'The same partial handoff, public boundary, relevant sibling research, and master direction already completed without progress.',
+            });
+            return [];
+          }
+          attemptedFollowUpStates.add(followUpStateSha256);
         }
-        attemptedFollowUpStates.add(followUpStateSha256);
-      }
-
-      const target = plan.tools.find(({ candidate }) => candidate.toolName === followUp.toolName);
-      if (!target)
-        throw new Error(`API research follow-up target "${followUp.toolName}" is absent`);
+        return [{ id, followUp }];
+      });
+      if (ready.length === 0) continue;
       const continued = await researchSelectedOperations({
         plan,
         run: input.discoveryInput.run,
@@ -3183,14 +3196,13 @@ async function reviewApiResearchBeforePlanning(input: {
         runDeadline: input.runDeadline,
         signal: input.signal,
         report: input.report,
-        toolIds: new Set([target.id]),
-        followUps: [followUp],
+        toolIds: new Set(ready.map(({ id }) => id)),
+        followUps: ready.map(({ followUp }) => followUp),
         previousHandoffs: latestHandoffs,
       });
       mergeResearch(plan, continued);
     }
-    if (repeatedState) {
-      researchNoProgress = [repeatedState];
+    if (researchNoProgress.length > 0) {
       input.report?.('master: reviewing an exact no-progress API research cycle');
     }
   }
@@ -5245,11 +5257,11 @@ async function ensureCurrentImplementationPlans(
           .filter((tool) => tool.candidate.toolName === toolName)
           .map(({ id }) => id),
       );
-      // Preserve the master's causal order and give each later researcher the
-      // preceding sibling's new handoff. Undirected first passes stay parallel.
+      // The same accepted waves govern directed repairs here and before planning.
+      // Undirected first passes stay parallel; later waves see fresh handoffs.
       const researchBatches = [
         freshResearchToolIds.filter((id) => !directedIds.includes(id)),
-        ...directedIds.map((id) => [id]),
+        ...current.plan.buildWaves.map((wave) => wave.filter((id) => directedIds.includes(id))),
       ].filter((ids) => ids.length > 0);
       for (const toolIds of researchBatches) {
         const updatedNames = new Set(firstPass.handoffs.map(({ toolName }) => toolName));

@@ -14890,3 +14890,72 @@ the original combined recording. Four operation groups remain in scope; guidance
 now explicitly says their count is not the tool count. Teach PID 68836. Target
 10:51, assess 11:21, hard deadline 11:51 UTC. Collector 6443 is healthy and disk
 has 10 GiB free. No code/prompt changes while this run is active.
+
+A separate provider restart smoke passed in 23.53 seconds: the first coordinator
+process spawned a child, then a resumed coordinator successfully addressed that
+same child and used its retained value. Both processes exited zero. This checks
+retained child handles across SDK process restarts; it is not a website success.
+All native smoke attempts, including the failed approval loop, now report
+$2.9842144 in base API equivalent from provider token counters. The restart smoke
+reported 105,857 input tokens including 99,840 cache reads, 272 output tokens and
+zero reported cache writes. Pricing excludes unreported usage and extra tiers.
+
+Flights 15 passed its thirty-minute target without completion. At roughly forty-five
+minutes, nine purpose-based researchers had run concurrently. Location lookup and
+location details were proven; multi-city search had useful partial live results.
+Other search, calendar and booking work remained blocked or under investigation.
+No published/audited tool set exists yet. Actual failures include generated nested
+request shapes and missing current consumer state. Retained failed response bodies
+are present. No native-family/provider-capacity failure has been recorded.
+
+Initial discovery/advice/master selection used about twenty-one minutes before
+research. Native task paging also shows repeated reads of the same immutable
+assignment, and no shared findings have been published so far. These are measured
+follow-up candidates, not reasons to edit an active run or claim a speed win.
+
+At the sixty-minute assessment Flights 15 was allowed to continue within its
+original deadline. Around sixty-three minutes a malformed round-trip handoff
+returned to the master with its observations instead of terminating the run.
+The master eventually issued six targeted follow-ups. The controller then ran
+them serially even though its accepted build waves group independent search work.
+Round-trip consumed the first follow-up before one-way started at about eighty
+minutes. This is an observed runtime bottleneck, not a provider failure.
+
+Round-trip's follow-up also reported that the native assignment exposed no direct
+execution tools. That absence is expected for a semantic role: JSON test/inspect
+responses are submitted for host execution. The generic native coordinator wording
+instead describes call_assignment_tool as the execution interface for every child.
+This is a misleading adapter contract to correct after the active run, alongside
+the stale two-worker prompt sentence. Preserve the distinction between semantic
+role actions and the compiler's directly callable MCP tools.
+
+Flights 15 ended naturally at its 90.02-minute deadline, exit 1: zero ready,
+nine not ready, one compiled draft and no audit. Stage wall time was 20.18 minutes
+for discovery/advice/initial planning, 42.33 for first-pass research and handoff
+repair, and 27.51 for master review/follow-ups. Reported usage was 32,987,634 input
+(including 30,328,576 cache reads), 239,935 output and zero reported cache writes:
+$27.5663624 base API equivalent. Root/one-way usage is an interrupted snapshot;
+one analyze call lacks terminal usage. No provider capacity/power/disk cause was
+established. The full retrospective is docs/teach-flights-15-retrospective-2026-09-22.md.
+
+Corrected the native execution-interface wording/metadata and missing-tool feedback.
+Semantic researchers submit JSON actions; compilers call their scoped MCP tools.
+Native instructions now favor cached task/candidate objects and avoid adding a
+native wait after the task endpoint's existing wait. Removed stale two-worker text.
+Research repairs now reuse accepted parallel/dependency waves and the existing
+research executor both before planning and during later plan repair. No new pool
+or scheduler was added. Producer results still reach consumers in later waves.
+
+A focused independent-repair regression failed on the old serial loop and passed
+afterward; its causal variant continues to see the fresh producer first. 275 affected
+tests passed, followed by all 56 controller integration tests after the final
+simplification. Typecheck/lint pass. Website build and desktop/mobile inspection
+pass with no page errors/overflow; the existing bundle-size warning remains.
+An initial combined validation shell missed Bun in PATH for its second command;
+the separate lint rerun passed. No tests or hooks were bypassed.
+
+The real-provider native-action-smoke-1 passed three retained research turns in
+103.13 seconds, including a repeated host-executed test and exact candidate/proof
+binding. It reports $0.349648 base API equivalent. All separate native smoke attempts
+now total $3.3338624 of reported usage, with missing terminal usage labelled as
+snapshots. These results do not prove website reliability. Fresh Flights 16 is next.

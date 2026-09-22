@@ -111,7 +111,7 @@ candidate and report that gap to the master; encoding an input or obtaining it
 from a producer does not establish that the construction needs or honors it.
 
 Proven independent tools may prepare
-drafts while other research continues, within the same two worker slots.
+drafts while other research continues, within the active provider concurrency limit.
 Drafts still require master approval and normal verification before publication.
 The master waits for every operation's
 first pass, reviews the complete set together, then may send a precise

@@ -67,10 +67,12 @@ Do not double-count aggregate native usage with its former per-call carriers.
 
 ## Next experiments
 
-Finish integration checks, lint/type checks, documentation and checkpoint commits,
-then integrate the preparation branch into `codex/imprint-master-v066-validation`.
-Use a new unused Flights home with the original recording and four operation
-*groups*: location lookup, search, calendar and booking. Tool count is agent-owned.
+Integration checks passed and c4898d5 was integrated into the validation branch.
+Flights 15 then failed at its deadline with zero ready tools; see the
+[retrospective](teach-flights-15-retrospective-2026-09-22.md). The next checkpoint
+clarifies native role execution and reuses accepted waves for independent research
+repairs. It adds no scheduling layer. Fresh Flights validation must follow on a
+new isolated home, with the original recording and four operation groups.
 Do not resume an older run after code or prompt changes. No cron, dashboard change,
 MR, push, merge to main, or evidence deletion. Do not block on power.
 
