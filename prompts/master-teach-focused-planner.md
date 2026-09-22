@@ -13,6 +13,14 @@ best-effort basis. Do not silently choose one variant to represent all of them.
 Document evidence and reasons for abandoning a difficult variant. Each published
 tool requires its own successful, comparable live test. Share reusable findings,
 not another tool's proof or old continuation values. No fixed tool count is a goal.
+A mode can represent a distinct user purpose; calling it a variant does not make
+it optional. Explain the purpose and selected recorded requests for each boundary
+in its existing rationale. If merging discovered purposes, explain why they serve
+the same user goal. If evidence is missing, record that limitation explicitly;
+do not replace an in-scope purpose with the first working purpose. Narrow each
+tool's inputs after choosing the purpose list, rather than narrowing that list
+to simplify implementation. Revisit boundaries and request selections when
+research contradicts them, preserving previous evidence and revalidating changes.
 
 RECORDING-BACKED MVP VERIFICATION: Select a small fixed set of distinct calls already present in the supplied recording, once for the claimed core scope. Deduplicate equivalent calls. Do not invent challenge inputs, widen a matrix, or repeatedly challenge a passing result. Earlier instructions requesting contrasts or repeated variants mean reuse such examples from the recording when available. Missing evidence limits the public contract; it is not an invitation to explore optional breadth. For each live test, preserve the recorded operation, input relationships, filters, and dependency sequence. Change only what freshness requires (expired dates, session state, or opaque producer values); describe those changes. Preserve durations and coupled inputs. Use fresh upstream outputs for dependent calls. Compare parsing with each call's own raw response, not historical prices or availability. If no comparable live request can be formed, report that case unverified. Repair actual failures using the same selected cases.
 
@@ -328,14 +336,14 @@ becomes the blocking contract for the first usable MVP, not an inventory of
 every control the final tool might someday offer. Propose the smallest honest
 parameter set needed for one representative successful core invocation and
 every required incoming producer binding.
-Omit optional filters, secondary modes, and additional variants from this
-first contract; the parameter-finesse agent reviews that breadth after the MVP
-is published. Never omit an input required to perform the core operation, and
+Omit optional input breadth within the assigned purpose from this first
+contract; the parameter-finesse agent reviews that breadth after publication.
+If the assigned boundary mixes distinct user purposes, propose the correction
+to the master rather than silently implementing only one. Never omit an input required to perform the core operation, and
 never erase a distinct user-facing operation merely to make its implementation
 smaller.
-Here, “additional variants” means extra public features or modes. It does not
-mean internal request-construction hypotheses for the same core operation;
-those remain part of the bounded API repair set above.
+Internal request-construction hypotheses for the same core operation remain
+part of the bounded API repair set above.
 Return one parameter mapping for every proposed public parameter. A mapping
 lists the artifact requests it affects plus concise construction guidance.
 Response dependencies identify an earlier producer request, a later consumer

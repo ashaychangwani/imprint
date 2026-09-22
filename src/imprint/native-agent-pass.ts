@@ -5,7 +5,7 @@ import { abortSignalError } from './concurrency.ts';
 import type { MasterTeachAnalyzer } from './master-teach-agents.ts';
 import { type NativeTeachAgents, nativeAssignmentPage } from './native-teach-agents.ts';
 
-const instructions = `This assignment is one complete API research pass. Use its assignment tools throughout the pass. Call respond with the current step and the exact JSON role response as text; the host validates it, executes accepted actions, and returns the next input directly. Do not submit to the native family between actions. Read every page of a returned input using read_context before responding. Repair feedback, observations, and shared-research replies all continue in this same assignment. When respond returns complete=true, submit a short acknowledgement to the native family and stop. That acknowledgement is not proof; only the host's validated handoff determines the outcome. Native helpers may assist with bounded questions; you remain responsible for this assignment's actions and evidence.`;
+const instructions = `This assignment is one complete focused agent pass. Use its assignment tools throughout the pass. Call respond with the current step and the exact JSON role response as text; the host validates it, executes accepted actions, and returns the next input directly. Do not submit to the native family between actions. Read every page of a returned input using read_context before responding. Repair feedback, observations, and shared-research replies all continue in this same assignment. When respond returns complete=true, submit a short acknowledgement to the native family and stop. That acknowledgement is not proof; only the host's validated handoff determines the outcome. Native helpers may assist with bounded questions; you remain responsible for this assignment's actions and evidence.`;
 
 type Frame = { complete: true } | { complete: false; step: number; prompt: string };
 function nextFrame() {
@@ -16,9 +16,9 @@ function nextFrame() {
   return { promise, resolve };
 }
 
-/** One native child drives the existing research executor and validators.
+/** One native child drives a host role loop, including actions, repairs and queries.
  * This is a single request/response channel, with no worker admission policy. */
-export async function runNativeResearchPass<T>(options: {
+export async function runNativeAgentPass<T>(options: {
   family: Pick<NativeTeachAgents, 'submit'>;
   conversation: string;
   signal?: AbortSignal;
@@ -46,7 +46,7 @@ export async function runNativeResearchPass<T>(options: {
   const analyzer: MasterTeachAnalyzer = {
     analyze: async (prompt, payload, invocation = {}) => {
       if (signal.aborted) throw abortSignalError(signal);
-      if (answer) throw new Error('Native research already awaits an action');
+      if (answer) throw new Error('Native agent already awaits an action');
       const active = invocation.signal ? AbortSignal.any([signal, invocation.signal]) : signal;
       if (active.aborted) throw abortSignalError(active);
       const role =
@@ -77,7 +77,7 @@ export async function runNativeResearchPass<T>(options: {
               try {
                 log('step.output', { step, text: value.text });
                 invocation.onEvent?.({
-                  type: 'native.research.response',
+                  type: 'native.agent.response',
                   timestamp: new Date().toISOString(),
                   conversationKey: options.conversation,
                   step,
@@ -121,7 +121,7 @@ export async function runNativeResearchPass<T>(options: {
     const first = await next.promise;
     if (!first.complete) {
       await options.family.submit(
-        `${instructions}\n\nCurrent step: ${first.step}\n${first.prompt}`,
+        `${instructions}\n\nCurrent step: ${first.step}. Read its input with read_context at offset 0, then follow nextOffset until complete.`,
         {
           conversation: options.conversation,
           signal,
@@ -142,7 +142,7 @@ export async function runNativeResearchPass<T>(options: {
                   },
                   {
                     name: 'read_context',
-                    description: 'Read another page of the current research input.',
+                    description: 'Read another page of the current role input.',
                     inputSchema: {
                       type: 'object',
                       properties: {
@@ -156,9 +156,9 @@ export async function runNativeResearchPass<T>(options: {
                 ],
               };
             if (signal.aborted) throw abortSignalError(signal);
-            if (finished) throw new Error('Research pass completed; acknowledge the assignment');
+            if (finished) throw new Error('Agent pass completed; acknowledge the assignment');
             const binding = z.object({ step: z.number().int() }).parse(args);
-            if (binding.step !== current?.step) throw new Error('Stale or duplicate research step');
+            if (binding.step !== current?.step) throw new Error('Stale or duplicate agent step');
             if (name === 'read_context') {
               const { offset } = z.object({ offset: z.number().int().nonnegative() }).parse(args);
               return {
@@ -167,9 +167,9 @@ export async function runNativeResearchPass<T>(options: {
                 ...nativeAssignmentPage(current.prompt, offset),
               };
             }
-            if (name !== 'respond') throw new Error(`Unknown research tool: ${name}`);
+            if (name !== 'respond') throw new Error(`Unknown agent tool: ${name}`);
             const { text } = z.object({ text: z.string().min(1) }).parse(args);
-            if (responding || !answer) throw new Error('Research action is already executing');
+            if (responding || !answer) throw new Error('Agent action is already executing');
             responding = true;
             const pending = answer;
             answer = undefined;
@@ -189,7 +189,7 @@ export async function runNativeResearchPass<T>(options: {
         },
       );
       if (!finished)
-        throw new Error('Native researcher acknowledged before completing its host-validated pass');
+        throw new Error('Native agent acknowledged before completing its host-validated pass');
     }
   } catch (error) {
     transportError = error;

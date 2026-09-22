@@ -103,9 +103,24 @@ export class NativeTeachAgents {
   ): Promise<{ text: string; agentId?: string }> {
     if (this.#failure) return Promise.reject(this.#failure);
     if (this.#stopped) return Promise.reject(new Error('Native teach family is closed'));
-    const signal = options.signal ?? this.options.signal;
+    const signal = AbortSignal.any(
+      [options.signal, this.options.signal, this.#abort.signal].filter(
+        (value): value is AbortSignal => value !== undefined,
+      ),
+    );
     if (signal?.aborted) return Promise.reject(abortSignalError(signal));
     const id = randomUUID();
+    // Persist creation before enqueueing work. A failed journal write must not
+    // leave an assignment that no caller can await or cancel.
+    try {
+      this.#event('assignment.created', {
+        id,
+        conversation: options.conversation,
+        promptChars: prompt.length,
+      });
+    } catch (error) {
+      return Promise.reject(error);
+    }
     const promise = new Promise<{ text: string; agentId?: string }>((resolve, reject) => {
       const abort = () => {
         this.#assignments.delete(id);
@@ -127,11 +142,6 @@ export class NativeTeachAgents {
         },
       });
     });
-    this.#event('assignment.created', {
-      id,
-      conversation: options.conversation,
-      promptChars: prompt.length,
-    });
     for (const wake of this.#wake) wake();
     this.#runner ??= (this.driver ? this.driver(this, this.#abort.signal) : this.#start()).catch(
       (error) => {
@@ -139,7 +149,11 @@ export class NativeTeachAgents {
         this.#failure = error;
         for (const task of this.#assignments.values())
           if (task.result === undefined) task.reject(error);
-        this.#event('family.failed', { error: String(error) });
+        try {
+          this.#event('family.failed', { error: String(error) });
+        } catch {
+          // Assignment rejection already preserves the original failure.
+        }
       },
     );
     return promise;
@@ -209,8 +223,14 @@ export class NativeTeachAgents {
       if (task.result !== undefined && task.result !== text)
         throw new Error('Cannot replace a submitted response');
       if (task.result === undefined) {
+        try {
+          this.#event('assignment.completed', { id: task.id, agentId: task.agentId, text });
+        } catch (error) {
+          this.#assignments.delete(task.id);
+          task.reject(error);
+          throw error;
+        }
         task.result = text;
-        this.#event('assignment.completed', { id: task.id, agentId: task.agentId, text });
         task.resolve({ text, agentId: task.agentId });
       }
       return { accepted: true };
@@ -361,7 +381,6 @@ export class NativeTeachAgents {
     const signal = this.options.signal
       ? AbortSignal.any([this.options.signal, this.#abort.signal])
       : this.#abort.signal;
-    let previousPrematureResult: string | undefined;
     while (!this.#stopped) {
       await retryTransientProviderFailure(
         async (active) => {
@@ -377,11 +396,6 @@ export class NativeTeachAgents {
             },
           );
           this.#rootThreadId = thread.id ?? undefined;
-          if (!this.#stopped && result.finalResponse === previousPrematureResult)
-            throw new Error(
-              `Native coordinator repeatedly ended before handling assignments: ${result.finalResponse}`,
-            );
-          previousPrematureResult = result.finalResponse;
           this.#event('family.turn', {
             threadId: thread.id,
             usage: result.usage,
@@ -446,12 +460,20 @@ export class NativeTeachAgents {
             },
           );
       } catch (error) {
-        this.#event('usage.unavailable', { error: String(error) });
+        try {
+          this.#event('usage.unavailable', { error: String(error) });
+        } catch {
+          // Cleanup must settle even when its journal is unavailable.
+        }
       }
     }
-    this.#event('family.closed', {
-      rootThreadId: this.#rootThreadId,
-      usage: 'See provider rollouts; coordinator usage excludes children.',
-    });
+    try {
+      this.#event('family.closed', {
+        rootThreadId: this.#rootThreadId,
+        usage: 'See provider rollouts; coordinator usage excludes children.',
+      });
+    } catch {
+      // Primary assignment errors remain authoritative; teardown is complete.
+    }
   }
 }

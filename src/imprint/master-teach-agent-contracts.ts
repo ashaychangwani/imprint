@@ -538,6 +538,8 @@ const FocusedPlannerProposalPayloadSchema = strictObject({
 });
 export const FocusedPlannerProposalSchema = contentProjection(FocusedPlannerProposalPayloadSchema);
 const DiscoveryInputFields = {
+  /** Human scope is guidance, never recording evidence. */
+  userGuidance: utf8Text(1, 4_000).optional(),
   selectedRecordingEvidence: PromptEvidenceProjectionSchema.optional(),
   recordingResponseBodySeqs: z.array(z.number().int().nonnegative()).optional(),
   run: RunIdentitySchema,
@@ -550,6 +552,7 @@ export const ToolSelectionAdvisorInputSchema = strictObject(DiscoveryInputFields
 export type ToolSelectionAdvisorInput = z.infer<typeof ToolSelectionAdvisorInputSchema>;
 /** Narrow analyzer view. The full detector input remains the host validation boundary. */
 export const ToolSelectionAdvisorPromptInputSchema = strictObject({
+  userGuidance: DiscoveryInputFields.userGuidance,
   recordingResponseBodySeqs: DiscoveryInputFields.recordingResponseBodySeqs,
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,

@@ -1,18 +1,13 @@
 # Fresh-teach failure ledger
 
-## Current work — September 22 native validation
+## Current work — September 22 implementation completion
 
-Flights 15 on `c4898d5` reached the 90.02-minute deadline: zero ready tools, nine
-not ready, one compiled draft and no audit. The [retrospective](teach-flights-15-retrospective-2026-09-22.md)
-records measured stages, retained evidence, accounting and corrections. Fresh Flights 16 started at 12:03:28 UTC on e39d560 after the corrections passed
-checks. Its target is 12:33, assessment 13:03 and hard deadline 13:33 UTC. The branch remains
-`codex/imprint-master-v066-validation`; no cron, MR, push or deletion.
-
-Native delegation preserved retained conversations, and malformed research reached
-the master with its observations. Failed responses were retained. Reliability is
-still unproven: the controller serialized independent follow-ups, native wording
-blurred two execution interfaces, and research did not establish complete fresh
-producer-to-consumer flows. Provider capacity, power and disk were not the cause.
+Flights 19 on `fd153b8` ended at its 90-minute deadline with zero published tools
+and no audit. The [retrospective](teach-flights-19-retrospective-2026-09-22.md)
+records time, accounting and the unresolved producer-context failure. Implementation
+is continuing before another fresh teach. The user explicitly superseded the
+five-round cap and static-worker fallback: Codex native agents own concurrency.
+No cron, MR, push or evidence deletion.
 
 ## Historical status — September 21 analysis checkpoint
 
@@ -1952,3 +1947,28 @@ and instruction-following defect; no tool was published. Booking still lacked
 complete fresh producer selections. See the Flights 18 retrospective for scope,
 timings, failed response evidence and usage. Native delegation alone is not full
 MVP acceptance or a claim of whole-runtime simplification.
+
+
+## September 22 purpose and native lifecycle follow-up
+
+- SF-40: Purpose splitting was installed as prompt text but not reliably achieved.
+  Flights 18 split ten tools; Flights 19 selected four and deferred other modes.
+  The boundary advisor did not receive human scope, and older MVP instructions
+  contradicted distinct-purpose coverage. Correct scope delivery and align advisor,
+  master, planner, researcher and completion-review guidance. Judge actual plans;
+  synthetic tests cannot establish website coverage.
+- SF-41: Native completion journaling could leave an accepted-looking assignment
+  unresolved after a write error. Independently reproduced with synthetic data.
+  Creation now logs before enqueue, failed completion rejects/removes the task,
+  and cleanup journaling cannot hide the primary result. Composed cancellation
+  covers family-owned work even with a separate caller signal.
+- SF-42: Semantic schema repairs and shared-memory queries still required repeated
+  root routing despite persistent research. Reuse the same generic agent-pass
+  channel for all semantic roles, retaining one child and the existing validators.
+  Native waves submit directly; there is no additional native worker pool.
+
+- SF-43: Planning and callable producer lookup used different compatibility checks.
+  Flights 19 kept narrowed search research but hid it from booking. A synthetic
+  metadata-only boundary change reproduces the missing producer. Both now reuse
+  the existing boundary coverage check, with exact candidate/observation matching
+  against the retained result. Invalidated producer evidence remains unavailable.

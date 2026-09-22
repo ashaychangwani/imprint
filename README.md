@@ -102,7 +102,9 @@ master chooses the build waves: independent tools can run together, while a
 producer runs before its consumers. Failed checks return factual evidence to
 the master, which can revise the affected tool and its dependants without
 rebuilding unrelated tools. Recorded response availability is supplied before
-MVP selection. Invalid focused-planner reports return exact diagnostics to the
+MVP selection. The boundary advisor and master receive the same human scope.
+Agents choose separate tools for distinct recorded purposes before narrowing each
+tool's inputs; unsupported purposes remain explicit coverage limits. Invalid focused-planner reports return exact diagnostics to the
 master for repair while preserving successful sibling proposals; they never
 become accepted execution plans. The retained master receives changed research
 handoffs without repeatedly resending unchanged history; host validation still
@@ -110,6 +112,8 @@ uses the full evidence. Codex teaches use one native agent family, with up to te
 concurrent children. Agents can delegate further and continue the same conversations
 through repairs. Each research pass stays in one native assignment: test and
 inspection results return directly to that researcher, with the same host validation.
+Master, planner and reviewer repairs and shared-memory queries use that same channel,
+without routing every intermediate response through the parent.
 Independent research calls keep separate browser state and reserve paced start times
 without holding a shared site lock through slow responses.
 Master-directed follow-ups resume the same child. Codex owns child lifecycle and concurrency; Imprint retains

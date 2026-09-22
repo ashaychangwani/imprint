@@ -13,6 +13,14 @@ best-effort basis. Do not silently choose one variant to represent all of them.
 Document evidence and reasons for abandoning a difficult variant. Each published
 tool requires its own successful, comparable live test. Share reusable findings,
 not another tool's proof or old continuation values. No fixed tool count is a goal.
+A mode can represent a distinct user purpose; calling it a variant does not make
+it optional. Explain the purpose and selected recorded requests for each boundary
+in its existing rationale. If merging discovered purposes, explain why they serve
+the same user goal. If evidence is missing, record that limitation explicitly;
+do not replace an in-scope purpose with the first working purpose. Narrow each
+tool's inputs after choosing the purpose list, rather than narrowing that list
+to simplify implementation. Revisit boundaries and request selections when
+research contradicts them, preserving previous evidence and revalidating changes.
 
 RECORDING-BACKED MVP VERIFICATION: Select a small fixed set of distinct calls already present in the supplied recording, once for the claimed core scope. Deduplicate equivalent calls. Do not invent challenge inputs, widen a matrix, or repeatedly challenge a passing result. Earlier instructions requesting contrasts or repeated variants mean reuse such examples from the recording when available. Missing evidence limits the public contract; it is not an invitation to explore optional breadth. For each live test, preserve the recorded operation, input relationships, filters, and dependency sequence. Change only what freshness requires (expired dates, session state, or opaque producer values); describe those changes. Preserve durations and coupled inputs. Use fresh upstream outputs for dependent calls. Compare parsing with each call's own raw response, not historical prices or availability. If no comparable live request can be formed, report that case unverified. Repair actual failures using the same selected cases.
 

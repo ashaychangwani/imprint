@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { NativeTeachAgents, currentNativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
@@ -23,6 +23,73 @@ const tasks = async (family: NativeTeachAgents) =>
   };
 
 describe('native teach family bridge', () => {
+  it('rejects failed creation journaling without enqueueing orphan work', async () => {
+    const { family, root } = fixture();
+    try {
+      mkdirSync(join(root, 'events.jsonl'));
+      await expect(family.submit('must not dispatch')).rejects.toThrow();
+      await family.close();
+      expect((await tasks(family)).tasks).toEqual([]);
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('settles a failed completion journal write instead of accepting an unresolved task', async () => {
+    const { family, root } = fixture();
+    try {
+      const pending = family.submit('fixture');
+      const outcome = pending.catch((error: unknown) => error);
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: 'fixture-agent' });
+      renameSync(join(root, 'events.jsonl'), join(root, 'retained-events.jsonl'));
+      mkdirSync(join(root, 'events.jsonl'));
+      await expect(family.handle('submit', { id, text: 'actual response' })).rejects.toThrow();
+      expect(await outcome).toBeInstanceOf(Error);
+      await expect(family.handle('submit', { id, text: 'actual response' })).rejects.toThrow(
+        'Unknown',
+      );
+      await family.close();
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels family-owned assignments even when a distinct caller signal remains live', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-native-cancel-'));
+    const abort = new AbortController();
+    const caller = new AbortController();
+    let release!: () => void;
+    const family = new NativeTeachAgents(
+      {
+        root,
+        model: 'fixture',
+        deadline: new RunDeadline(Date.now() + 10_000),
+        signal: abort.signal,
+      },
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    try {
+      const outcome = family
+        .submit('fixture', { signal: caller.signal })
+        .catch((error: unknown) => error);
+      abort.abort(new Error('family cancelled'));
+      const error = await outcome;
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toBe('family cancelled');
+      expect(caller.signal.aborted).toBe(false);
+    } finally {
+      release();
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('hands independent work to the provider and retains the same conversation across repair', async () => {
     const { family, root } = fixture();
     try {

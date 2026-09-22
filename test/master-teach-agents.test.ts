@@ -1,5 +1,6 @@
 import { describe, expect, it, spyOn } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
   ApiResearchCandidate,
@@ -66,6 +67,7 @@ import {
   ToolVerificationPayloadSchema,
   recordingIndexFromSession,
 } from '../src/imprint/master-teach-prompt-projections.ts';
+import { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
 import { ProviderDeadlineError, RunDeadline } from '../src/imprint/provider-retry.ts';
 import { SessionSchema } from '../src/imprint/types.ts';
 
@@ -1004,7 +1006,7 @@ describe('prompts and pre-plan discovery', () => {
       expect(rolePrompt).toContain('contract');
       expect(rolePrompt).toContain('representative');
       expect(rolePrompt).toContain('incoming');
-      expect(rolePrompt).toContain('optional filters');
+      expect(rolePrompt).toContain('optional input breadth');
       expect(rolePrompt).toContain('parameter-finesse');
     }
     expect(masterPrompt).toContain(
@@ -1552,6 +1554,161 @@ describe('prompts and pre-plan discovery', () => {
     );
   });
 
+  for (const granted of [true, false]) {
+    it(`holds native acknowledgement until the pending extension decision: granted=${granted}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'imprint-native-extension-'));
+      const extensionStarted = deferred<void>();
+      const extensionDecision = deferred<number | null>();
+      const acknowledged = deferred<void>();
+      const family = new NativeTeachAgents(
+        { root, model: 'fixture', deadline: new RunDeadline(Date.now() + 5_000) },
+        async (native) => {
+          const tasks = (await native.handle('assignments', {})) as {
+            tasks: Array<{ id: string }>;
+          };
+          const id = tasks.tasks[0]?.id;
+          await native.handle('read_assignment', { id, agentId: '/root/advisor' });
+          await native.handle('call_assignment_tool', {
+            id,
+            name: 'respond',
+            args: { step: 1, text: JSON.stringify(toolOutput()) },
+          });
+          await extensionStarted.promise;
+          await native.handle('submit', { id, text: 'acknowledged' });
+          acknowledged.resolve();
+        },
+      );
+      try {
+        await family.run(async () => {
+          const pending = requestToolSelectionAdvice(toolInput(), {
+            provider: 'codex-cli',
+            runDeadline: new RunDeadline(Date.now() + 50),
+            onDeadlineReached() {
+              extensionStarted.resolve();
+              return extensionDecision.promise;
+            },
+          });
+          let settled = false;
+          void pending.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          await acknowledged.promise;
+          await Bun.sleep(0);
+          expect(settled).toBe(false);
+          extensionDecision.resolve(granted ? 1_000 : null);
+          if (granted) expect(await pending).toEqual(toolOutput());
+          else await expect(pending).rejects.toMatchObject({ scope: 'run' });
+        });
+      } finally {
+        await family.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  for (const valid of [true, false]) {
+    it(`keeps the original role deadline through missing native acknowledgement: valid=${valid}`, async () => {
+      const root = mkdtempSync(join(tmpdir(), 'imprint-native-role-deadline-'));
+      let semanticComplete = false;
+      const family = new NativeTeachAgents(
+        { root, model: 'fixture', deadline: new RunDeadline(Date.now() + 5_000) },
+        async (native, signal) => {
+          const tasks = (await native.handle('assignments', {})) as {
+            tasks: Array<{ id: string }>;
+          };
+          const id = tasks.tasks[0]?.id;
+          await native.handle('read_assignment', { id, agentId: '/root/advisor' });
+          const respond = (step: number, text: string) =>
+            native.handle('call_assignment_tool', {
+              id,
+              name: 'respond',
+              args: { step, text },
+            });
+          if (!valid) await respond(1, '{}');
+          expect(await respond(valid ? 1 : 2, valid ? JSON.stringify(toolOutput()) : '{}')).toEqual(
+            { complete: true },
+          );
+          semanticComplete = true;
+          // The child never acknowledges. Its phase signal, not this family
+          // lifetime, must settle the waiting semantic call.
+          await new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          );
+        },
+      );
+      const started = Date.now();
+      try {
+        await expect(
+          family.run(() =>
+            requestToolSelectionAdvice(toolInput(), {
+              provider: 'codex-cli',
+              timeoutMs: 100,
+            }),
+          ),
+        ).rejects.toBeInstanceOf(valid ? ProviderDeadlineError : SemanticAgentOutputError);
+        expect(semanticComplete).toBe(true);
+        expect(Date.now() - started).toBeLessThan(1_000);
+      } finally {
+        await family.close();
+        rmSync(root, { recursive: true, force: true });
+      }
+    });
+  }
+
+  it('keeps semantic repairs and shared-memory queries in one native assignment', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-native-role-'));
+    const memory = memoryFixture(discoveryRun.runId);
+    let assignmentCount = 0;
+    const family = new NativeTeachAgents(
+      { root, model: 'fixture', deadline: new RunDeadline(Date.now() + 5_000) },
+      async (native) => {
+        const tasks = (await native.handle('assignments', {})) as { tasks: Array<{ id: string }> };
+        assignmentCount += tasks.tasks.length;
+        const id = tasks.tasks[0]?.id;
+        await native.handle('read_assignment', { id, agentId: '/root/advisor' });
+        const call = (name: string, args: Record<string, unknown>) =>
+          native.handle('call_assignment_tool', { id, name, args });
+        const first = (await call('read_context', { step: 1, offset: 0 })) as { prompt: string };
+        expect(first.prompt).toContain('userGuidance');
+        const repair = (await call('respond', { step: 1, text: '{}' })) as { prompt: string };
+        expect(repair.prompt).toContain('parseErrors');
+        const query = (await call('respond', {
+          step: 2,
+          text: JSON.stringify({
+            sharedResearch: { runId: discoveryRun.runId, query: { action: 'list' } },
+          }),
+        })) as { prompt: string };
+        expect(query.prompt).toContain('sharedResearchResult');
+        const done = await call('respond', { step: 3, text: JSON.stringify(toolOutput()) });
+        expect(done).toEqual({ complete: true });
+        await native.handle('submit', { id, text: 'host validated the boundary advice' });
+      },
+    );
+    try {
+      const result = await family.run(() =>
+        requestToolSelectionAdvice(
+          {
+            ...toolInput(),
+            userGuidance: 'Keep distinct catalog purposes separate.',
+          },
+          { provider: 'codex-cli', sharedResearch: memory },
+        ),
+      );
+      expect(result).toEqual(toolOutput());
+      expect(assignmentCount).toBe(1);
+      const events = readFileSync(join(root, 'events.jsonl'), 'utf8');
+      expect(events.match(/"assignment.created"/g)).toHaveLength(1);
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('makes the first advisor and master calls honestly pre-plan', async () => {
     const seen: unknown[] = [];
     const conversationKeys: Array<string | undefined> = [];
@@ -1562,7 +1719,11 @@ describe('prompts and pre-plan discovery', () => {
         return { text: JSON.stringify(toolOutput()) };
       },
     };
-    const discovery = { ...toolInput(), recordingResponseBodySeqs: [1] };
+    const discovery = {
+      ...toolInput(),
+      recordingResponseBodySeqs: [1],
+      userGuidance: 'Separate availability search and price comparison even with equal inputs.',
+    };
     expect(await requestToolSelectionAdvice(discovery, { analyzer: advisor })).toEqual(
       toolOutput(),
     );
@@ -1577,9 +1738,11 @@ describe('prompts and pre-plan discovery', () => {
       'recordingIndex',
       'recordingResponseBodySeqs',
       'run',
+      'userGuidance',
     ]);
     expect(sentInput.discoveryCandidates).toEqual(toolInput().discoveryCandidates.map(boundary));
     expect(sentInput.recordingResponseBodySeqs).toEqual([1]);
+    expect(sentInput.userGuidance).toBe(discovery.userGuidance);
     expect(JSON.stringify(sentInput)).not.toContain('likelyParams');
     expect(JSON.stringify(sentInput)).not.toContain('credentialNames');
 

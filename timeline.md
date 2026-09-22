@@ -15201,3 +15201,59 @@ Fresh Flights 19 started 16:24:43 UTC, PID/PGID 21080, original recording and em
 flights-19/home. Target 16:54:43, assess 17:24:43, hard stop 17:54:43 UTC. Eleven
 GiB free, both recordings and collector6443 verified. No old generated tools or
 memory supplied. Code/prompts stay unchanged throughout this run. No cron or MR.
+
+
+## September 22 — finish requested native and purpose changes before another teach
+
+The user explicitly superseded the five-round cap and static-worker fallback.
+Codex native children continue to own concurrency; no adaptive host worker manager
+was reintroduced. Flights 19 had already stopped after 90.024 minutes on fd153b8,
+zero published/four not ready/no audit, with an empty owned process group. Its
+retrospective records 20.80% initial work, 34.30% first research/drafts, and 44.90%
+revisions/follow-ups. Reported usage: 25,596,736 input (23,403,136 cache reads),
+179,397 output, zero reported writes, $21.7235944 base equivalent; zero missing
+analysis usage spans. No provider capacity error was recorded. All evidence retained.
+
+Human guidance now reaches the boundary advisor and master. Removed conflicting
+master/planner guidance that let distinct purposes be deferred as secondary modes.
+Boundary rationales explain recorded purpose associations, and completion review
+checks purposes inside broad discovery rows. The agents retain semantic decisions;
+there is no site-specific split rule or new use-case schema.
+
+Generalized the existing persistent research channel for semantic role validation,
+repair and shared-memory queries. One assignment now contains intermediate replies;
+all inputs remain privately logged and paged. Native dependency waves submit
+directly; non-native providers retain their existing bounded path. Reusable drafts,
+proof checks and owned cleanup remain. Overall runtime source is not smaller: the
+change consolidates coordination while retaining the requested evidence features.
+
+Independent review reproduced completion-journal failure leaving an unresolved
+assignment; creation/completion now settle safely and cancellation composes caller
+and family signals. Removed the text-only premature-root-finish guard, retaining
+the existing deadline. Review also caught phase-deadline disposal before child
+acknowledgement in the first generalization. One deadline now covers the complete
+role pass, including pending extension decisions. Tests cover valid/rejected
+responses without acknowledgement, and granted/denied pending extensions.
+
+Flights 19's producer loss was reproduced separately: planning accepted compatible
+research after recording metadata changed, while producer lookup required an exact
+old input hash. Reuse the same existing boundary check and require exact retained
+candidate/observation identity. The synthetic regression fails before and passes
+after; consumer calls still obtain fresh producer results. No proof is rebound.
+
+Validation: full suite before final deadline/producer corrections 2046 pass; final
+affected suite 395 pass, 2212 assertions across10files. Lint/typecheck and web build
+pass; desktop/mobile screenshots show no runtime errors or horizontal overflow.
+Two fresh synthetic real-provider purpose smokes passed in71.097s and70.859s, each
+using one native assignment to split a shared endpoint into two distinct purposes.
+They are not website acceptance. Private smoke usage/accounting is retained next to
+each result. An earlier test run exposed accidental interception of injected
+analyzers; it was stopped and corrected. That failed test log and provider rollouts
+remain; any unreported provider startup usage is unknown, not zero.
+
+Independent final review found no remaining blocker; its last targeted check
+passed15tests/99assertions. The two synthetic purpose smokes report$0.203512 and
+$0.2479872 respectively, separate from teach accounting. Checkpoint commit precedes
+the next fresh teach.
+The repeated Flights/Hotels audit acceptance remains outstanding. No deletion,
+cron, dashboard change, push or MR. Latest disk preflight5.5GiB; power is no gate.

@@ -1641,7 +1641,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('returns a partial MVP to the same researcher with master-selected sibling evidence', async () => {
+  it('keeps compatible producer research callable after recording metadata changes', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const recording = SessionSchema.parse(readJson(recordingPath));
@@ -1669,7 +1669,9 @@ describe('fresh foreground master controller end to end', () => {
       let requestedNeighborInspection = false;
       let sawNeighborInspection = false;
       let expectedProducerHashAfterProseEdit: string | undefined;
+      let originalProducerHash: string | undefined;
       let sawRedundantProducerRefresh = false;
+      let compatibleProducerWasCallable = false;
       let plannerCalls = 0;
       const terminal = await runFreshMasterTeach(
         {
@@ -1683,6 +1685,9 @@ describe('fresh foreground master controller end to end', () => {
           ...base,
           requestApiResearchStep: async (input) => {
             const decision = await baseResearch(input);
+            if (input.tool.candidate.toolName === PRODUCER_NAME && !originalProducerHash) {
+              originalProducerHash = apiResearchInputsSha256(input.tool);
+            }
             if (
               input.tool.candidate.toolName === PRODUCER_NAME &&
               expectedProducerHashAfterProseEdit &&
@@ -1736,7 +1741,10 @@ describe('fresh foreground master controller end to end', () => {
                 PRODUCER_NAME,
               ]);
               expect(input.followUp.siblingResearch[0]?.researchInputsSha256).toBe(
-                expectedProducerHashAfterProseEdit,
+                originalProducerHash,
+              );
+              compatibleProducerWasCallable = Boolean(
+                input.availableProducers?.some(({ toolName }) => toolName === PRODUCER_NAME),
               );
               expect(input.followUp.relevantRequestSeqs).toEqual([1]);
               expect(input.evidence.payload.entries.length).toBeGreaterThan(1);
@@ -1759,7 +1767,11 @@ describe('fresh foreground master controller end to end', () => {
               if (!producer) throw new Error('fixture plan lost its producer');
               producer.candidate.expectedOutput =
                 'Fixture items with identifiers required by the selected consumer.';
+              // The exact tested request remains selected, but the full input
+              // hash changes. Planning already accepts this compatible boundary.
+              producer.candidate.representativeSeqs = [];
               expectedProducerHashAfterProseEdit = apiResearchInputsSha256(producer);
+              expect(expectedProducerHashAfterProseEdit).not.toBe(originalProducerHash);
               return MasterDecisionOutputSchema.parse({
                 binding: input.current?.run ?? input.discovery.run,
                 outcome: 'accepted',
@@ -1810,6 +1822,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(requestedNeighborInspection).toBeTrue();
       expect(sawNeighborInspection).toBeTrue();
       expect(sawRedundantProducerRefresh).toBeFalse();
+      expect(compatibleProducerWasCallable).toBeTrue();
       expect(plannerCalls).toBe(3);
       expect(terminal.status).toBe('failed');
     });
@@ -2603,7 +2616,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   });
 
-  it('passes explicit human guidance to the master before and after research', async () => {
+  it('passes the same human scope to boundary advice and master decisions before and after research', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recordingPath = syntheticSessionPath(root);
       const base = lifecycleFailureFixture({
@@ -2614,7 +2627,10 @@ describe('fresh foreground master controller end to end', () => {
       });
       const baseMaster = base.requestMasterDecision;
       if (!baseMaster) throw new Error('fixture master is missing');
-      const guidance = 'Keep location lookup, search, calendar grid, and booking only.';
+      const baseAdvisor = base.requestToolSelectionAdvice;
+      if (!baseAdvisor) throw new Error('fixture advisor is missing');
+      const guidance = 'Keep catalog search and detail only; split distinct recorded purposes.';
+      const advisorSeen: Array<string | undefined> = [];
       const seen: Array<string | undefined> = [];
 
       await runFreshMasterTeach(
@@ -2628,6 +2644,10 @@ describe('fresh foreground master controller end to end', () => {
         },
         {
           ...base,
+          requestToolSelectionAdvice: async (input, agent) => {
+            advisorSeen.push(input.userGuidance);
+            return await baseAdvisor(input, agent);
+          },
           requestMasterDecision: async (input, agent, options) => {
             seen.push(input.userGuidance);
             return await baseMaster(input, agent, options);
@@ -2635,6 +2655,7 @@ describe('fresh foreground master controller end to end', () => {
         },
       );
 
+      expect(advisorSeen).toEqual([guidance]);
       expect(seen.length).toBeGreaterThanOrEqual(2);
       expect(new Set(seen)).toEqual(new Set([guidance]));
     });

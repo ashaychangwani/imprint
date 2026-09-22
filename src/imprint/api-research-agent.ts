@@ -47,7 +47,7 @@ import type {
   RecordingIndex,
   RunIdentity,
 } from './master-teach-prompt-projections.ts';
-import { runNativeResearchPass } from './native-research-pass.ts';
+import { runNativeAgentPass } from './native-agent-pass.ts';
 import { currentNativeTeachAgents } from './native-teach-agents.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
 import {
@@ -469,7 +469,7 @@ interface ApiResearchCallInput {
 export async function researchApiMvpCall(input: ApiResearchCallInput): Promise<ApiResearchOutcome> {
   const family = currentNativeTeachAgents();
   if (!family) return researchApiMvpCallImpl(input);
-  return runNativeResearchPass({
+  return runNativeAgentPass({
     family,
     conversation: `${input.agent.conversationPrefix ?? ''}tool:${input.tool.candidate.toolName}:api-researcher`,
     signal: input.signal,

@@ -13,6 +13,14 @@ best-effort basis. Do not silently choose one variant to represent all of them.
 Document evidence and reasons for abandoning a difficult variant. Each published
 tool requires its own successful, comparable live test. Share reusable findings,
 not another tool's proof or old continuation values. No fixed tool count is a goal.
+A mode can represent a distinct user purpose; calling it a variant does not make
+it optional. Explain the purpose and selected recorded requests for each boundary
+in its existing rationale. If merging discovered purposes, explain why they serve
+the same user goal. If evidence is missing, record that limitation explicitly;
+do not replace an in-scope purpose with the first working purpose. Narrow each
+tool's inputs after choosing the purpose list, rather than narrowing that list
+to simplify implementation. Revisit boundaries and request selections when
+research contradicts them, preserving previous evidence and revalidating changes.
 
 Recording and live evidence retain cookies, tokens, and ordinary API data.
 Only known user-supplied login values are substituted. Historical “redacted”
@@ -616,15 +624,18 @@ that you return becomes the blocking MVP contract for the first published
 build, not the eventual breadth inventory. Keep only the inputs required for
 one credible representative core invocation and all declared incoming chain
 bindings. A recorded fixed/default mode does not need a public parameter or a
-browser action merely because discovery guessed one. Defer optional filters,
-secondary modes, and additional variants to the post-publish parameter-finesse
-agent. Do not make optional breadth block a working producer, and do not defer
+browser action merely because discovery guessed one. Defer optional input breadth within an already selected purpose to the
+post-publish parameter-finesse agent. A distinct in-scope purpose belongs in the
+tool-boundary decision, even when discovery grouped it with another operation;
+it is not optional input breadth. Review the advisor's rationale against the
+recorded purposes and human scope before accepting its list. Do not make optional breadth block a working producer, and do not defer
 any input needed for the core operation.
 Account for every credible user-facing operation found in discovery. You may
 merge, split, or rename operations when the evidence supports better public
 tool boundaries, but do not narrow the set of operations to a preferred
 subset. This operation-coverage rule does not require every optional parameter
-or mode in the first MVP. If you omit a discovered operation because it is
+within each purpose in the first MVP. A coverage row mapping a broad detector
+operation to one tool does not by itself account for all its recorded purposes. If you omit a discovered operation because it is
 duplicate or unsupported, explain that decision.
 Persist that accounting in `candidateCoverage`. Include every original
 `discoveryCandidates[].toolName` exactly once, with no maximum count. Map it to

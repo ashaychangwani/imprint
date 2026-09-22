@@ -2,7 +2,7 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { runNativeResearchPass } from '../src/imprint/native-research-pass.ts';
+import { runNativeAgentPass } from '../src/imprint/native-agent-pass.ts';
 import type { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
 
 type SubmitOptions = NonNullable<Parameters<NativeTeachAgents['submit']>[1]>;
@@ -47,7 +47,7 @@ describe('persistent native research pass', () => {
       let cleaned = false;
       try {
         await expect(
-          runNativeResearchPass({
+          runNativeAgentPass({
             ...f,
             run: async (analyzer) => {
               try {
@@ -76,6 +76,8 @@ describe('persistent native research pass', () => {
   it('delivers immediate continuations and complete paged inputs in one assignment', async () => {
     const f = fixture(async (call, _options, prompt) => {
       expect(prompt).toContain('Current step: 1');
+      expect(prompt).not.toContain('<user_payload_json>');
+      expect(await call('read_context', { step: 1, offset: 0 })).toHaveProperty('prompt');
       expect(await call('__list', {})).toHaveProperty('tools');
       const second = (await call('respond', { step: 1, text: 'first' })) as Page;
       expect(second.step).toBe(2);
@@ -92,7 +94,7 @@ describe('persistent native research pass', () => {
       await expect(call('respond', { step: 2, text: 'duplicate' })).rejects.toThrow('completed');
     });
     try {
-      const result = await runNativeResearchPass({
+      const result = await runNativeAgentPass({
         ...f,
         run: async (analyzer) => {
           expect((await analyzer.analyze('role', { first: true })).text).toBe('first');
@@ -141,7 +143,7 @@ describe('persistent native research pass', () => {
     });
     let executed = 0;
     try {
-      await runNativeResearchPass({
+      await runNativeAgentPass({
         ...f,
         run: async (analyzer) => {
           await analyzer.analyze('role', {});
@@ -164,7 +166,7 @@ describe('persistent native research pass', () => {
     });
     try {
       await expect(
-        runNativeResearchPass({
+        runNativeAgentPass({
           ...f,
           run: async (analyzer) => {
             await analyzer.analyze('role', {});
@@ -182,7 +184,7 @@ describe('persistent native research pass', () => {
     let cleaned = false;
     try {
       await expect(
-        runNativeResearchPass({
+        runNativeAgentPass({
           ...f,
           run: async (analyzer) => {
             try {
@@ -218,7 +220,7 @@ describe('persistent native research pass', () => {
       });
       try {
         await expect(
-          runNativeResearchPass({
+          runNativeAgentPass({
             ...f,
             signal: abort.signal,
             run: async (analyzer, signal) => {
@@ -248,7 +250,7 @@ describe('persistent native research pass', () => {
       expect(await call('respond', { step: 2, text: 'two' })).toEqual({ complete: true });
     });
     try {
-      await runNativeResearchPass({
+      await runNativeAgentPass({
         ...f,
         run: async (analyzer) => {
           await analyzer.analyze('role', {}, { signal: first.signal });

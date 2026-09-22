@@ -337,62 +337,64 @@ async function compileToolWaves<Value>(
   );
 
   for (const [waveIndex, wave] of plan.buildWaves.entries()) {
+    const runTool = async (toolId: string) => {
+      const tool = tools.get(toolId);
+      if (!tool) {
+        failures.push({
+          toolId,
+          toolName: toolId,
+          waveIndex,
+          stage: 'compile',
+          error: new Error(`master build wave references unknown tool "${toolId}"`),
+        });
+        return;
+      }
+      let value: Value;
+      try {
+        value = await dependencies.compileTool(tool, waveIndex);
+      } catch (error) {
+        // A compiler can make a bad artifact, but it cannot repair the host's
+        // disk or permissions. Keep those failures out of master planning.
+        if (isTerminalFilesystemError(error)) throw error;
+        failures.push({
+          toolId: tool.id,
+          toolName: tool.candidate.toolName,
+          waveIndex,
+          stage: 'compile',
+          error,
+        });
+        return;
+      }
+      try {
+        await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
+      } catch (error) {
+        // issueBuild also performs the artifact's schema/provenance contract.
+        // Only that typed, deterministic rejection belongs in master repair;
+        // journal and I/O failures remain terminal host errors.
+        if (!(error instanceof CompiledArtifactContractError)) throw error;
+        failures.push({
+          toolId: tool.id,
+          toolName: tool.candidate.toolName,
+          waveIndex,
+          stage: 'contract',
+          error: error.cause,
+          compilerSummary: error.compilerSummary,
+        });
+        return;
+      }
+      completed.push({ tool, waveIndex, value });
+    };
+    // Native agents own admission. The host only submits the master's wave and
+    // drains it before proceeding to the next dependency wave.
     let cursor = 0;
-    const workers = Array.from(
-      { length: currentNativeTeachAgents() ? wave.length : Math.min(concurrency, wave.length) },
-      async () => {
-        while (true) {
-          const position = cursor++;
-          const toolId = wave[position];
-          if (toolId === undefined) return;
-          const tool = tools.get(toolId);
-          if (!tool) {
-            failures.push({
-              toolId,
-              toolName: toolId,
-              waveIndex,
-              stage: 'compile',
-              error: new Error(`master build wave references unknown tool "${toolId}"`),
-            });
-            continue;
+    const workers = currentNativeTeachAgents()
+      ? wave.map(runTool)
+      : Array.from({ length: Math.min(concurrency, wave.length) }, async () => {
+          while (cursor < wave.length) {
+            const toolId = wave[cursor++];
+            if (toolId !== undefined) await runTool(toolId);
           }
-          let value: Value;
-          try {
-            value = await dependencies.compileTool(tool, waveIndex);
-          } catch (error) {
-            // A compiler can make a bad artifact, but it cannot repair the host's
-            // disk or permissions. Keep those failures out of master planning.
-            if (isTerminalFilesystemError(error)) throw error;
-            failures.push({
-              toolId: tool.id,
-              toolName: tool.candidate.toolName,
-              waveIndex,
-              stage: 'compile',
-              error,
-            });
-            continue;
-          }
-          try {
-            await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
-          } catch (error) {
-            // issueBuild also performs the artifact's schema/provenance contract.
-            // Only that typed, deterministic rejection belongs in master repair;
-            // journal and I/O failures remain terminal host errors.
-            if (!(error instanceof CompiledArtifactContractError)) throw error;
-            failures.push({
-              toolId: tool.id,
-              toolName: tool.candidate.toolName,
-              waveIndex,
-              stage: 'contract',
-              error: error.cause,
-              compilerSummary: error.compilerSummary,
-            });
-            continue;
-          }
-          completed.push({ tool, waveIndex, value });
-        }
-      },
-    );
+        });
     // A terminal host failure must not let sibling workers keep mutating the
     // journal after this function has already rejected.
     const settled = await Promise.allSettled(workers);
@@ -1896,7 +1898,9 @@ function agentOptions(
 ): MasterTeachAgentOptions {
   const analyzer =
     deps?.analyzer ??
-    (providerForFreshTeach(opts) === 'codex-cli' ? resolveProvider(llmOptions(opts)) : undefined);
+    (providerForFreshTeach(opts) === 'codex-cli' && !currentNativeTeachAgents()
+      ? resolveProvider(llmOptions(opts))
+      : undefined);
   return {
     provider: providerForFreshTeach(opts),
     ...(opts.model ? { model: opts.model } : {}),
@@ -2653,6 +2657,7 @@ async function researchSelectedOperations(input: {
   toolIds?: ReadonlySet<string>;
   followUps?: readonly ApiResearchFollowUpDirective[];
   previousHandoffs?: readonly ApiResearchHandoff[];
+  previousResults?: ReadonlyMap<string, ApiResearchResult>;
   verificationEvidenceByToolName?: ReadonlyMap<string, PromptEvidenceEntry[]>;
   onProven?: (
     tool: EditableTeachingTool,
@@ -2759,11 +2764,20 @@ async function researchSelectedOperations(input: {
                 const sibling = input.plan.tools.find(
                   ({ candidate }) => candidate.toolName === handoff.toolName,
                 );
+                if (!sibling || handoff.status !== 'proven' || !handoff.candidate) continue;
+                const retained = input.previousResults?.get(handoff.toolName);
+                const compatible =
+                  retained &&
+                  retained.observation.id === handoff.observation?.id &&
+                  teachingPlanContentSha256(retained.candidate) ===
+                    teachingPlanContentSha256(handoff.candidate) &&
+                  apiResearchCoversToolBoundary(sibling, retained);
+                // Use the same boundary check as planning. A retained, exactly
+                // bound successful candidate can remain callable after metadata
+                // changes; another invocation's proof cannot stand in for it.
                 if (
-                  !sibling ||
-                  handoff.status !== 'proven' ||
-                  !handoff.candidate ||
-                  apiResearchInputsSha256(sibling) !== handoff.researchInputsSha256
+                  apiResearchInputsSha256(sibling) !== handoff.researchInputsSha256 &&
+                  !compatible
                 )
                   continue;
                 available.set(handoff.toolName, {
@@ -3003,6 +3017,8 @@ async function reviewApiResearchBeforePlanning(input: {
         signal: input.signal,
         report: input.report,
         toolIds: new Set(missingTools.map(({ id }) => id)),
+        previousHandoffs: [...handoffs.values()],
+        previousResults: results,
       });
       mergeResearch(plan, fresh);
     }
@@ -3138,6 +3154,8 @@ async function reviewApiResearchBeforePlanning(input: {
         signal: input.signal,
         report: input.report,
         toolIds: staleSiblingIds,
+        previousHandoffs: [...handoffs.values()],
+        previousResults: results,
       });
       mergeResearch(plan, refreshedSiblings);
     }
@@ -3199,6 +3217,7 @@ async function reviewApiResearchBeforePlanning(input: {
         toolIds: new Set(ready.map(({ id }) => id)),
         followUps: ready.map(({ followUp }) => followUp),
         previousHandoffs: latestHandoffs,
+        previousResults: results,
       });
       mergeResearch(plan, continued);
     }
@@ -3285,6 +3304,7 @@ async function discoverAndPlan(input: {
     const rebound = rebindCandidateSelection(input.selected, run);
     discoveryInput = ToolSelectionAdvisorInputSchema.parse({
       ...rebound.discoveryInput,
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
       recordingIndex,
       recordingResponseBodySeqs,
     });
@@ -3324,6 +3344,7 @@ async function discoverAndPlan(input: {
       input.detection.sharedContext,
     );
     discoveryInput = ToolSelectionAdvisorInputSchema.parse({
+      ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
       run,
       recordingIndex,
       detectorSharedContext,
@@ -5308,6 +5329,11 @@ async function ensureCurrentImplementationPlans(
             ...context.apiResearch.filter(({ toolName }) => !updatedNames.has(toolName)),
             ...firstPass.handoffs,
           ],
+          previousResults: new Map(
+            [...context.apiResearchResults.values(), ...firstPass.resultsByToolId.values()].map(
+              (result) => [result.workflow.toolName, result],
+            ),
+          ),
           verificationEvidenceByToolName,
         });
         firstPass.handoffs.push(...update.handoffs);

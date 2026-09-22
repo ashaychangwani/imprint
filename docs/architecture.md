@@ -51,7 +51,12 @@ The bridge exposes each compiler's existing MCP server in that tool's workspace;
 completion still requires its validated sentinel. Shared research exposes immutable
 run-local publish/list/read findings, including corrections and contradictions.
 Agents decide applicability and tool purposes; matching endpoints or parameter
-shapes do not force tool merging. Each tool requires its own successful evidence.
+shapes do not force tool merging. The boundary advisor and master receive the same
+human guidance, kept separate from recording evidence. They account for distinct
+recorded purposes in their boundary rationales before narrowing optional inputs.
+The completion reviewer checks purposes within broad discovery rows as well as
+explicit exclusions; mapping a row alone is not semantic coverage. Each tool
+requires its own successful evidence.
 Role inputs are retained and paged with explicit truncation; selected recording
 request/response examples reach the master before contracts are chosen.
 
@@ -1006,3 +1011,30 @@ Flights 18 confirmed that the old polling lock could starve one researcher for t
 minutes and terminate the whole teach. Synthetic regressions fail before this
 correction and pass afterward for sibling overlap, distinct reservations and prompt
 cancellation. Fresh-teach reliability and resource use still require measurement.
+
+
+### Shared native role channel
+
+`native-agent-pass.ts` provides one request/response channel for researchers and
+semantic roles. Schema repair and shared-memory queries stay within that assignment
+and return directly to its retained child. Research wraps its complete action loop;
+other roles wrap their existing validation loop. An injected analyzer bypasses the
+wrapper, so research does not recursively create assignments and synthetic tests
+retain their injected execution. Initial input and later frames use the same bounded
+`read_context` mechanism. Complete private frames remain in pass JSONL files.
+
+The host submits each accepted native dependency wave directly and drains all
+started work; Codex owns child admission. Non-native providers keep the existing
+bounded executor. The lightweight routing agent remains separate from the semantic
+master so dispatch can continue during master reasoning. Reusable early drafts and
+exact proof bindings remain. Repeated premature root finals resume the same thread
+under the existing deadline; repeated text alone is not a failure when work progresses.
+Assignment creation/completion log failures settle callers, and owned family and
+caller cancellation signals are composed. Cleanup telemetry cannot override the
+primary result. These changes consolidate coordination, not semantic verification.
+
+Callable research producers use the same existing boundary-coverage check as
+planning after compatible recording-scope changes. The retained result must match
+the proven handoff's exact candidate and observation; the original hashes/history
+are preserved. Consumer research executes that producer again for fresh values.
+A sibling summary or compatible endpoint alone never becomes execution proof.

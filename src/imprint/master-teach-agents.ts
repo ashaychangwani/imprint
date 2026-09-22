@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
@@ -59,6 +60,8 @@ import type {
   ReceiptFact,
   RecordingIndex,
 } from './master-teach-prompt-projections.ts';
+import { runNativeAgentPass } from './native-agent-pass.ts';
+import { currentNativeTeachAgents } from './native-teach-agents.ts';
 import {
   ProviderDeadlineError,
   type ProviderRetryEvent,
@@ -1169,6 +1172,7 @@ function parameterOutputSchema(input: ParameterSelectionAdvisorInput) {
 }
 function toolAdvisorPromptInput(input: ToolSelectionAdvisorInput) {
   return ToolSelectionAdvisorPromptInputSchema.parse({
+    ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
     ...(input.recordingResponseBodySeqs
       ? { recordingResponseBodySeqs: input.recordingResponseBodySeqs }
       : {}),
@@ -2288,12 +2292,6 @@ async function request<S extends z.ZodTypeAny>(options: {
   schema: S;
   agent: MasterTeachAgentOptions;
 }): Promise<z.output<S>> {
-  const analyzer =
-    options.agent.analyzer ??
-    resolveProvider({
-      provider: options.agent.provider,
-      model: options.agent.model,
-    } satisfies LLMOptions);
   const memory = options.agent.sharedResearch;
   const author = `${options.agent.conversationPrefix ?? ''}${options.conversationKey}`;
   const sourceRef = memory?.remember({
@@ -2321,52 +2319,51 @@ async function request<S extends z.ZodTypeAny>(options: {
     undefined,
     options.agent.onDeadlineReached,
   );
-  const signal = active.signal ?? new AbortController().signal;
-  const retainedCodexConversation = options.agent.provider === 'codex-cli';
-  const analyze = (payload: Record<string, unknown>, prompt = system) =>
-    invoke(
-      () => {
-        const observedAt = Date.now();
-        const deadlineMs = runDeadline?.deadlineMs;
-        const sharedPayload = memory
-          ? {
-              ...payload,
-              sharedResearch: {
-                runId: memory.runId,
-                sourceRef,
-                findings: memory.delivery(author, retainedCodexConversation),
-              },
-            }
-          : payload;
-        const timedPayload =
-          deadlineMs === undefined
-            ? sharedPayload
-            : {
-                ...sharedPayload,
-                runTiming: {
-                  observedAt: new Date(observedAt).toISOString(),
-                  deadlineAt: new Date(deadlineMs).toISOString(),
-                  remainingMs: Math.max(0, deadlineMs - observedAt),
+  const run = async (analyzer: MasterTeachAnalyzer, signal: AbortSignal): Promise<z.output<S>> => {
+    const retainedCodexConversation = options.agent.provider === 'codex-cli';
+    const analyze = (payload: Record<string, unknown>, prompt = system) =>
+      invoke(
+        () => {
+          const observedAt = Date.now();
+          const deadlineMs = runDeadline?.deadlineMs;
+          const sharedPayload = memory
+            ? {
+                ...payload,
+                sharedResearch: {
+                  runId: memory.runId,
+                  sourceRef,
+                  findings: memory.delivery(author, retainedCodexConversation),
                 },
-              };
-        return analyzer.analyze(prompt, timedPayload, {
-          signal,
-          timeoutMs:
-            roleExpiresAt === undefined ? undefined : Math.max(0, roleExpiresAt - Date.now()),
-          deadlineMs: runDeadline?.deadlineMs,
-          runDeadline,
-          timeoutLabel: `master teach ${options.role}`,
-          onProviderRetry: options.agent.onProviderRetry,
-          onEvent: options.agent.onEvent,
-          onDeadlineReached: options.agent.onDeadlineReached,
-          conversationKey: author,
-        });
-      },
-      signal,
-      active.waitForDeadlineDecision,
-      options.role,
-    );
-  try {
+              }
+            : payload;
+          const timedPayload =
+            deadlineMs === undefined
+              ? sharedPayload
+              : {
+                  ...sharedPayload,
+                  runTiming: {
+                    observedAt: new Date(observedAt).toISOString(),
+                    deadlineAt: new Date(deadlineMs).toISOString(),
+                    remainingMs: Math.max(0, deadlineMs - observedAt),
+                  },
+                };
+          return analyzer.analyze(prompt, timedPayload, {
+            signal,
+            timeoutMs:
+              roleExpiresAt === undefined ? undefined : Math.max(0, roleExpiresAt - Date.now()),
+            deadlineMs: runDeadline?.deadlineMs,
+            runDeadline,
+            timeoutLabel: `master teach ${options.role}`,
+            onProviderRetry: options.agent.onProviderRetry,
+            onEvent: options.agent.onEvent,
+            onDeadlineReached: options.agent.onDeadlineReached,
+            conversationKey: author,
+          });
+        },
+        signal,
+        active.waitForDeadlineDecision,
+        options.role,
+      );
     let response = await analyze(semanticRoleRequestPayload(options.input, options.validation));
     const rejected = new Set<string>();
     let attempt = 1;
@@ -2446,6 +2443,30 @@ async function request<S extends z.ZodTypeAny>(options: {
         );
       }
     }
+  };
+  try {
+    const family = currentNativeTeachAgents();
+    const signal = active.signal ?? new AbortController().signal;
+    if (family && !options.agent.analyzer) {
+      const result = await runNativeAgentPass({
+        family,
+        conversation: author,
+        signal,
+        logPath: join(family.options.root, `role-pass-${randomUUID()}.jsonl`),
+        run,
+      });
+      await active.waitForDeadlineDecision();
+      if (signal.aborted) throw abortSignalError(signal);
+      return result;
+    }
+    return await run(
+      options.agent.analyzer ??
+        resolveProvider({
+          provider: options.agent.provider,
+          model: options.agent.model,
+        } satisfies LLMOptions),
+      signal,
+    );
   } finally {
     active.dispose();
   }
@@ -2541,7 +2562,7 @@ export async function requestApiResearchStep(
 // Only retain delivery fingerprints for an actual shared analyzer conversation.
 // Full research history remains in the host input and the provider conversation.
 const masterResearchDelivery = new WeakMap<
-  MasterTeachAnalyzer,
+  object,
   { runId: string; handoffs: Map<string, string> }
 >();
 
@@ -2551,7 +2572,8 @@ export async function requestMasterDecision(
   options: { selfContained?: boolean } = {},
 ) {
   const checked = MasterInputSchema.parse(input);
-  const retainedAnalyzer = agent.provider === 'codex-cli' ? agent.analyzer : undefined;
+  const retainedAnalyzer =
+    agent.provider === 'codex-cli' ? (agent.analyzer ?? currentNativeTeachAgents()) : undefined;
   const previous = retainedAnalyzer ? masterResearchDelivery.get(retainedAnalyzer) : undefined;
   const previousResearch =
     checked.phase === 'revision' && previous?.runId === checked.discovery.run.runId

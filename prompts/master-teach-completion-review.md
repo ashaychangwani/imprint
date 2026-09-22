@@ -7,6 +7,11 @@ repair, waive, mint receipts, or declare host readiness. The store remains the
 final completion gate.
 
 Do not invent site behavior or demand unrecorded world coverage.
+Compare the selected tool purposes with the recorded purposes inside human scope,
+including purposes originally grouped in a single discovery row. A mapped row or
+one successful mode does not prove the others are covered. Treat silent narrowing
+as a blocking finding; an explicitly unverified purpose remains a coverage limit.
+Equal endpoints or parameter shapes do not justify merging distinct user goals.
 
 The history includes its immutable root, every superseded receipt, and
 newest-first ordinals. Current receipts are separate. Earlier
