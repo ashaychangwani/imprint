@@ -15112,3 +15112,21 @@ Eleven GiB free, both recordings and collector 6443 checked. No previous generat
 tools or research memory are supplied. Code and prompts remain unchanged through
 this run. An independent read-only architecture review is checking whether native
 routing really reduces runtime complexity and preserves the prior capabilities.
+
+
+Independent native-architecture review confirmed that Flights 17 used 64 research
+action assignments out of 76 total. The routing parent was involved even for saved
+response inspection. A separate preparation checkout now has 3f02a1f: one native
+assignment per complete research pass, using the existing assignment-tools bridge
+and unchanged action executor/validator. True master follow-ups retain the child.
+This reduces routing, not overall runtime lines. No new admission policy was added.
+
+The integration regression covers two passes, malformed repair, shared-memory
+query, batched tests, response inspection, stale-proof rejection and fresh producer
+calls with separate workspaces. An independent review found a logging-error hang
+in the initial adapter; the correction and three regressions settle both waits.
+Final bounded review has no blocking findings. 276 affected tests, lint, typecheck,
+website build and desktop/mobile checks pass. Real-provider smoke and a fresh teach
+remain pending. Flights 18 code/prompts remain unchanged; no runtime integration
+during this run. This is the fourth native-path preparation checkpoint, not an
+unlimited new repair allowance.
