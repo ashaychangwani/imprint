@@ -14701,3 +14701,26 @@ then scheduling and inspection optimizations. Existing refine requires installed
 tools and cannot salvage unpublished drafts directly. The detailed report is in
 docs/teach-independent-review-2026-09-22.md and linked from the local dashboard.
 No runtime/prompt changes or new teaches.
+
+
+## 2026-09-22 — Coordinator repair checkpoint
+
+Implemented the first approved reliability checkpoint. Strict semantic roles now
+return newly exposed schema errors to the same conversation under the shared
+deadline. Feedback includes schema-derived required/optional fields. An identical
+rejected response/error pair stops repair, including cycles. No invalid decision
+is applied and no proof gate is relaxed. Actual retry numbers replace the old
+fixed second-attempt type. The accepted controller plan remains authoritative.
+
+199 focused agent/controller/research tests pass, including layered master errors,
+cycle detection, cancellation, stale bindings and proof rejection. Type checking,
+lint, diff checks and website build pass. Desktop/mobile documentation inspected:
+no page errors or horizontal overflow. Existing bundle-size warning remains.
+The first combined check command had a shell PATH error after typecheck passed;
+lint then passed separately. No live provider calls or new usage in this patch.
+
+Fresh validation is pending power: laptop is discharging at 10%, about 41 minutes
+remaining, insufficient for the 90-minute teach. Disk has 13 GiB available. Both
+original recordings exist; prior evidence remains intact. No teach or audit is
+running. Do not advance implementation checkpoints before this fresh validation.
+Continuation details: docs/teach-reliability-checkpoints-2026-09-22.md.

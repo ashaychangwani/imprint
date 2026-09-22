@@ -1,7 +1,7 @@
-/** Five strict one-shot semantic roles. Store/controller state remains authoritative. */
+/** Strict semantic roles with retained repair. Store/controller state remains authoritative. */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { z } from 'zod';
+import { z } from 'zod';
 import { abortSignalError } from './concurrency.ts';
 import { type LLMOptions, type ProviderName, resolveProvider } from './llm.ts';
 import {
@@ -428,7 +428,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       return;
     }
     // Report independent handoff omissions together, before candidate validation
-    // can return early. The agent gets one repair turn, not one per missing field.
+    // can return early, avoiding an extra turn for each independently missing field.
     if (output.action === 'partial' || output.action === 'proven') {
       if (!output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], `${output.action} research must cite its exact test`);
@@ -2004,7 +2004,7 @@ export interface MasterTeachAgentOptions {
   analyzer?: MasterTeachAnalyzer;
   onRetry?: (event: {
     role: Role;
-    attempt: 2;
+    attempt: number;
     parseErrors: readonly string[];
     signal: AbortSignal;
   }) => void | Promise<void>;
@@ -2050,19 +2050,57 @@ export class SemanticAgentOutputError extends Error {
   constructor(
     readonly role: Role,
     readonly parseErrors: readonly string[],
-    readonly attempts: 1 | 2,
+    readonly attempts: number,
+    readonly expectedShapes: readonly string[] = [],
   ) {
     super(
-      `${role} returned invalid output${attempts === 2 ? ' after one repair' : ''}: ${parseErrors.join('; ')}`,
+      `${role} returned invalid output${attempts > 1 ? ` after ${attempts - 1} repair(s)` : ''}: ${parseErrors.join('; ')}`,
     );
     this.name = 'SemanticAgentOutputError';
   }
+}
+/** Describe affected object fields from the validator, without interpreting invalid output. */
+function expectedRepairShapes(schema: z.ZodTypeAny, issues: z.ZodIssue[]): string[] {
+  const shapes = new Set<string>();
+  const unwrap = (node: z.ZodTypeAny): z.ZodTypeAny => {
+    if (node instanceof z.ZodEffects) return unwrap(node.innerType());
+    if (node instanceof z.ZodOptional || node instanceof z.ZodNullable)
+      return unwrap(node.unwrap());
+    if (node instanceof z.ZodDefault) return unwrap(node.removeDefault());
+    return node;
+  };
+  for (const issue of issues.slice(0, 24)) {
+    let node = unwrap(schema);
+    const path: (string | number)[] = [];
+    for (const part of [...issue.path, undefined]) {
+      if (node instanceof z.ZodObject) {
+        const fields = Object.entries(node.shape as Record<string, z.ZodTypeAny>);
+        const describe = (optional: boolean) =>
+          fields
+            .filter(([, field]) => field.isOptional() === optional)
+            .map(([name]) => name)
+            .join(', ');
+        shapes.add(
+          `${path.join('.') || '<root>'}: required fields [${describe(false)}]; optional fields [${describe(true)}]`.slice(
+            0,
+            2000,
+          ),
+        );
+        if (part === undefined || !(part in node.shape)) break;
+        node = unwrap(node.shape[part]);
+      } else if (node instanceof z.ZodArray && typeof part === 'number') {
+        node = unwrap(node.element);
+      } else break;
+      path.push(part);
+    }
+  }
+  return [...shapes].slice(0, 12);
 }
 function parse<S extends z.ZodTypeAny>(
   role: Role,
   text: string,
   schema: S,
-  attempts: 1 | 2 = 1,
+  attempts = 1,
 ): z.output<S> {
   const trimmed = text.trim();
   const fence = /^```(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n```$/.exec(trimmed);
@@ -2090,6 +2128,7 @@ function parse<S extends z.ZodTypeAny>(
       return `${problem.path.join('.') || '<root>'}: ${message}`.slice(0, 500);
     }),
     attempts,
+    expectedRepairShapes(schema, result.error.issues),
   );
 }
 export function parseToolSelectionAdvisorOutput(text: string, input: ToolSelectionAdvisorInput) {
@@ -2128,7 +2167,7 @@ function semanticRepairPrompt(system: string, role: Role): string {
     role === 'master decision'
       ? '\nFor a master decision, use the public candidate.toolName everywhere. Each wire-format tool id must equal that public name, including buildWaves and chainEdges. Propagate every rename through all affected references.'
       : '';
-  return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. The preceding conversation contains the authoritative task. When supplied, originalInput and validationContext restate that task and its exact allowed bindings. priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
+  return `${system}\n\n# Output repair\n\nThis is a repair of your previous output. The preceding conversation contains the authoritative task. When supplied, originalInput and validationContext restate that task and its exact allowed bindings. priorResponse is your complete previous answer, and parseErrors are factual validator diagnostics. expectedShapes lists affected schema fields; it is not permission to execute an invalid object. Fix all affected nested objects as well as the outer shape. Return one complete replacement object in the original schema, not a patch, wrapper, prose, or commentary. Preserve valid decisions and change what is needed to correct every listed issue.${roleRule}`;
 }
 
 function semanticRoleRequestPayload(input: unknown, validation: unknown) {
@@ -2278,50 +2317,47 @@ async function request<S extends z.ZodTypeAny>(options: {
       options.role,
     );
   try {
-    const first = await analyze(semanticRoleRequestPayload(options.input, options.validation));
-    try {
-      return await invoke(
-        () => Promise.resolve(parse(options.role, first.text, options.schema)),
-        signal,
-        active.waitForDeadlineDecision,
-        `${options.role} output validation`,
-      );
-    } catch (error) {
-      if (!(error instanceof SemanticAgentOutputError)) throw error;
-      if (options.agent.onRetry)
-        await invoke(
-          async () =>
-            options.agent.onRetry?.({
-              role: options.role,
-              attempt: 2,
-              parseErrors: error.parseErrors,
-              signal,
-            }),
+    let response = await analyze(semanticRoleRequestPayload(options.input, options.validation));
+    const rejected = new Set<string>();
+    let attempt = 1;
+    while (true) {
+      try {
+        return await invoke(
+          () => Promise.resolve(parse(options.role, response.text, options.schema, attempt)),
           signal,
           active.waitForDeadlineDecision,
-          `${options.role} retry callback`,
+          `${options.role} output validation`,
         );
-      const repaired = await analyze(
-        retainedCodexConversation
-          ? {
-              validationContext: options.validation,
-              priorResponse: first.text,
-              parseErrors: error.parseErrors,
-            }
-          : {
-              originalInput: options.input,
-              validationContext: options.validation,
-              priorResponse: first.text,
-              parseErrors: error.parseErrors,
-            },
-        semanticRepairPrompt(system, options.role),
-      );
-      return await invoke(
-        () => Promise.resolve(parse(options.role, repaired.text, options.schema, 2)),
-        signal,
-        active.waitForDeadlineDecision,
-        `${options.role} repaired output validation`,
-      );
+      } catch (error) {
+        if (!(error instanceof SemanticAgentOutputError)) throw error;
+        const fingerprint = JSON.stringify([response.text.trim(), error.parseErrors]);
+        if (rejected.has(fingerprint)) throw error;
+        rejected.add(fingerprint);
+        attempt += 1;
+        if (options.agent.onRetry)
+          await invoke(
+            async () =>
+              options.agent.onRetry?.({
+                role: options.role,
+                attempt,
+                parseErrors: error.parseErrors,
+                signal,
+              }),
+            signal,
+            active.waitForDeadlineDecision,
+            `${options.role} retry callback`,
+          );
+        response = await analyze(
+          {
+            ...(retainedCodexConversation ? {} : { originalInput: options.input }),
+            validationContext: options.validation,
+            priorResponse: response.text,
+            parseErrors: error.parseErrors,
+            expectedShapes: error.expectedShapes,
+          },
+          semanticRepairPrompt(system, options.role),
+        );
+      }
     }
   } finally {
     active.dispose();

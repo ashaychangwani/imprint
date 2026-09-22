@@ -4206,6 +4206,89 @@ describe('completion history and factual pass gate', () => {
 });
 
 describe('strict repair and one real deadline', () => {
+  it('repairs newly exposed nested master errors in the same retained conversation', async () => {
+    const input = initialMasterInput();
+    const valid = initialMasterOutput(input);
+    const nested = {
+      ...valid,
+      researchFollowUps: [
+        {
+          toolName: 'search_catalog',
+          suggestedExperiments: ['Inspect the recorded request'],
+          missingProof: ['The tested response'],
+          relevantToolNames: [],
+          relevantRequestSeqs: [],
+        },
+      ],
+    };
+    const { outcome, reason, recallToolNames, researchFollowUps, ...rest } = nested;
+    const wrapped = { ...rest, decision: { outcome, reason, recallToolNames, researchFollowUps } };
+    const replies = [wrapped, nested, valid];
+    const calls: Array<{ payload: Record<string, unknown>; key?: string }> = [];
+    const attempts: number[] = [];
+    expect(
+      await requestMasterDecision(input, {
+        provider: 'codex-cli',
+        deadlineMs: Date.now() + 60_000,
+        onRetry: ({ attempt }) => {
+          attempts.push(attempt);
+        },
+        analyzer: {
+          async analyze(_prompt, payload, options) {
+            calls.push({
+              payload: payload as Record<string, unknown>,
+              key: options?.conversationKey,
+            });
+            return { text: JSON.stringify(replies[calls.length - 1]) };
+          },
+        },
+      }),
+    ).toEqual(valid);
+    expect(attempts).toEqual([2, 3]);
+    expect(calls.map(({ key }) => key)).toEqual(['master', 'master', 'master']);
+    expect(calls[2]?.payload.priorResponse).toBe(JSON.stringify(nested));
+    expect(calls[2]?.payload.parseErrors).toContain(
+      'researchFollowUps.0.instruction: Required (expected string, received undefined)',
+    );
+    expect(String(calls[2]?.payload.expectedShapes)).toContain('instruction');
+    expect(calls[2]?.payload).not.toHaveProperty('originalInput');
+  });
+
+  it('stops an identical rejected output and also detects a repair cycle', async () => {
+    for (const replies of [
+      ['invalid', 'invalid'],
+      ['invalid', '[]', 'invalid'],
+    ]) {
+      let calls = 0;
+      await expect(
+        requestMasterDecision(initialMasterInput(), {
+          analyzer: {
+            async analyze() {
+              return { text: replies[calls++] ?? 'invalid' };
+            },
+          },
+        }),
+      ).rejects.toBeInstanceOf(SemanticAgentOutputError);
+      expect(calls).toBe(replies.length);
+    }
+  });
+
+  it('cancels changing invalid outputs under the shared deadline', async () => {
+    let calls = 0;
+    await expect(
+      requestMasterDecision(initialMasterInput(), {
+        deadlineMs: Date.now() + 30,
+        analyzer: {
+          async analyze() {
+            await new Promise((resolve) => setTimeout(resolve, 5));
+            return { text: `invalid-${++calls}` };
+          },
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+    expect(calls).toBeGreaterThan(1);
+  });
+
   it('refreshes host time facts on a retained repair after the shared deadline changes', async () => {
     const input = toolInput();
     const invalid = toolOutput();

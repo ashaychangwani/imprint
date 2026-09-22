@@ -226,6 +226,9 @@ The planner chooses that first live case to challenge weak core evidence;
 additional unexecuted cases are not claimed as coverage.
 Research handoff repair reports independent missing fields together, so one
 repair turn can correct the candidate, test reference, and remaining proof gaps.
+If a repair exposes further schema errors, the same conversation can correct
+them within the shared deadline. Identical rejected outputs stop the repair loop;
+invalid decisions never execute.
 Blocked terminal counts include unresolved discoveries even when no tool was planned.
 Researchers can inspect or search bounded portions of retained live results,
 including HTML attributes and embedded state, without repeating the API call.

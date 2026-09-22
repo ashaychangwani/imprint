@@ -139,7 +139,7 @@ Planner guidance makes this limitation explicit and asks it to select a coherent
 first case that challenges weak core evidence, not simply repeat research inputs.
 Any remaining required gap stays explicit for the master; optional breadth waits.
 Research handoff validation reports independent missing fields before returning
-on an absent candidate. Its single repair turn therefore sees missing candidate,
+on an absent candidate. Its repair turn therefore sees missing candidate,
 observation reference and proof gaps together, not one newly revealed error per
 attempt. Exact tested-candidate matching remains unchanged.
 When the reviewed plan has no tools, the blocked terminal still counts its
@@ -878,8 +878,12 @@ Semantic output repair feedback retains the expected type when schema validation
 finds an omitted required field. The same exact field path and original response
 return to the retained agent, alongside the current validation context. This is
 factual schema information, not coercion: strings do not become proof lists and
-invalid output still fails validation. The existing single repair attempt and
-shared deadline remain unchanged.
+invalid output still fails validation. Compact required/optional field lists come
+from the affected schema objects. Newly exposed errors return to the same role
+under the shared deadline, rather than exhausting a single repair allowance. An
+identical rejected response/error pair (including a cycle back to an earlier pair)
+stops repair. The last accepted plan remains authoritative; invalid replacements
+never execute. Retry events report the actual attempt number.
 
 
 ### Recording-backed verification and refinement
