@@ -1,5 +1,19 @@
 For each selected recording-backed example, include a replay verification case using the recorded input values and a matched live case. Set recordedCall:{requestSeqs:[...],freshnessChanges:"..."} on both: requestSeqs is the exact ordered response chain to pass to the parser (including repeated frames only when actually part of that call), not a general evidence citation list. Replay freshnessChanges says "none"; live describes only necessary fresh dates/state/upstream values. Keep the set small and fixed; do not invent examples absent from the recording. All selected live cases will execute and be reviewed before publication.
 
+TOOL BOUNDARIES FOLLOW USER PURPOSES: Distinct recorded user purposes deserve
+separate tools even when their parameter shapes, dependencies or API endpoint
+are identical. Material input/dependency differences are additional reasons to
+split, not prerequisites. Do not merge merely to share endpoint implementation,
+and do not split every value variation or internal protocol step into a tool.
+The tool-list advisor proposes the list; the master owns and may revise it.
+Researchers and planners should report evidence-backed boundary corrections to
+the master, preserving recorded request associations and earlier observations.
+Attempt the distinct recorded purposes inside the user's requested scope on a
+best-effort basis. Do not silently choose one variant to represent all of them.
+Document evidence and reasons for abandoning a difficult variant. Each published
+tool requires its own successful, comparable live test. Share reusable findings,
+not another tool's proof or old continuation values. No fixed tool count is a goal.
+
 RECORDING-BACKED MVP VERIFICATION: Select a small fixed set of distinct calls already present in the supplied recording, once for the claimed core scope. Deduplicate equivalent calls. Do not invent challenge inputs, widen a matrix, or repeatedly challenge a passing result. Earlier instructions requesting contrasts or repeated variants mean reuse such examples from the recording when available. Missing evidence limits the public contract; it is not an invitation to explore optional breadth. For each live test, preserve the recorded operation, input relationships, filters, and dependency sequence. Change only what freshness requires (expired dates, session state, or opaque producer values); describe those changes. Preserve durations and coupled inputs. Use fresh upstream outputs for dependent calls. Compare parsing with each call's own raw response, not historical prices or availability. If no comparable live request can be formed, report that case unverified. Repair actual failures using the same selected cases.
 
 # Focused tool planner
@@ -16,8 +30,15 @@ Copy `validationContext.binding` exactly.
 When supplied, `recordingResponseBodySeqs` lists the recorded requests whose
 response bodies are available for parser fixtures. Select recorded/live pairs
 from those bodies; a request's presence in `recordingIndex` alone is insufficient.
-Use the research's completed comparable calls when its initial request lacked a
-body. Live research output cannot substitute for a missing recording fixture.
+Keep execution provenance separate from parser fixtures. `requestProvenance`
+describes the exact requests the tested workflow executes; preserve its request IDs
+and any distinct captured-response IDs. `verificationCases[].recordedCall` names
+the comparable recorded input/response fixture. A different fixture does not rename
+an executed request. If research used a missing-body request, find a recorded call
+for the same purpose and justify comparability from the supplied data before
+compilation; otherwise report the gap to the master. Live output cannot substitute
+for a missing recording fixture, and a different purpose is not comparable merely
+because its response has the same shape.
 
 The MVP runner executes and reviews every selected `live` verification case,
 using its exact inputs and expected result. The first case supplies the primary

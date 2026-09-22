@@ -14819,3 +14819,68 @@ The user limited adaptive-scheduler repair to five bug-fix rounds maximum. None
 has been used yet. If it proves too complicated, remove only adaptive scheduling
 and test static 4, then 3 and 2 as needed. Preserve the other approved changes and
 all evidence. Provider-capacity failures and unrelated teach defects stay distinct.
+
+## 2026-09-22 — Finish related checkpoints before further teaches
+
+The user clarified that distinct user purposes define tool boundaries, even with
+identical parameters or dependencies. No endpoint, site or fixed tool-count rule
+should decide the list. The tool advisor and master own it; related agents may
+propose revisions. The user requested all remaining checkpoints before further
+validation, since the scheduler-only run did not exercise the intended workload.
+
+Flights 14 was intentionally stopped at 21.93 minutes, exit 130, with all evidence
+preserved. Its advisor grouped search variants; the master selected four tools and
+narrowed search to one-way. It had request-shape/state failures, not demonstrated
+scheduler failures. No full teach or audit success is claimed. Scheduler repair
+count remains zero of five. Finish response retention, shared research, tool
+boundaries, SDK lifecycle and delegated scheduling, then use a fresh home.
+
+Response retention now emits each request body before downstream failure and
+persists it under observation/attempt/backend/request identities. Bounded reads
+can inspect failed bodies without treating them as successful proof. Completed
+chains remain compatible. Synthetic regression coverage includes downstream HTTP
+and capture failure, cancellation after read, unavailable bodies, parser failure,
+observer exceptions, isolated attempts, scoped inspection and compiler copying.
+
+## 2026-09-22 — Replace custom worker management with native delegation
+
+The user requested major simplification through provider-native subagents. Codex
+now owns spawning, nested delegation, follow-ups and concurrency within one family.
+The custom worker/provider admission scheduler and researcher delegation schema are
+removed. The runtime keeps a task/evidence MCP bridge, accepted dependencies, strict
+proof checks, deadlines and provider retry. Non-Codex paths keep four focused workers.
+This supersedes adaptive limit reduction rather than silently claiming it remains.
+
+Synthetic native testing proved nested delegation and two independent assignments
+with a repair delivered to the same child. One smoke fixture failed before calling
+the provider; the next exposed missing noninteractive MCP approval configuration.
+After matching the existing compiler's approval setting, the bridge smoke passed.
+All evidence stays under the private experiment root. No fresh teach success is
+claimed. Native child usage must be accounted separately from coordinator usage.
+
+Response retention, early evidence, purpose-based tools, immutable shared findings,
+SDK terminal handling and draft prioritization are retained in this checkpoint.
+Current checks include 96 focused tests and 397 broader integration/regression
+tests, all passing. Additional native compiler/concurrency checks are in progress.
+See docs/teach-shared-research-2026-09-22.md for the current direction and remaining
+acceptance work. Disk was checked at 10 GiB free; no power gate or cron was added.
+
+Native validation completed: twelve independent assignments and a retained repair
+passed in 215 seconds under the provider's ten-child setting. The earlier nested
+smoke also exercised a grandchild. This is capacity/plumbing evidence, not website
+coverage. A separate live compiler smoke correctly returned give_up for a synthetic
+empty recording through the existing compile MCP server.
+
+Measured dispatch overhead justified removing the extra registration call: a
+child now registers itself on its first bounded task read. The revised bridge
+passed a fresh native nested/repair smoke. Accounting now handles long provider
+metadata headers, excludes forked ancestor history, and includes per-request usage
+across provider counter resets. Per-role trace estimates are disabled when native
+family usage is recorded, avoiding double counting. Missing cache writes remain
+unknown. Private native-experiment-accounting.json includes failed smoke attempts.
+
+Focused/native accounting checks, type checking, lint and cycle checking pass.
+The website builds and its changed copy was inspected at desktop/mobile widths,
+with no horizontal overflow. The existing bundle-size warning remains. No fresh
+website teach has run on this checkpoint yet. Acceptance still requires repeated,
+independently audited Flights and Hotels teaches on unchanged code.

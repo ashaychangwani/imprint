@@ -67,6 +67,7 @@ describe('emitted workflow execution', () => {
     await withEmittedTool(async (tool) => {
       const requests: PreparedRequestObservation[] = [];
       const responses: ResponseObservation[] = [];
+      const raw: unknown[] = [];
       const result = await tool(
         { q: 'fixture query' },
         {
@@ -74,9 +75,14 @@ describe('emitted workflow execution', () => {
           fetchImpl: async () => Response.json({ items: [{ id: 'fixture-item' }] }),
           onPreparedRequest: (value: PreparedRequestObservation) => requests.push(value),
           onResponse: (value: ResponseObservation) => responses.push(value),
+          onResponseEvidence: (value: unknown) => raw.push(value),
         },
       );
       expect(result.ok).toBe(true);
+      expect(raw[0]).toMatchObject({
+        requestIndex: 0,
+        bodyText: JSON.stringify({ items: [{ id: 'fixture-item' }] }),
+      });
       expect(requests).toHaveLength(1);
       expect(requests[0]).toMatchObject({
         requestIndex: 0,

@@ -50,6 +50,95 @@ function fixture(turns: ThreadEvent[][]) {
 }
 
 describe('Codex SDK terminal evidence', () => {
+  it('finishes at the terminal event without an additional stream read', async () => {
+    let nextCalls = 0;
+    let closed = 0;
+    const thread: Pick<Thread, 'runStreamed'> = {
+      async runStreamed() {
+        return {
+          events: {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            async throw(error: unknown): Promise<never> {
+              throw error;
+            },
+            async next() {
+              const value = completed[nextCalls++];
+              if (!value) return await new Promise<IteratorResult<ThreadEvent>>(() => {});
+              return { done: false as const, value };
+            },
+            async return() {
+              closed++;
+              return { done: true as const, value: undefined };
+            },
+          },
+        };
+      },
+    };
+    const result = await runCodexSdkTurn(thread, 'fixture', {}, { cleanupTimeoutMs: 5 });
+    expect(result.finalResponse).toBe('{"ok":true}');
+    expect(nextCalls).toBe(2);
+    expect(closed).toBe(1);
+    expect(result.usage?.cached_input_tokens).toBe(100);
+  });
+
+  it('preserves semantic completion during hanging cleanup and prevents overlapping turns', async () => {
+    let calls = 0;
+    let finishCleanup: () => void = () => {};
+    const cleanup = new Promise<void>((resolve) => {
+      finishCleanup = resolve;
+    });
+    const events: string[] = [];
+    const signals: AbortSignal[] = [];
+    const thread: Pick<Thread, 'runStreamed'> = {
+      async runStreamed(_input, options) {
+        calls++;
+        if (options?.signal) signals.push(options.signal);
+        let next = 0;
+        return {
+          events: {
+            [Symbol.asyncIterator]() {
+              return this;
+            },
+            async throw(error: unknown): Promise<never> {
+              throw error;
+            },
+            async next() {
+              const value = completed[next++];
+              return value
+                ? { done: false as const, value }
+                : { done: true as const, value: undefined };
+            },
+            async return() {
+              await cleanup;
+              return { done: true as const, value: undefined };
+            },
+          },
+        };
+      },
+    };
+    const result = await runCodexSdkTurn(
+      thread,
+      'first',
+      {},
+      { cleanupTimeoutMs: 5, onEvent: (event) => events.push(event.type) },
+    );
+    expect(result.usage?.output_tokens).toBe(7);
+    expect(signals[0]?.aborted).toBeTrue();
+    expect(events).toContain('sdk.cleanup_pending');
+    await expect(runCodexSdkTurn(thread, 'blocked', {}, { cleanupTimeoutMs: 5 })).rejects.toThrow(
+      'cleanup is unfinished',
+    );
+    expect(calls).toBe(1);
+    finishCleanup();
+    expect(
+      (await runCodexSdkTurn(thread, 'next', {}, { cleanupTimeoutMs: 50 })).finalResponse,
+    ).toBe('{"ok":true}');
+    expect(calls).toBe(2);
+    expect(events).toContain('sdk.cleanup_completed');
+  });
+
   it('retries capacity on the same thread and prompt, retaining completed usage', async () => {
     const f = fixture([[capacity], completed]);
     const retries: string[] = [];

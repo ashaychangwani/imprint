@@ -177,13 +177,36 @@ const PreparedRequestComparisonSchema = strictObject({
   bodyFirstMismatchByte: z.number().int().nonnegative().optional(),
   bodyStructureComparison: z.custom<BodyComparison>().optional(),
 });
+export const RetainedResponseEvidenceSchema = strictObject({
+  evidenceRef: PromptIdSchema,
+  attemptId: PromptIdSchema,
+  backend: z.enum(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']),
+  requestIndex: z.number().int().nonnegative(),
+  recordingRequestSeq: z.number().int().nonnegative().optional(),
+  receivedAt: z.string().datetime(),
+  status: z.number().int(),
+  contentType: utf8Text(0, 200).optional(),
+  textLength: z.number().int().nonnegative().optional(),
+  readError: utf8Text(0, 4_000).optional(),
+});
+export type RetainedResponseEvidence = z.infer<typeof RetainedResponseEvidenceSchema>;
 export const ApiResearchObservationSchema = strictObject({
   id: PromptIdSchema,
   producerToolName: SemanticToolCandidateSchema.shape.toolName.optional(),
   invocationParameters: ScalarParameterValuesSchema.optional(),
   resultTextLength: z.number().int().nonnegative().optional(),
+  responseEvidence: z
+    .array(RetainedResponseEvidenceSchema)
+    .max(RESPONSE_OBSERVATIONS_MAX)
+    .optional(),
   resultInspections: z
-    .array(strictObject({ offset: z.number().int().nonnegative(), text: utf8Text(0, 8_000) }))
+    .array(
+      strictObject({
+        offset: z.number().int().nonnegative(),
+        text: utf8Text(0, 8_000),
+        evidenceRef: PromptIdSchema.optional(),
+      }),
+    )
     .max(8)
     .optional(),
   candidateSha256: PromptShaSchema,
@@ -308,6 +331,7 @@ export const ApiResearchInputSchema = strictObject({
   blockReview: strictObject({ proposedReason: Reason }).optional(),
   resultInspection: strictObject({
     observationId: PromptIdSchema,
+    evidenceRef: PromptIdSchema.optional(),
     offset: z.number().int().nonnegative(),
     totalCharacters: z.number().int().nonnegative(),
     text: utf8Text(0, 8_000),
@@ -340,6 +364,7 @@ export const ApiResearchOutputSchema = strictObject({
   }).optional(),
   resultQuery: strictObject({
     observationId: PromptIdSchema,
+    evidenceRef: PromptIdSchema.optional(),
     offset: z.number().int().nonnegative().default(0),
     length: z.number().int().min(1).max(2_000).default(2_000),
     search: utf8Text(1, 256).optional(),
@@ -505,6 +530,7 @@ const FocusedPlannerProposalPayloadSchema = strictObject({
 });
 export const FocusedPlannerProposalSchema = contentProjection(FocusedPlannerProposalPayloadSchema);
 const DiscoveryInputFields = {
+  selectedRecordingEvidence: PromptEvidenceProjectionSchema.optional(),
   recordingResponseBodySeqs: z.array(z.number().int().nonnegative()).optional(),
   run: RunIdentitySchema,
   recordingIndex: RecordingIndexSchema,

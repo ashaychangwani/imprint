@@ -43,6 +43,7 @@ import {
   type CredentialStore,
   type PreparedRequestObservation,
   RESPONSE_OBSERVATIONS_MAX,
+  type ResponseEvidence,
   type ResponseObservation,
   executeWorkflow,
   loadCredentialStore,
@@ -79,6 +80,7 @@ export interface BackendAttemptFact {
   durationMs: number;
 }
 
+export type BackendResponseEvidence = ResponseEvidence & { backend: ConcreteBackend };
 export type BackendResponseObservation = ResponseObservation & { backend: ConcreteBackend };
 export type BackendPreparedRequestObservation = PreparedRequestObservation & {
   backend: ConcreteBackend;
@@ -359,6 +361,7 @@ export async function runWithLadder(
     onResponse?: (observation: BackendResponseObservation) => void;
     /** Host-internal artifact-prepared requests for advisory comparison. */
     onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+    onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -434,6 +437,17 @@ export async function runWithLadder(
       options?.onResponse?.({ ...observation, backend });
     const onPreparedRequest = (observation: PreparedRequestObservation): void =>
       options?.onPreparedRequest?.({ ...observation, backend });
+    const observedTool: ResolvedTool = options?.onResponseEvidence
+      ? {
+          ...tool,
+          toolFn: (parameters, opts) =>
+            tool.toolFn(parameters, {
+              ...opts,
+              onResponseEvidence: (evidence: ResponseEvidence) =>
+                options.onResponseEvidence?.({ ...evidence, backend }),
+            }),
+        }
+      : tool;
     try {
       switch (backend) {
         case 'fetch': {
@@ -447,12 +461,12 @@ export async function runWithLadder(
           if (options?.signal) fetchOpts.signal = options.signal;
           if (options?.onResponse) fetchOpts.onResponse = onResponse;
           if (options?.onPreparedRequest) fetchOpts.onPreparedRequest = onPreparedRequest;
-          result = await tool.toolFn(params, fetchOpts);
+          result = await observedTool.toolFn(params, fetchOpts);
           break;
         }
         case 'fetch-bootstrap':
           result = await runFetchBootstrap(
-            tool,
+            observedTool,
             params,
             options?.initialState,
             options?.credentials,
@@ -463,7 +477,7 @@ export async function runWithLadder(
           break;
         case 'cdp-replay':
           result = await runCdpReplay(
-            tool,
+            observedTool,
             params,
             options?.cdpPool,
             options?.initialState,
@@ -492,7 +506,7 @@ export async function runWithLadder(
               ? { ...options?.initialState, ...bootstrapState }
               : undefined;
           if (options?.signal?.aborted) throw abortSignalError(options.signal);
-          result = await tool.toolFn(paramsWithDefaults, {
+          result = await observedTool.toolFn(paramsWithDefaults, {
             fetchImpl: sf.fetchImpl,
             initialState,
             credentials: options?.credentials,
@@ -1683,6 +1697,7 @@ export async function runWorkflowWithLadder(opts: {
   /** Ephemeral host-only callback. Raw prepared requests are never retained by
    * the ladder; callers must reduce them to bounded, value-free facts inline. */
   onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+  onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
   /** Host-only complete response chain for offline research fixtures. */
   onRawResponses?: (responses: unknown[]) => void;
 }): Promise<LadderResult> {
@@ -1780,6 +1795,7 @@ export async function runWorkflowWithLadder(opts: {
           signal: opts.signal,
           onResponse: observeResponse,
           onPreparedRequest: opts.onPreparedRequest,
+          onResponseEvidence: opts.onResponseEvidence,
         },
       );
       return { ...result, responseObservations };
@@ -1817,6 +1833,7 @@ export async function runWorkflowWithLadder(opts: {
         signal: opts.signal,
         onResponse: observeResponse,
         onPreparedRequest: opts.onPreparedRequest,
+        onResponseEvidence: opts.onResponseEvidence,
       });
       if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
       return { ...result, responseObservations };
@@ -1841,6 +1858,7 @@ export async function runWorkflowWithLadder(opts: {
       signal: opts.signal,
       onResponse: observeResponse,
       onPreparedRequest: opts.onPreparedRequest,
+      onResponseEvidence: opts.onResponseEvidence,
     });
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
@@ -1890,6 +1908,7 @@ export function resolveWorkflowTool(
             signal?: AbortSignal;
             onResponse?: (observation: ResponseObservation) => void;
             onPreparedRequest?: (observation: PreparedRequestObservation) => void;
+            onResponseEvidence?: (evidence: ResponseEvidence) => void;
           }
         | undefined;
       return executeWorkflow({
@@ -1903,6 +1922,7 @@ export function resolveWorkflowTool(
         signal: o?.signal,
         onResponse: o?.onResponse,
         onPreparedRequest: o?.onPreparedRequest,
+        onResponseEvidence: o?.onResponseEvidence,
         onRawResponses,
       });
     },

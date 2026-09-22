@@ -30,6 +30,7 @@ import {
 import {
   type BackendAttemptFact,
   type BackendPreparedRequestObservation,
+  type BackendResponseEvidence,
   type BackendResponseObservation,
   resolveWorkflowTool,
   runWorkflowWithLadder,
@@ -47,7 +48,13 @@ import {
 import { TimeoutError, abortSignalError } from './concurrency.ts';
 import { type Replacement, extractCredentials } from './credential-extract.ts';
 import { emit } from './emit.ts';
-import { type LLMOptions, type ProviderName, detectTeachProvider, resolveProvider } from './llm.ts';
+import {
+  type LLMOptions,
+  type ProviderName,
+  detectTeachProvider,
+  preferredAgentModel,
+  resolveProvider,
+} from './llm.ts';
 import { loadJsonFile } from './load-json.ts';
 import {
   type ApiResearchFollowUpDirective,
@@ -133,7 +140,6 @@ import { DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS, runPlaybook } from './playbook-run
 import { persistRuntimeBackendsCache } from './probe-backends.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import {
-  ProviderDeadlineError,
   ProviderUnavailableError,
   RunDeadline,
   type RunDeadlineRef,
@@ -153,9 +159,11 @@ import {
   discoveryEvidenceDocuments,
   focusedEvidenceDocuments,
   observeIndependentExecution,
+  selectedRecordingEvidenceDocuments,
 } from './replay-evidence.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { resolveExplicitTeachingRecordings, resolveTeachingRecording } from './session-merge.ts';
+import { TeachResearchMemory } from './teach-research-memory.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -166,9 +174,9 @@ import {
   type Workflow,
 } from './types.ts';
 
-import { MAX_TEACH_WORKERS, TeachScheduler, currentTeachScheduler } from './teach-scheduler.ts';
+import { NativeTeachAgents, currentNativeTeachAgents } from './native-teach-agents.ts';
 
-const FOCUSED_COMPILE_CONCURRENCY = MAX_TEACH_WORKERS;
+const FOCUSED_COMPILE_CONCURRENCY = 4;
 const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
 const TOOL_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
@@ -313,9 +321,7 @@ export async function compileEveryToolInBuildWaves<Value>(
   plan: Pick<DesiredTeachingPlan, 'tools' | 'buildWaves'>,
   dependencies: BuildWaveDependencies<Value>,
 ): Promise<BuildWaveResult<Value>> {
-  const work = () => compileToolWaves(plan, dependencies);
-  const scheduler = currentTeachScheduler();
-  return await (scheduler ? scheduler.yieldWorker(work) : work());
+  return await compileToolWaves(plan, dependencies);
 }
 
 async function compileToolWaves<Value>(
@@ -332,60 +338,61 @@ async function compileToolWaves<Value>(
 
   for (const [waveIndex, wave] of plan.buildWaves.entries()) {
     let cursor = 0;
-    const workers = Array.from({ length: Math.min(concurrency, wave.length) }, async () => {
-      while (true) {
-        const position = cursor++;
-        const toolId = wave[position];
-        if (toolId === undefined) return;
-        const tool = tools.get(toolId);
-        if (!tool) {
-          failures.push({
-            toolId,
-            toolName: toolId,
-            waveIndex,
-            stage: 'compile',
-            error: new Error(`master build wave references unknown tool "${toolId}"`),
-          });
-          continue;
+    const workers = Array.from(
+      { length: currentNativeTeachAgents() ? wave.length : Math.min(concurrency, wave.length) },
+      async () => {
+        while (true) {
+          const position = cursor++;
+          const toolId = wave[position];
+          if (toolId === undefined) return;
+          const tool = tools.get(toolId);
+          if (!tool) {
+            failures.push({
+              toolId,
+              toolName: toolId,
+              waveIndex,
+              stage: 'compile',
+              error: new Error(`master build wave references unknown tool "${toolId}"`),
+            });
+            continue;
+          }
+          let value: Value;
+          try {
+            value = await dependencies.compileTool(tool, waveIndex);
+          } catch (error) {
+            // A compiler can make a bad artifact, but it cannot repair the host's
+            // disk or permissions. Keep those failures out of master planning.
+            if (isTerminalFilesystemError(error)) throw error;
+            failures.push({
+              toolId: tool.id,
+              toolName: tool.candidate.toolName,
+              waveIndex,
+              stage: 'compile',
+              error,
+            });
+            continue;
+          }
+          try {
+            await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
+          } catch (error) {
+            // issueBuild also performs the artifact's schema/provenance contract.
+            // Only that typed, deterministic rejection belongs in master repair;
+            // journal and I/O failures remain terminal host errors.
+            if (!(error instanceof CompiledArtifactContractError)) throw error;
+            failures.push({
+              toolId: tool.id,
+              toolName: tool.candidate.toolName,
+              waveIndex,
+              stage: 'contract',
+              error: error.cause,
+              compilerSummary: error.compilerSummary,
+            });
+            continue;
+          }
+          completed.push({ tool, waveIndex, value });
         }
-        let value: Value;
-        try {
-          const work = () => dependencies.compileTool(tool, waveIndex);
-          const scheduler = currentTeachScheduler();
-          value = await (scheduler ? scheduler.worker(work) : work());
-        } catch (error) {
-          // A compiler can make a bad artifact, but it cannot repair the host's
-          // disk or permissions. Keep those failures out of master planning.
-          if (isTerminalFilesystemError(error)) throw error;
-          failures.push({
-            toolId: tool.id,
-            toolName: tool.candidate.toolName,
-            waveIndex,
-            stage: 'compile',
-            error,
-          });
-          continue;
-        }
-        try {
-          await dependencies.acceptCompiledTool?.(tool, waveIndex, value);
-        } catch (error) {
-          // issueBuild also performs the artifact's schema/provenance contract.
-          // Only that typed, deterministic rejection belongs in master repair;
-          // journal and I/O failures remain terminal host errors.
-          if (!(error instanceof CompiledArtifactContractError)) throw error;
-          failures.push({
-            toolId: tool.id,
-            toolName: tool.candidate.toolName,
-            waveIndex,
-            stage: 'contract',
-            error: error.cause,
-            compilerSummary: error.compilerSummary,
-          });
-          continue;
-        }
-        completed.push({ tool, waveIndex, value });
-      }
-    });
+      },
+    );
     // A terminal host failure must not let sibling workers keep mutating the
     // journal after this function has already rejected.
     const settled = await Promise.allSettled(workers);
@@ -503,6 +510,7 @@ type ApiToolRunner = (input: {
   signal?: AbortSignal;
   onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
   onRawResponses?: (responses: unknown[]) => void;
+  onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
 }) => Promise<{
   result: ToolResult<unknown>;
   executionMechanism: string;
@@ -619,6 +627,7 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   signal,
   onPreparedRequest,
   onRawResponses,
+  onResponseEvidence,
 }) => {
   if (cdpPool) {
     const tool = resolveWorkflowTool(workflowPath);
@@ -647,6 +656,7 @@ const runApiToolWithLadder: ApiToolRunner = async ({
     signal,
     onPreparedRequest,
     onRawResponses,
+    onResponseEvidence,
   });
   return {
     result: run.result,
@@ -2649,6 +2659,7 @@ async function researchSelectedOperations(input: {
     result: ApiResearchResult,
     handoff: ApiResearchHandoff,
     evidence: PromptEvidenceProjection,
+    canDraft: () => boolean,
   ) => Promise<void>;
 }): Promise<PrePlanApiResearch> {
   const evidenceByTool = focusedEvidenceForPlan({
@@ -2667,11 +2678,15 @@ async function researchSelectedOperations(input: {
   const targetTools = input.toolIds
     ? input.plan.tools.filter(({ id }) => input.toolIds?.has(id))
     : input.plan.tools;
+  const queuedResearch = new Set(targetTools.map(({ id }) => id));
+  const unfinishedResearch = new Set(queuedResearch);
+  const canDraft = () => queuedResearch.size === 0 && unfinishedResearch.size > 0;
   const researched = await compileEveryToolInBuildWaves(
     { tools: targetTools, buildWaves: [targetTools.map(({ id }) => id)] },
     {
       concurrency: FOCUSED_COMPILE_CONCURRENCY,
       compileTool: async (sourceTool) => {
+        queuedResearch.delete(sourceTool.id);
         const followUp = followUpByToolName.get(sourceTool.candidate.toolName);
         let evidence = followUp
           ? followUpResearchEvidence({
@@ -2803,6 +2818,7 @@ async function researchSelectedOperations(input: {
               runApiTool: input.deps.runApiResearchTool,
             },
           });
+          unfinishedResearch.delete(sourceTool.id);
           if (isPartialApiResearch(outcome)) {
             input.report?.(`${tool.candidate.toolName}: API research is partial`);
             return ApiResearchHandoffSchema.parse({
@@ -2827,9 +2843,10 @@ async function researchSelectedOperations(input: {
             observation: outcome.observation,
             observations: outcome.observations,
           });
-          await input.onProven?.(sourceTool, outcome, handoff, evidence);
+          if (canDraft()) await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft);
           return handoff;
         } catch (error) {
+          unfinishedResearch.delete(sourceTool.id);
           if (!(error instanceof ApiResearchBlockedError)) throw error;
           input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
           return ApiResearchHandoffSchema.parse({
@@ -3271,7 +3288,17 @@ async function discoverAndPlan(input: {
       groundDetectorCandidateForMaster(candidate, recordingSeqs),
     );
     discoveryEvidence = buildPromptEvidenceProjection(
-      discoveryEvidenceDocuments({ candidatePayload: input.candidatePayload }),
+      [
+        ...discoveryEvidenceDocuments({ candidatePayload: input.candidatePayload }),
+        ...selectedRecordingEvidenceDocuments(
+          input.triage.session,
+          discoveryCandidates.flatMap((candidate) =>
+            candidate.representativeSeqs.length
+              ? candidate.representativeSeqs
+              : candidate.requestSeqs,
+          ),
+        ),
+      ],
       input.seeds,
       DISCOVERY_EVIDENCE_CHARACTER_BUDGET,
       new Set([
@@ -3293,6 +3320,21 @@ async function discoverAndPlan(input: {
       evidence: discoveryEvidence,
     });
     advice = await input.deps.requestToolSelectionAdvice(discoveryInput, input.agent);
+    discoveryInput = {
+      ...discoveryInput,
+      selectedRecordingEvidence: buildPromptEvidenceProjection(
+        selectedRecordingEvidenceDocuments(
+          input.triage.session,
+          advice.boundaries.flatMap((candidate) =>
+            candidate.representativeSeqs.length
+              ? candidate.representativeSeqs
+              : candidate.requestSeqs,
+          ),
+        ),
+        input.seeds,
+        FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+      ),
+    };
     const discoveryDecisionInput: MasterDecisionInput = {
       phase: 'discovery',
       ...(input.userGuidance ? { userGuidance: input.userGuidance } : {}),
@@ -3333,8 +3375,8 @@ async function discoverAndPlan(input: {
   const initialPlanObject = jsonRef(initialPlan);
   addBootstrap(input.seeds, initialPlanObject);
 
-  // A research worker keeps its slot while preparing its own draft. Other
-  // workers can continue research, without creating another concurrency pool.
+  // Draft only when every queued researcher has started and another researcher
+  // still supplies useful overlap. Keep the plan if overlap ends before compile.
   // Drafts are never published until the master's final plan and normal checks.
   const earlyDrafts = new Map<
     string,
@@ -3358,10 +3400,11 @@ async function discoverAndPlan(input: {
     runDeadline: input.runDeadline,
     signal: input.signal,
     report: input.report,
-    onProven: async (tool, result, handoff, evidence) => {
+    onProven: async (tool, result, handoff, evidence, canDraft) => {
       // Consumers still wait for their declared producers and normal build
       // waves. Early work must not bypass the existing producer-first checks.
       if (
+        !canDraft() ||
         tool.candidate.dependsOnTools.length > 0 ||
         initialPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id)
       )
@@ -3392,6 +3435,7 @@ async function discoverAndPlan(input: {
             evidenceRefs: [],
           }),
         });
+        if (!canDraft()) return;
         input.report?.(
           `${tool.candidate.toolName}: compiling a draft while other research continues`,
         );
@@ -5446,8 +5490,7 @@ export class ParameterAdvisorLane {
   }
 
   async run<Value>(signal: AbortSignal, work: () => Promise<Value>): Promise<Value> {
-    const scheduler = currentTeachScheduler();
-    if (scheduler) return await scheduler.worker(work, signal);
+    if (currentNativeTeachAgents()) return await work();
     await this.acquire(signal);
     try {
       if (signal.aborted) throw abortSignalError(signal, 'Optional parameter advice cancelled');
@@ -6029,45 +6072,21 @@ export async function runFreshMasterTeach(
   const stagingRoot = pathJoin(runRoot, 'staging');
   mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
   const deadline = new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
-  let schedulingTelemetryAvailable = true;
-  const scheduler = new TeachScheduler({
+  const work = () =>
+    runScheduledFreshTeach(opts, deps, { site, runId, runRoot, stagingRoot, deadline });
+  if (providerForFreshTeach(opts) !== 'codex-cli') return await work();
+  const family = new NativeTeachAgents({
+    root: pathJoin(runRoot, 'native-agents'),
+    model: opts.model ?? preferredAgentModel('codex-cli'),
     deadline,
-    deadlineError: () => new ProviderDeadlineError(deadline.deadlineMs),
     signal: opts.signal,
-    onEvent: (event) => {
-      if (schedulingTelemetryAvailable) {
-        try {
-          appendFileSync(pathJoin(runRoot, 'scheduling.jsonl'), `${JSON.stringify(event)}\n`, {
-            mode: 0o600,
-          });
-        } catch {
-          schedulingTelemetryAvailable = false;
-          reportProgress(
-            opts,
-            'Scheduler timing could not be saved; subsequent scheduling measurements are unavailable.',
-          );
-        }
-      }
-      if (event.type === 'limit_changed')
-        reportProgress(
-          opts,
-          `provider concurrency ${event.previousLimit} → ${event.limit}: ${event.reason}`,
-        );
-    },
+    onRetry: ({ attempt, delayMs, reason }) =>
+      reportProgress(
+        opts,
+        `Native family ${reason}; retry ${attempt} in ${Math.ceil(delayMs / 1000)}s`,
+      ),
   });
-  try {
-    return await scheduler.run(() =>
-      runScheduledFreshTeach(opts, deps, {
-        site,
-        runId,
-        runRoot,
-        stagingRoot,
-        deadline,
-      }),
-    );
-  } finally {
-    scheduler.dispose();
-  }
+  return await family.run(work);
 }
 
 async function runScheduledFreshTeach(
@@ -6082,7 +6101,17 @@ async function runScheduledFreshTeach(
   },
 ): Promise<FreshTeachTerminalResult> {
   const { site, runId, runRoot, stagingRoot, deadline } = context;
-  const agents = agentOptions(opts, deadline);
+  const agents = agentOptions(opts, deadline, {
+    onEvent: (event) => {
+      try {
+        appendFileSync(pathJoin(runRoot, 'agent-lifecycle.jsonl'), `${JSON.stringify(event)}\n`, {
+          mode: 0o600,
+        });
+      } catch {
+        reportProgress(opts, 'Agent lifecycle timing could not be retained.');
+      }
+    },
+  });
   let journal: FreshTeachJournal | undefined;
   let finesse: ParameterFinesseLane | undefined;
   let plannedTools = 0;
@@ -6116,6 +6145,31 @@ async function runScheduledFreshTeach(
       unmatchedRecordingRequestSeqs: [],
     };
     const seeds = new Map<string, FreshTeachBootstrapObject>();
+    agents.sharedResearch = new TeachResearchMemory(runId, {
+      put: (value) => {
+        if (journal) return journal.storeJson(value);
+        const object = jsonRef(value);
+        addBootstrap(seeds, object);
+        const destination = pathJoin(runRoot, 'research-memory', object.ref.path);
+        mkdirSync(dirname(destination), { recursive: true, mode: 0o700 });
+        if (!existsSync(destination))
+          writeFileSync(destination, canonicalTeachingPlanJson(value), { flag: 'wx', mode: 0o600 });
+        return object.ref;
+      },
+      read: (ref) => {
+        const seed = seeds.get(contentRefKey(ref));
+        if (seed?.kind === 'json' && teachingPlanContentSha256(seed.value) === ref.sha256)
+          return seed.value;
+        if (journal) return journal.readJson(ref);
+        throw new Error('Shared research reference is absent from this run');
+      },
+      onEvent: (event) =>
+        appendFileSync(pathJoin(runRoot, 'research-memory.jsonl'), `${JSON.stringify(event)}\n`, {
+          mode: 0o600,
+        }),
+    });
+    const nativeFamily = currentNativeTeachAgents();
+    if (nativeFamily) nativeFamily.sharedResearch = agents.sharedResearch;
     let detection: Detection | undefined;
     let selected: CandidateSelection | undefined;
     if (opts.fromCandidates) {

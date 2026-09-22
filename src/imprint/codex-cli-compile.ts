@@ -1,3 +1,7 @@
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { currentNativeTeachAgents } from './native-teach-agents.ts';
+import { SHARED_RESEARCH_INSTRUCTIONS } from './teach-research-memory.ts';
 /**
  * compile-agent driver for codex-cli.
  *
@@ -8,7 +12,14 @@
  */
 
 import type { ChildProcess } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  unlinkSync,
+  writeFileSync,
+} from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
 import type { AuthCliCompileMode } from './auth-compile-tools.ts';
@@ -377,6 +388,96 @@ ${formatRevisionMode(opts.revisionMode)}
 ${formatCompileVerificationMode(opts.verificationMode)}
 
 Use the imprint-compile MCP tools to inspect the session, write artifacts, run tests, and call done(). Begin by calling read_session_summary, then proceed per the system instructions.`;
+  }
+
+  const family = currentNativeTeachAgents();
+  if (family) {
+    const client = new Client({ name: 'imprint-native-compiler', version: '1.0.0' });
+    const providerControl = createCompileProviderControl(runDeadline ?? opts.deadlineMs);
+    const env = Object.fromEntries(
+      Object.entries({ ...process.env, ...providerControl.env }).filter(
+        (entry): entry is [string, string] =>
+          entry[0] !== 'IMPRINT_TEACH_CREDENTIALS' && entry[1] !== undefined,
+      ),
+    );
+    const transport = new StdioClientTransport({
+      env,
+      command: bunPath,
+      args: mcpArgs,
+      cwd: opts.absoluteToolDir,
+      stderr: 'pipe',
+    });
+    const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
+    const events: unknown[] = existsSync(conversationLogPath)
+      ? JSON.parse(readFileSync(conversationLogPath, 'utf8'))
+      : [];
+    transport.stderr?.on('data', (chunk) =>
+      appendFileSync(pathJoin(opts.absoluteToolDir, '.native-mcp-stderr.log'), chunk),
+    );
+    const sharedResearch = family.sharedResearch
+      ? {
+          runId: family.sharedResearch.runId,
+          sourceRef: family.sharedResearch.remember({
+            candidate: opts.candidate,
+            toolPlan: opts.toolPlan,
+            sharedContext: opts.sharedContext,
+          }),
+        }
+      : undefined;
+    const sharedPrompt = sharedResearch
+      ? `${SHARED_RESEARCH_INSTRUCTIONS}\n${JSON.stringify({ sharedResearch })}\nUse the native shared_research tool with this exchange schema to publish/query findings; do not embed publications in your final compiler summary.\n`
+      : '';
+    try {
+      await client.connect(transport);
+      const response = await family.submit(
+        `${sharedPrompt}${initialPrompt}\n\nNative compiler: use list_assignment_tools and call_assignment_tool for this assignment in place of direct imprint-compile MCP names. All writes and tests must go through those tools. After done, give_up, or an auth checkpoint returns, submit a short summary to the host and stop this turn. Native subagents can assist with independent implementation questions; retain separate workspaces and do not substitute their prose for test evidence.`,
+        {
+          conversation: `compiler:${opts.absoluteToolDir}`,
+          signal: opts.signal,
+          call: async (name, args) => {
+            const result =
+              name === '__list'
+                ? await client.listTools()
+                : await client.callTool({ name, arguments: args }, undefined, {
+                    signal: opts.signal,
+                    timeout: MAX_MCP_TOOL_TIMEOUT_SEC * 1000,
+                  });
+            events.push({ timestamp: new Date().toISOString(), name, args, result });
+            writeFileSync(conversationLogPath, JSON.stringify(events), { mode: 0o600 });
+            return result;
+          },
+        },
+      );
+      const interruption = providerControl.interruption();
+      if (interruption) throw compileProviderInterruptionError(interruption);
+      events.push({ type: 'native.completed', ...response });
+      writeFileSync(conversationLogPath, JSON.stringify(events), { mode: 0o600 });
+      return completedCompileResult(opts, {
+        conversationLogPath,
+        turns: 1,
+        durationMs: Date.now() - opts.startTime,
+        inputTokens: null,
+        outputTokens: null,
+        cacheReadInputTokens: null,
+        cacheCreationInputTokens: null,
+        sessionId: response.agentId,
+        ...Object.fromEntries(
+          ['workflow.json', 'parser.ts', 'parser.test.ts'].flatMap((name, index) =>
+            existsSync(pathJoin(opts.absoluteToolDir, name))
+              ? [
+                  [
+                    ['workflowPath', 'parserPath', 'parserTestPath'][index],
+                    pathJoin(opts.absoluteToolDir, name),
+                  ],
+                ]
+              : [],
+          ),
+        ),
+      });
+    } finally {
+      providerControl.dispose();
+      await client.close();
+    }
   }
 
   const model = opts.model ?? preferredAgentModel('codex-cli');
@@ -831,6 +932,58 @@ async function driveJsonl(
     };
   }
 
+  const completed = completedCompileResult(opts, baseResult);
+  if (completed.outcome !== 'soft_cap') return completed;
+
+  if (exitCode === 0) {
+    return {
+      success: false,
+      outcome: 'soft_cap',
+      message: 'codex-cli exited without calling done() or give_up(). It may have stopped early.',
+      ...baseResult,
+    };
+  }
+
+  const errorTail = processErrorMessage || stderrBuf.trim().slice(-500);
+  const exitError = cliExitError('codex-cli', exitCode, errorTail);
+  if (exitError instanceof ProviderReportedError) {
+    return {
+      success: false,
+      outcome: 'error',
+      message: exitError.message,
+      providerInterruption: exitError.interruption,
+      providerError: exitError,
+      ...baseResult,
+    };
+  }
+  return {
+    success: false,
+    outcome: 'error',
+    message: `codex-cli exited with code ${exitCode}${errorTail ? `\n${errorTail}` : ''}`,
+    ...baseResult,
+  };
+}
+
+function completedCompileResult(
+  opts: CompileViaCodexCliOptions,
+  baseResult: Pick<
+    CompileAgentResult,
+    | 'conversationLogPath'
+    | 'turns'
+    | 'durationMs'
+    | 'inputTokens'
+    | 'outputTokens'
+    | 'cacheReadInputTokens'
+    | 'cacheCreationInputTokens'
+    | 'sessionId'
+    | 'workflowPath'
+    | 'parserPath'
+    | 'parserTestPath'
+  >,
+): CompileAgentResult {
+  const doneSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.done);
+  const giveUpSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.giveUp);
+  const checkpointSentinel = pathJoin(opts.absoluteToolDir, COMPILE_SENTINELS.checkpoint);
   // Auth segment: the agent paused at a checkpoint for the orchestrator to act.
   // The auth orchestrator resumes the same Codex session with the checkpoint
   // result after running live verification.
@@ -899,31 +1052,10 @@ async function driveJsonl(
     };
   }
 
-  if (exitCode === 0) {
-    return {
-      success: false,
-      outcome: 'soft_cap',
-      message: 'codex-cli exited without calling done() or give_up(). It may have stopped early.',
-      ...baseResult,
-    };
-  }
-
-  const errorTail = processErrorMessage || stderrBuf.trim().slice(-500);
-  const exitError = cliExitError('codex-cli', exitCode, errorTail);
-  if (exitError instanceof ProviderReportedError) {
-    return {
-      success: false,
-      outcome: 'error',
-      message: exitError.message,
-      providerInterruption: exitError.interruption,
-      providerError: exitError,
-      ...baseResult,
-    };
-  }
   return {
     success: false,
-    outcome: 'error',
-    message: `codex-cli exited with code ${exitCode}${errorTail ? `\n${errorTail}` : ''}`,
+    outcome: 'soft_cap',
+    message: 'Compiler ended without a verified completion or give-up receipt.',
     ...baseResult,
   };
 }

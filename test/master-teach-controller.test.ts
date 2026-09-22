@@ -37,7 +37,6 @@ import {
   teachingToolCompileInputsSha256,
 } from '../src/imprint/master-teach-plan.ts';
 import { ProviderUnavailableError, RunDeadline } from '../src/imprint/provider-retry.ts';
-import { TeachScheduler } from '../src/imprint/teach-scheduler.ts';
 import type { Session } from '../src/imprint/types.ts';
 
 const SHA = `sha256:${'a'.repeat(64)}`;
@@ -186,55 +185,15 @@ describe('optional finesse freshness', () => {
         await new Promise<void>((resolve) => releases.push(resolve));
         return id;
       });
-    const ids = Array.from({ length: 11 }, (_, index) => index + 1);
+    const ids = Array.from({ length: 5 }, (_, index) => index + 1);
     const attempts = ids.map(run);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(started).toEqual(ids.slice(0, 10));
+    expect(started).toEqual(ids.slice(0, 4));
     releases.shift()?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(started).toEqual(ids);
     for (const release of releases) release();
     expect(await Promise.all(attempts)).toEqual(ids);
-  });
-
-  it('shares the run budget across focused waves, nested planners and optional advisors', async () => {
-    const scheduler = new TeachScheduler({
-      deadline: { deadlineMs: Date.now() + 5_000 },
-      deadlineError: () => new Error('fixture deadline'),
-    });
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    let active = 0;
-    let maximum = 0;
-    const work = async () => {
-      active++;
-      maximum = Math.max(maximum, active);
-      await gate;
-      active--;
-    };
-    try {
-      await scheduler.run(async () => {
-        const tools = Array.from({ length: 12 }, (_, index) => focusedTool(index));
-        const plan = { tools, buildWaves: [tools.map(({ id }) => id)] };
-        const lane = new ParameterAdvisorLane();
-        const jobs = [
-          scheduler.worker(() => compileEveryToolInBuildWaves(plan, { compileTool: work })),
-          compileEveryToolInBuildWaves(plan, { compileTool: work }),
-          lane.run(new AbortController().signal, work),
-        ];
-        await Bun.sleep(0);
-        expect(active).toBe(10);
-        release();
-        await Promise.all(jobs);
-        expect(maximum).toBe(10);
-        expect(active).toBe(0);
-      });
-    } finally {
-      release();
-      scheduler.dispose();
-    }
   });
 });
 

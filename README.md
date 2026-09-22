@@ -106,9 +106,11 @@ MVP selection. Invalid focused-planner reports return exact diagnostics to the
 master for repair while preserving successful sibling proposals; they never
 become accepted execution plans. The retained master receives changed research
 handoffs without repeatedly resending unchanged history; host validation still
-uses the full evidence. Focused work starts with a shared ten-worker budget;
-repeated provider capacity failures lower admissions, and healthy calls gradually
-raise the limit again. Provider retries release their permits during backoff.
+uses the full evidence. Codex teaches use one native agent family, with up to ten
+concurrent children. Agents can delegate further and continue the same conversations
+through repairs. Codex owns child lifecycle and concurrency; Imprint retains
+provider retries, deadlines, execution tools and strict evidence checks. Other
+providers retain their existing execution paths with four focused workers.
 Compilation and execution still follow the accepted dependencies.
 Capture timeouts group repeated endpoint facts so telemetry does not crowd out
 distinct responses, while keeping matching and readiness rules unchanged.
@@ -124,7 +126,7 @@ waits for the later best-effort pass. Once all first passes finish, the master
 can send the exact missing question back to that same conversation with only
 the relevant sibling results and recorded requests.
 An independent proven tool can prepare its plan and compile a draft while
-other research continues, using the same adaptive worker budget. The master still
+other research continues, when no queued research needs that attention. The master still
 reviews the complete plan before normal verification and publication; only an
 exactly matching draft is reused. Declared consumers retain producer-first ordering.
 Researchers can call proven sibling requests with fresh inputs before testing a
@@ -575,3 +577,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 **[MIT License](LICENSE)**
 
 </div>
+
+Teach research retains each received response before later requests, extraction, or parsing can fail. Agents can inspect bounded excerpts of failed calls without repeating them; those responses remain failed evidence.

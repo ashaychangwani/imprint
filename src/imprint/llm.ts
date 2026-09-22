@@ -1,3 +1,4 @@
+import { currentNativeTeachAgents } from './native-teach-agents.ts';
 /** Multi-provider LLM client — system prompt + JSON-serialized
  *  user payload → raw model text. */
 
@@ -415,6 +416,7 @@ class CodexCliProvider implements LLMProvider {
   readonly name: ProviderName = 'codex-cli';
   private model: string;
   private readonly codex: Codex;
+  private readonly nativePrompts = new WeakMap<object, Map<string, string>>();
   private readonly conversations = new Map<
     string,
     { thread: Thread; systemPrompt: string; initialized: boolean; threadId?: string }
@@ -441,6 +443,50 @@ class CodexCliProvider implements LLMProvider {
     userPayload: unknown,
     opts: AnalyzeInvocationOptions = {},
   ): Promise<AnalyzeResult> {
+    const family = currentNativeTeachAgents();
+    if (family) {
+      const started = Date.now();
+      const prompts = this.nativePrompts.get(family) ?? new Map<string, string>();
+      this.nativePrompts.set(family, prompts);
+      const priorPrompt = opts.conversationKey ? prompts.get(opts.conversationKey) : undefined;
+      const roleInstructions =
+        priorPrompt === systemPrompt
+          ? ''
+          : `<system_instructions>${systemPrompt}</system_instructions>\n`;
+      const prompt = `${roleInstructions}<user_payload_json>${JSON.stringify(userPayload)}</user_payload_json>\n${cliFinalArtifactInstruction()}`;
+      return await traceAnalyze(
+        this.name,
+        this.model,
+        systemPrompt,
+        prompt.length,
+        async () => {
+          const response = await family.submit(prompt, {
+            conversation: opts.conversationKey,
+            signal: opts.signal,
+          });
+          if (opts.conversationKey) prompts.set(opts.conversationKey, systemPrompt);
+          opts.onEvent?.({
+            type: 'native.assignment_completed',
+            timestamp: new Date().toISOString(),
+            conversationKey: opts.conversationKey,
+            agentId: response.agentId,
+          });
+          return {
+            text: normalizeCliAnalyzeOutput(response.text, systemPrompt),
+            inputTokens: null,
+            outputTokens: null,
+            cacheReadInputTokens: null,
+            cacheCreationInputTokens: null,
+            durationMs: Date.now() - started,
+            stopReason: null,
+          };
+        },
+        promptTraceDetails(prompt, {
+          command: 'native-subagent',
+          conversationKey: opts.conversationKey,
+        }),
+      );
+    }
     const existing = opts.conversationKey
       ? this.conversations.get(opts.conversationKey)
       : undefined;
@@ -497,7 +543,8 @@ ${cliFinalArtifactInstruction()}`;
             (signal) =>
               retryMissingCodexStdin(
                 combinedPrompt,
-                () => runCodexSdkTurn(thread, combinedPrompt, { signal }),
+                () =>
+                  runCodexSdkTurn(thread, combinedPrompt, { signal }, { onEvent: opts.onEvent }),
                 {
                   signal,
                   onRetry: () =>
@@ -723,8 +770,13 @@ async function traceAnalyze(
         cacheReadTokens,
         cacheWriteTokens,
       );
-      const inputTokens = resolveTraceTokenCount(totalInputTokens, details?.inputText);
-      const outputTokens = resolveTraceTokenCount(result.outputTokens, result.text);
+      const nativeUsage = details?.invocationParameters?.command === 'native-subagent';
+      const inputTokens = nativeUsage
+        ? { tokens: null, source: 'native_family_rollout' }
+        : resolveTraceTokenCount(totalInputTokens, details?.inputText);
+      const outputTokens = nativeUsage
+        ? { tokens: null, source: 'native_family_rollout' }
+        : resolveTraceTokenCount(result.outputTokens, result.text);
       setSpanAttributes(span, {
         ...llmSpanAttributes({
           provider,
@@ -744,6 +796,7 @@ async function traceAnalyze(
           outputValue: captureIo ? result.text : undefined,
           invocationParameters: details?.invocationParameters,
         }),
+        ...(nativeUsage ? { 'imprint.llm.usage_accounted_by': 'native_family' } : {}),
         'imprint.llm.duration_ms': result.durationMs,
         'imprint.llm.output_chars': result.text.length,
       });

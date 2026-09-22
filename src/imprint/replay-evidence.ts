@@ -694,6 +694,37 @@ function utf8Fragments(value: string, maximumBytes: number): string[] {
  * review without deciding which operations should exist. Every compacted
  * XHR/Fetch stays visible; large wire detail remains available to the later
  * focused planner for whichever boundaries the master chooses. */
+/** Selected wire examples before the master chooses contracts. Selection is
+ * agent-owned; truncation and missing response bodies are explicit facts. */
+export function selectedRecordingEvidenceDocuments(
+  session: Session,
+  seqs: readonly number[],
+): FocusedEvidenceDocument[] {
+  const selected = new Set(seqs);
+  return session.requests
+    .filter(({ seq }) => selected.has(seq))
+    .map((request) => ({
+      provenance: 'recording_request',
+      value: {
+        kind: 'selected_recording_example',
+        recordingRequestSeq: request.seq,
+        method: request.method,
+        url: utf8Prefix(request.url, TEXT_PREVIEW_BYTES),
+        bodyPreview: utf8Prefix(request.body ?? '', TEXT_PREVIEW_BYTES),
+        responsePreview: utf8Prefix(request.response?.body ?? '', TEXT_PREVIEW_BYTES),
+        responseBodyAvailable: request.response?.body !== undefined,
+        responseStatus: request.response?.status ?? null,
+        bodyBytes: Buffer.byteLength(request.body ?? '', 'utf8'),
+        responseBytes: Buffer.byteLength(request.response?.body ?? '', 'utf8'),
+        previewsTruncated: {
+          url: Buffer.byteLength(request.url, 'utf8') > TEXT_PREVIEW_BYTES,
+          body: Buffer.byteLength(request.body ?? '', 'utf8') > TEXT_PREVIEW_BYTES,
+          response: Buffer.byteLength(request.response?.body ?? '', 'utf8') > TEXT_PREVIEW_BYTES,
+        },
+      },
+    }));
+}
+
 export function discoveryEvidenceDocuments(input: {
   candidatePayload: ToolCandidatePayload;
 }): FocusedEvidenceDocument[] {

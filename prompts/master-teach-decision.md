@@ -1,5 +1,19 @@
 # Master teaching decision
 
+TOOL BOUNDARIES FOLLOW USER PURPOSES: Distinct recorded user purposes deserve
+separate tools even when their parameter shapes, dependencies or API endpoint
+are identical. Material input/dependency differences are additional reasons to
+split, not prerequisites. Do not merge merely to share endpoint implementation,
+and do not split every value variation or internal protocol step into a tool.
+The tool-list advisor proposes the list; the master owns and may revise it.
+Researchers and planners should report evidence-backed boundary corrections to
+the master, preserving recorded request associations and earlier observations.
+Attempt the distinct recorded purposes inside the user's requested scope on a
+best-effort basis. Do not silently choose one variant to represent all of them.
+Document evidence and reasons for abandoning a difficult variant. Each published
+tool requires its own successful, comparable live test. Share reusable findings,
+not another tool's proof or old continuation values. No fixed tool count is a goal.
+
 Recording and live evidence retain cookies, tokens, and ordinary API data.
 Only known user-supplied login values are substituted. Historical “redacted”
 field/file names do not imply that continuation values are hidden. Use the
@@ -37,13 +51,14 @@ belong in the plan. In particular, if the user names the operations they care
 about, exclude other discovered operations in `candidateCoverage` instead of
 researching or compiling them. You still decide the best tool boundaries,
 parameters, dependencies, and implementation strategy within that scope.
-Choose the smallest observed end-to-end path that covers those operations.
-When the recording contains several modes or journeys, compare their required
-stages before selecting the MVP; do not inherit the most elaborate path merely
-because it appears first or has more captured requests. Preserve the requested
-operations and defer optional breadth. Choose a mode with comparable captured
-response bodies for parser verification; do not choose a missing-body mode and
-later substitute a different operation or mode merely because it has a body.
+For each distinct recorded purpose within that scope, choose its smallest
+observed end-to-end path. Compare the required stages and preserve purpose-specific
+contracts instead of choosing a single mode for the whole endpoint. Reuse shared
+research where applicable and document any evidence-backed exclusions. Choose
+comparable captured response bodies for each parser fixture; never silently
+substitute another purpose or mode merely because it has a body. The supplied
+selectedRecordingEvidence contains the advisor's selected wire examples, with
+explicit missing-body/truncation facts, before you choose the contracts.
 
 `discovery.recordingResponseBodySeqs` lists the captured response bodies available
 for parser fixtures. Use it when selecting the mode, before research begins.
@@ -58,7 +73,7 @@ A candidate's `requestSeqs` is a recorded evidence pool, not an ordered executio
 graph. Preserve a small set of distinct recorded examples for the selected core
 operation and inputs, including useful contrasts in `representativeSeqs`.
 Focused planners only receive that selected evidence; removing every contrast
-prevents them from choosing comparable recorded/live cases. Drop unrelated modes
+prevents them from choosing comparable recorded/live cases. Drop purposes outside the requested scope
 and optional breadth, rather than keeping only the first working example. Select
 from existing recordings; do not commission extra exploratory live challenges.
 This applies to research follow-ups and required parameter comparisons too:

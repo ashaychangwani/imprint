@@ -112,6 +112,125 @@ const binding = {
 };
 
 describe('focused API research', () => {
+  it('inspects retained failed responses without another call and rejects unrelated references as proof', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-failed-evidence-'));
+    const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-failed-copy-'));
+    const candidate = apiCandidate('failed', 'fetch');
+    let turns = 0;
+    let calls = 0;
+    try {
+      const outcome = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          runApiTool: async ({ onResponseEvidence }) => {
+            calls++;
+            onResponseEvidence?.({
+              attemptId: `attempt-${calls}`,
+              backend: 'fetch',
+              requestIndex: 0,
+              status: calls === 1 ? 400 : 200,
+              receivedAt: new Date().toISOString(),
+              bodyText: `retained-${calls}`,
+            });
+            // Persistence must already be complete before this invocation returns.
+            expect(readFileSync(join(toolDir, 'live-results/responses.jsonl'), 'utf8')).toContain(
+              `attempt-${calls}`,
+            );
+            return {
+              executionMechanism: 'fetch',
+              result:
+                calls === 1
+                  ? { ok: false, error: 'BAD_RESPONSE', message: 'Downstream fixture failure' }
+                  : { ok: true, data: 'success' },
+            };
+          },
+          requestStep: async (input) => {
+            turns++;
+            if (turns === 1 || turns === 4)
+              return { binding, action: 'test', candidate, reason: 'Run fixture.' };
+            const observation = input.observations[0];
+            const evidenceRef = observation?.responseEvidence?.[0]?.evidenceRef;
+            if (!observation || !evidenceRef) throw new Error('Missing retained fixture evidence');
+            const query = {
+              binding,
+              action: 'inspect_result',
+              resultQuery: { observationId: observation.id, evidenceRef },
+              reason: 'Read failure evidence.',
+            };
+            if (turns === 2) {
+              expect(observation.result.ok).toBeFalse();
+              expect(observation.resultTextLength).toBeUndefined();
+              for (const resultQuery of [
+                { observationId: 'another-observation', evidenceRef },
+                { observationId: observation.id, evidenceRef: 'unknown' },
+                { observationId: observation.id, evidenceRef, offset: 100 },
+              ])
+                expect(() =>
+                  parseApiResearchOutput(JSON.stringify({ ...query, resultQuery }), input),
+                ).toThrow();
+              expect(() =>
+                parseApiResearchOutput(
+                  JSON.stringify({
+                    binding,
+                    action: 'proven',
+                    candidate,
+                    basedOnObservationId: observation.id,
+                    reason: 'Invalid success claim.',
+                  }),
+                  input,
+                ),
+              ).toThrow();
+              return parseApiResearchOutput(JSON.stringify(query), input);
+            }
+            if (turns === 3) {
+              expect(input.resultInspection).toMatchObject({ evidenceRef, text: 'retained-1' });
+              expect(calls).toBe(1);
+              return parseApiResearchOutput(JSON.stringify(query), input);
+            }
+            const second = input.observations[1];
+            if (!second) throw new Error('Missing second observation');
+            expect(() =>
+              parseApiResearchOutput(
+                JSON.stringify({
+                  ...query,
+                  resultQuery: { observationId: second.id, evidenceRef },
+                }),
+                input,
+              ),
+            ).toThrow();
+            return {
+              binding,
+              action: 'proven',
+              candidate,
+              basedOnObservationId: second.id,
+              reason: 'Second invocation succeeds.',
+            };
+          },
+        },
+      });
+      expect(calls).toBe(2);
+      expect(outcome.observation.result.ok).toBeTrue();
+      const files = copyApiResearchEvidence(toolDir, compilerDir);
+      if (!files?.historyFile) throw new Error('Missing fixture history');
+      const history = JSON.parse(readFileSync(join(compilerDir, files.historyFile), 'utf8'));
+      expect(history.observations).toHaveLength(2);
+      const failed = history.observations.find(
+        (entry: { observationId: string }) => entry.observationId !== outcome.observation.id,
+      );
+      expect(readFileSync(join(compilerDir, failed.responseEvidence[0].responseFile), 'utf8')).toBe(
+        'retained-1',
+      );
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+      rmSync(compilerDir, { recursive: true, force: true });
+    }
+  });
   it('keeps selected and contrasting chains distinct with protected login values', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-chain-'));
     const compilerDir = mkdtempSync(join(tmpdir(), 'imprint-compiler-chain-'));

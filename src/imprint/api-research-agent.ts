@@ -11,6 +11,7 @@ import { join as pathJoin } from 'node:path';
 import {
   type BackendAttemptFact,
   type BackendPreparedRequestObservation,
+  type BackendResponseEvidence,
   type BackendResponseObservation,
   rememberProvenCompileBackend,
 } from './backend-ladder.ts';
@@ -47,6 +48,10 @@ import type {
   RunIdentity,
 } from './master-teach-prompt-projections.ts';
 import type { RunDeadlineRef } from './provider-retry.ts';
+import {
+  retainResponseEvidence,
+  retainedResponseEvidencePath,
+} from './research-response-evidence.ts';
 import type { Session, ToolResult, Workflow } from './types.ts';
 import type { ConcreteBackend } from './types.ts';
 
@@ -100,6 +105,7 @@ interface ApiResearchDependencies {
     signal?: AbortSignal;
     onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
     onRawResponses?: (responses: unknown[]) => void;
+    onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
   }): Promise<{
     result: ToolResult<unknown>;
     executionMechanism: string;
@@ -217,17 +223,35 @@ export function copyApiResearchEvidence(
       pathJoin(compilerDir, files.responsesFile),
     );
   }
-  const otherIds = [...new Set(observations.map(({ id }) => id))].filter(
-    (id) => id !== observation.id,
+  const allObservations = [observation, ...observations.filter(({ id }) => id !== observation.id)];
+  const otherIds = [...new Set(allObservations.map(({ id }) => id))].filter(
+    (id) => id !== observation.id || observation.responseEvidence?.length,
   );
   if (!otherIds.length) return files;
   const historyDir = 'api-research-history';
   mkdirSync(pathJoin(compilerDir, historyDir), { recursive: true });
   const history = otherIds.map((id) => {
     const stem = createHash('sha256').update(id).digest('hex');
-    const entry: { observationId: string; responseFile?: string; responsesFile?: string } = {
-      observationId: id,
-    };
+    const entry: {
+      observationId: string;
+      responseFile?: string;
+      responsesFile?: string;
+      responseEvidence?: Array<{ evidenceRef: string; responseFile: string }>;
+    } = { observationId: id };
+    for (const ref of allObservations.find((item) => item.id === id)?.responseEvidence ?? []) {
+      if (ref.textLength === undefined) continue;
+      const source = retainedResponseEvidencePath(researchDir, id, ref.evidenceRef);
+      if (!existsSync(source)) continue;
+      const responseFile = pathJoin(
+        historyDir,
+        `${createHash('sha256')
+          .update(JSON.stringify([id, ref.evidenceRef]))
+          .digest('hex')}.response.txt`,
+      );
+      copyFileSync(source, pathJoin(compilerDir, responseFile));
+      entry.responseEvidence ??= [];
+      entry.responseEvidence.push({ evidenceRef: ref.evidenceRef, responseFile });
+    }
     for (const [key, source, name] of [
       ['responseFile', retainedResultPath(researchDir, id), `${stem}.txt`],
       ['responsesFile', retainedResponsesPath(researchDir, id), `${stem}.responses.json`],
@@ -573,15 +597,25 @@ export async function researchApiMvpCall(input: {
         const query = decision.resultQuery;
         if (!query) throw new Error('API researcher returned no result query');
         const observation = observations.find(({ id }) => id === query.observationId);
-        if (observation?.resultTextLength === undefined)
+        const reference = observation?.responseEvidence?.find(
+          ({ evidenceRef }) => evidenceRef === query.evidenceRef,
+        );
+        const textLength =
+          query.evidenceRef === undefined ? observation?.resultTextLength : reference?.textLength;
+        if (!observation || textLength === undefined)
           throw new Error('API researcher requested unavailable result text');
-        const text = readFileSync(retainedResultPath(input.toolDir, observation.id), 'utf8');
+        const source =
+          query.evidenceRef === undefined
+            ? retainedResultPath(input.toolDir, observation.id)
+            : retainedResponseEvidencePath(input.toolDir, observation.id, query.evidenceRef);
+        const text = readFileSync(source, 'utf8');
         const match =
           query.search === undefined ? query.offset : text.indexOf(query.search, query.offset);
         const offset = match < 0 ? query.offset : match;
         const slice = match < 0 ? '' : text.slice(offset, offset + query.length);
         resultInspection = {
           observationId: observation.id,
+          ...(query.evidenceRef === undefined ? {} : { evidenceRef: query.evidenceRef }),
           offset,
           totalCharacters: text.length,
           text: slice,
@@ -592,8 +626,14 @@ export async function researchApiMvpCall(input: {
         retainedTurnDelta = { kind: 'result_inspection', resultInspection };
         if (slice.length)
           observation.resultInspections = [
-            ...(observation.resultInspections ?? []).filter((entry) => entry.offset !== offset),
-            { offset, text: slice },
+            ...(observation.resultInspections ?? []).filter(
+              (entry) => entry.offset !== offset || entry.evidenceRef !== query.evidenceRef,
+            ),
+            {
+              offset,
+              text: slice,
+              ...(query.evidenceRef === undefined ? {} : { evidenceRef: query.evidenceRef }),
+            },
           ].slice(-8);
         continue;
       }
@@ -717,13 +757,18 @@ export async function researchApiMvpCall(input: {
           : `${input.tool.candidate.toolName}: testing API request`,
       );
       const workflowPath = writeCandidate(
-        producer ? pathJoin(producer.toolDir, 'fresh-calls') : input.toolDir,
+        producer
+          ? pathJoin(input.toolDir, 'producer-calls', producer.toolName, randomUUID())
+          : input.toolDir,
         candidate,
       );
       const release = await acquireSiteLiveLock(workflowPath, input.runDeadline.deadlineMs);
       try {
         const requestComparisons: NonNullable<ApiResearchObservation['requestComparisons']> = [];
         let rawResponses: unknown[] | undefined;
+        const observationId = randomUUID();
+        const candidateSha256 = apiResearchCandidateSha256(candidate);
+        const responseEvidence: NonNullable<ApiResearchObservation['responseEvidence']> = [];
         const observed = await input.dependencies.runApiTool({
           cdpPool,
           workflowPath,
@@ -733,6 +778,22 @@ export async function researchApiMvpCall(input: {
           onRawResponses: (responses) => {
             rawResponses = responses;
           },
+          onResponseEvidence: (evidence) => {
+            try {
+              const retained = retainResponseEvidence(
+                input.toolDir,
+                observationId,
+                candidateSha256,
+                evidence,
+              );
+              if (responseEvidence.length >= 256) responseEvidence.shift();
+              responseEvidence.push(retained);
+            } catch (error) {
+              input.report?.(
+                `${input.tool.candidate.toolName}: response evidence could not be retained: ${error instanceof Error ? error.message : String(error)}`,
+              );
+            }
+          },
           onPreparedRequest: (observation) => {
             if (requestComparisons.length >= 32) requestComparisons.shift();
             requestComparisons.push(
@@ -741,10 +802,11 @@ export async function researchApiMvpCall(input: {
           },
         });
         const observation: ApiResearchObservation = {
-          id: randomUUID(),
+          id: observationId,
+          responseEvidence,
           ...(producer ? { producerToolName: producer.toolName } : {}),
           invocationParameters: candidate.parameterValues,
-          candidateSha256: apiResearchCandidateSha256(candidate),
+          candidateSha256,
           requestDefinitionSha256: teachingPlanContentSha256({
             workflow: candidate.workflow,
             requestTransformSource: candidate.requestTransformSource,

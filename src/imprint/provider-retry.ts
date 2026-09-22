@@ -1,5 +1,4 @@
 import { abortSignalError, abortableDelay } from './concurrency.ts';
-import { currentTeachScheduler } from './teach-scheduler.ts';
 
 export interface ProviderRetryEvent {
   attempt: number;
@@ -328,26 +327,7 @@ export async function retryTransientProviderFailure<T>(
       options.onDeadlineReached,
     );
     try {
-      const scheduler = currentTeachScheduler();
-      const invoke = async () => {
-        try {
-          return await operation(active.signal);
-        } catch (error) {
-          const reported = providerReportedError(error);
-          // Process/safety interruptions may be retryable, but are not evidence
-          // of provider capacity. Website errors never enter this typed path.
-          if (
-            reported &&
-            !hasDeterministicProviderFailureFacts(reported.facts()) &&
-            (reported.interruption === 'capacity_or_overload' ||
-              isTransientProviderFailureFacts(reported.facts()))
-          ) {
-            scheduler?.capacityFailure(reported.retryAfterMs);
-          }
-          throw error;
-        }
-      };
-      return await (scheduler ? scheduler.providerAttempt(invoke, active.signal) : invoke());
+      return await operation(active.signal);
     } catch (error) {
       if (options.signal?.aborted) throw abortSignalError(options.signal);
       const reported = providerReportedError(error);
@@ -381,9 +361,7 @@ export async function retryTransientProviderFailure<T>(
         delayMs,
         reason: reported.interruption ?? 'capacity_or_overload',
       });
-      const scheduler = currentTeachScheduler();
-      const wait = () => sleep(delayMs, options.signal);
-      await (scheduler ? scheduler.retryWait(wait) : wait());
+      await sleep(delayMs, options.signal);
     } finally {
       active.dispose();
     }

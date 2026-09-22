@@ -69,6 +69,8 @@ import {
 import { ProviderDeadlineError, RunDeadline } from '../src/imprint/provider-retry.ts';
 import { SessionSchema } from '../src/imprint/types.ts';
 
+import { memoryFixture } from './fixtures/teach-research-memory.ts';
+
 const PROMPTS = join(import.meta.dir, '..', 'prompts');
 const START = '<!-- BEGIN IMPRINT CANONICAL OUTPUT EXAMPLE -->';
 const END = '<!-- END IMPRINT CANONICAL OUTPUT EXAMPLE -->';
@@ -4206,6 +4208,69 @@ describe('completion history and factual pass gate', () => {
 });
 
 describe('strict repair and one real deadline', () => {
+  it('delivers early selected evidence and permits shared reads without bypassing the role schema', async () => {
+    const input: MasterDecisionInput = initialMasterInput();
+    input.discovery.selectedRecordingEvidence = evidence;
+    const valid = initialMasterOutput(input);
+    const memory = memoryFixture(input.discovery.run.runId);
+    const source = memory.remember({ protocol: 'fixture frames' });
+    const published = memory.exchange('sibling', {
+      runId: memory.runId,
+      publish: [
+        {
+          applicability: 'Fixture catalog requests',
+          conclusion: 'Inspect all frames',
+          limitations: 'Other purposes need their own tests',
+          evidenceRefs: [source],
+        },
+      ],
+    }).published[0];
+    if (!published) throw new Error('Missing finding');
+    const calls: unknown[] = [];
+    const result = await requestMasterDecision(input, {
+      provider: 'codex-cli',
+      sharedResearch: memory,
+      analyzer: {
+        async analyze(_prompt, payload, options) {
+          calls.push(payload);
+          expect(options?.conversationKey).toBe('master');
+          if (calls.length === 1) {
+            expect(JSON.stringify(payload)).toContain('selectedRecordingEvidence');
+            expect(JSON.stringify(payload)).toContain('Inspect all frames');
+            return {
+              text: JSON.stringify({
+                sharedResearch: {
+                  runId: memory.runId,
+                  query: { action: 'read', ref: published, offset: 0, length: 2000 },
+                },
+              }),
+            };
+          }
+          expect(JSON.stringify(payload)).toContain('sharedResearchResult');
+          return {
+            text: JSON.stringify({
+              ...valid,
+              sharedResearch: {
+                runId: memory.runId,
+                publish: [
+                  {
+                    applicability: 'Fixture plan',
+                    conclusion: 'Keep both purposes distinct',
+                    limitations: 'Live checks pending',
+                    evidenceRefs: [source],
+                  },
+                ],
+              },
+            }),
+          };
+        },
+      },
+    });
+    expect(result).toEqual(valid);
+    expect(calls).toHaveLength(2);
+    expect(memory.list().entries.map(({ author }) => author)).toEqual(['sibling', 'master']);
+  });
+
   it('repairs newly exposed nested master errors in the same retained conversation', async () => {
     const input = initialMasterInput();
     const valid = initialMasterOutput(input);

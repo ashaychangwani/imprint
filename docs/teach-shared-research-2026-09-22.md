@@ -1,91 +1,81 @@
-# Shared research and adaptive concurrency — implementation checkpoints
+# Native delegation and shared research
 
-The approved September 22 plan replaces a fixed two-worker limit with adaptive
-admission starting at ten. Agents choose separate tools for materially different
-inputs/dependencies; no use-case schema is planned. They will share concise,
-evidence-backed findings within the current run using the existing journal.
-GPT-5.6 Sol screened shared-memory projects above 1,000 GitHub stars; no external
-dependency was selected because the useful small stores duplicate local storage
-without supplying Imprint's immutable evidence bindings.
+**Current direction:** Replace Imprint's custom adaptive worker infrastructure with
+one provider-native Codex family. Preserve evidence, proof validation, retries,
+deadlines, conversations and existing provider paths. Fresh teach reliability is
+not yet demonstrated by this change.
 
-Continue `codex/imprint-master-v066-validation`. No push, MR, merge, cron, dashboard
-changes or deletion. Original recordings and failed evidence remain private.
-Power is not a launch gate. Check disk and evidence paths before each experiment.
+## What changed
 
-## Checkpoint 1 — implemented, fresh validation pending
+The user superseded the adaptive scheduler with native delegation on September 22.
+The former five-round scheduler allowance has not been consumed. Flights 14 was
+intentionally stopped after 21.93 minutes, not a demonstrated capacity failure.
+Its evidence remains in `reteach-systemic-2026-09-21/flights-14`.
 
-`TeachScheduler` owns focused work and provider admissions for a fresh teach.
-Three distinct capacity failures within sixty seconds halve the limit, down to
-one. It waits thirty seconds after reduction, honors longer explicit provider
-Retry-After delays, ignores duplicate/old-generation failure reductions, and
-probes upward by one after sixty healthy seconds and five successes when work
-is queued. Existing calls drain. Parents awaiting focused child waves yield
-their worker slots; provider backoff yields permits without resetting history.
-Master/reviewer calls use provider admission and optional advisors share workers.
-Website failures and deterministic provider errors do not reduce capacity.
+Codex owns spawning, follow-ups, waiting and child lifecycle, with ten concurrent
+children allowed in one run-owned family. Imprint retains a local MCP bridge for
+role inputs/results and existing per-tool compiler servers. Stable conversation
+keys bind repairs to the same native child. The old two-lane scheduler, capacity
+lease generations and researcher-specific delegation protocol are removed.
+Other providers retain their existing adapters with four focused workers. The
+new path does not promise the old automatic 10→5→2→1 policy; transient provider
+retry remains bounded by the run deadline. Native agents may delegate further.
 
-The journal-adjacent `scheduling.jsonl` stores admission/release times, queue waits,
-limit changes and their reasons. A write failure explicitly reports unavailable
-scheduling measurements instead of stranding active calls. No site semantics or
-proof acceptance rule changed. The earlier coordinator-repair fix remains intact.
+The controller still owns accepted plan storage and mechanical dependency/proof
+checks. This change simplifies concurrency ownership; it does not claim the entire
+teach runtime is smaller or eliminate the evidence controller.
 
-Focused regression coverage includes reductions down to one, recovery, cancelled
-queues, deadlines, longer retry delays, nested retry deduplication and shared
-worker/provider admission. The controller integration includes nested planners
-and optional advisors. README, architecture, landing page and reteach skill reflect
-the user-approved change. This is not a claimed live reliability improvement yet.
+Related fixes remain included:
 
-## Next validation
+- Immediate per-response retention, including failed request chains, with isolated
+  attempt/backend/request identity and bounded inspection.
+- Early selected recording examples, and agent-owned tool boundaries based on
+  distinct user purposes even when parameters or endpoints match.
+- Immutable run-local shared findings over the existing journal, with bounded
+  reads, corrections and contradictions. No external memory dependency.
+- Semantic SDK completion separated from bounded cleanup; no overlapping turn
+  while previous cleanup remains unfinished.
+- Fresh producer calls scoped to the consumer workspace, and reusable drafts
+  started only when queued research does not need that attention.
 
-Flights 14 started at 08:42:13 UTC on runtime `a8601a5`, using a new isolated
-home and the original recording/scope. Teach PID 45458; inspected driver PID 45442.
-Target 09:12 UTC, assess 09:42 UTC, hard deadline 10:12 UTC. No runtime or prompt
-edits are permitted during this experiment; documentation may record progress.
+Each tool still requires its own successful test. Sibling or child prose cannot
+replace proof. Recorded requests and parser fixtures remain distinct, with agents
+checking live comparability. No site-specific strategy rule was introduced.
 
-The user added a complexity bound while this run started: permit **at most five
-adaptive-scheduler bug-fix rounds**, each with a fresh teach, then remove adaptive
-scheduling if it remains problematic. Current count: **0 of 5**; Flights 14 is
-the initial validation. Fall back sooner if complexity is not justified. Preserve
-all unrelated fixes and evidence. The fallback is a static four-worker limit,
-then three and two if concurrency/provider-capacity failures persist. Diagnose
-unrelated request/parser/proof failures separately rather than claiming that lower
-concurrency repairs them. Every fallback setting gets fresh validation and its
-own recorded configuration; never reset or resume this failed run to compare it.
+## Evidence and validation
 
 Private evidence root:
 `/Users/ashaychangwani/.imprint/experiments/reteach-systemic-2026-09-21`.
-Original Flights/Hotels recordings were verified; disk has 11 GiB available.
-The existing collector on 6443 was inspected and responds ready.
-Use the inspected `run.py` with a new unused `flights-14` home after committing:
 
-```sh
-python3 /Users/ashaychangwani/.imprint/experiments/reteach-systemic-2026-09-21/run.py flights-14 google-flights
-```
+Native capability smoke proved parent→child→grandchild. The bridge smoke proved
+two independent tasks and a retained-conversation repair. Its first provider run
+exposed a missing noninteractive MCP approval setting; this now matches the existing
+compiler adapter. An earlier smoke fixture supplied an invalid deadline object and
+failed before any provider request. All attempts remain retained.
 
-Keep the original recording and four-operation guidance. Target thirty minutes,
-assess at sixty, enforce ninety; strict audits retain forty-five minutes. Retain
-all failed attempts and accounting, including missing usage. Inspect scheduling
-events along with model spans; a run without capacity failures does not exercise
-live reduction/recovery. Tests cover the controller policy independently.
+Focused checks cover isolated bridge tasks, retained binding, cancellation,
+immutable submitted responses, large-input paging, nested-family accounting,
+existing compiler MCP routing and failure receipts. Broader existing regressions
+cover controller/plan repair, stale proof, response retention and execution.
+Live concurrency and fresh Flights/Hotels results must be recorded separately.
 
-## Remaining checkpoints
+Native `events.jsonl` retains assignments, bindings, tool calls and terminal/cleanup
+timing. `usage.json` reads each root/descendant's reported request usage, excluding
+forked ancestor history and unrelated sessions. Counts not reported stay null.
+Cancelled sessions are labelled snapshots; per-role latency comes from assignments.
+Do not double-count aggregate native usage with its former per-call carriers.
 
-2. Persist each response immediately, with attempt/backend/request identities and
-   bounded failed-response inspection. Preserve completed-chain compatibility.
-3. Agent-selected separate tools, revised recording associations, early advisor
-   evidence, and a run-local publish/list/read findings interface. Share findings
-   and immutable artifact references, never substitute sibling proof or old tokens.
-4. SDK terminal completion and bounded cleanup, plus agent-requested delegation
-   and integration through the shared scheduler. Prioritize queued research over
-   speculative drafts and preserve reusable work.
+## Next experiments
 
-Each checkpoint requires focused regressions, affected integrations, lint/type
-checks, documentation, timeline, commit and a fresh Flights teach. Do not resume a
-failed run under changed code. Reproduce deterministic blockers before the smallest
-general correction. No site-specific execution or prompt fixes.
+Finish integration checks, lint/type checks, documentation and checkpoint commits,
+then integrate the preparation branch into `codex/imprint-master-v066-validation`.
+Use a new unused Flights home with the original recording and four operation
+*groups*: location lookup, search, calendar and booking. Tool count is agent-owned.
+Do not resume an older run after code or prompt changes. No cron, dashboard change,
+MR, push, merge to main, or evidence deletion. Do not block on power.
 
-Acceptance remains two fresh audited Flights teaches covering location/search/
-calendar/booking, then two Hotels destination/date teaches and audits on unchanged
-code. Agents may split tools, so exact tool count is not the scope definition.
-Attempt recorded variants on a best-effort basis, report exclusions, and verify
-every advertised tool independently. Guest count stays excluded until demonstrated.
+Acceptance remains two independently audited fresh Flights teaches followed by
+two Hotels destination/date teaches and audits on unchanged code. Report excluded
+recorded variants and every failed attempt. Guest count remains excluded until
+proven. Target thirty minutes, assess at sixty, hard stop at ninety; audits have
+forty-five minutes. Check disk, recordings and collector before launching.

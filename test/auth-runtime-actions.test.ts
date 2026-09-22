@@ -9,6 +9,7 @@ import {
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  type ResponseEvidence,
   executeWorkflow,
 } from '../src/imprint/runtime.ts';
 import { type Workflow, WorkflowSchema } from '../src/imprint/types.ts';
@@ -93,6 +94,45 @@ afterEach(() => {
 });
 
 describe('auth action runtime', () => {
+  it('retains each auth response before a later request fails', async () => {
+    const evidence: ResponseEvidence[] = [];
+    let calls = 0;
+    const wf = workflow({
+      requests: [
+        { method: 'POST', url: 'https://fixture.test/first', headers: {} },
+        { method: 'POST', url: 'https://fixture.test/second', headers: {} },
+      ],
+      authConfig: {
+        entry: 'login',
+        actions: {
+          login: {
+            steps: [{ request: 0 }, { request: 1 }],
+            outcome: {
+              type: 'pause',
+              next: 'login',
+              evidence: [],
+              carry: [],
+              message: 'Continue.',
+            },
+          },
+        },
+      },
+    });
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        ++calls === 1
+          ? new Response('first retained')
+          : new Response('second failed', { status: 400 })) as unknown as typeof fetch,
+      onResponseEvidence: (item) => evidence.push(item),
+    });
+    expect(result.ok).toBeFalse();
+    expect(evidence.map(({ bodyText }) => bodyText)).toEqual(['first retained', 'second failed']);
+    expect(evidence[0]?.attemptId).toBe(evidence[1]?.attemptId);
+  });
+
   it('does not send an auth request when its declared transform is unavailable', async () => {
     const wf = {
       ...workflow({

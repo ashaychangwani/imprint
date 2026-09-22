@@ -111,6 +111,7 @@ import {
   type CredentialStore,
   type PreparedRequestObservation,
   type ResponseObservation,
+  type ResponseEvidence,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
 
@@ -130,6 +131,7 @@ export async function ${camelCase(workflow.toolName)}(
     signal?: AbortSignal;
     onPreparedRequest?: (observation: PreparedRequestObservation) => void;
     onResponse?: (observation: ResponseObservation) => void;
+    onResponseEvidence?: (evidence: ResponseEvidence) => void;
   } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -147,6 +149,7 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     signal: opts.signal,
     onPreparedRequest: opts.onPreparedRequest,
     onResponse: opts.onResponse,
+    onResponseEvidence: opts.onResponseEvidence,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }

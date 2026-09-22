@@ -5,6 +5,7 @@
  * files are thin wrappers around executeWorkflow().
  */
 
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve as pathResolve } from 'node:path';
 import {
   type CookieLookupConstraints,
@@ -202,6 +203,19 @@ export interface ResponseObservation {
   arrayLength?: number;
 }
 
+/** Host-only per-request evidence, emitted before status, capture or parser failures.
+ * Body text has known login values redacted; it is never ordinary tool output. */
+export interface ResponseEvidence {
+  attemptId: string;
+  requestIndex: number;
+  recordingRequestSeq?: number;
+  receivedAt: string;
+  status: number;
+  contentType?: string;
+  bodyText?: string;
+  readError?: string;
+}
+
 interface ExecuteOptions {
   workflow: Workflow;
   params: Record<string, string | number | boolean>;
@@ -232,6 +246,7 @@ interface ExecuteOptions {
   /** Host-only offline evidence for a completed request chain. Receives a copy
    * before parsing; never included in ordinary tool output or prompt previews. */
   onRawResponses?: (responses: unknown[]) => void;
+  onResponseEvidence?: (evidence: ResponseEvidence) => void;
 }
 
 export interface PreparedRequestObservation {
@@ -257,6 +272,37 @@ function observePreparedRequest(
     });
   } catch {
     // Diagnostics must never change the workflow's execution result.
+  }
+}
+
+function observeResponseEvidence(
+  opts: ExecuteOptions,
+  attemptId: string,
+  requestIndex: number,
+  request: WorkflowRequest,
+  response: Response,
+  text: string,
+  readError: string | undefined,
+  credentials: CredentialStore,
+): void {
+  if (!opts.onResponseEvidence) return;
+  try {
+    const values = new Map(
+      Object.entries(credentials.values).map(([name, value]) => [value, `\${credential.${name}}`]),
+    );
+    opts.onResponseEvidence({
+      attemptId,
+      requestIndex,
+      recordingRequestSeq: request.recordingRequestSeq,
+      receivedAt: new Date().toISOString(),
+      status: response.status,
+      contentType: response.headers.get('content-type')?.slice(0, 200) ?? undefined,
+      ...(readError === undefined
+        ? { bodyText: redactFreeformText(text, values).redacted }
+        : { readError: redactFreeformText(readError, values).redacted.slice(0, 1_000) }),
+    });
+  } catch {
+    /* Diagnostics never change execution or parser input. */
   }
 }
 
@@ -352,6 +398,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     return executeAuthWorkflow(opts) as Promise<ToolResult<T>>;
   }
 
+  const attemptId = randomUUID();
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
 
@@ -646,6 +693,17 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
 
+    observeResponseEvidence(
+      opts,
+      attemptId,
+      i,
+      req,
+      resp,
+      text,
+      responseReadError,
+      liveCredentials,
+    );
+
     if (opts.signal?.aborted) {
       return withRequestStageFacts(
         { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
@@ -809,6 +867,7 @@ function emptyStore(site: string): CredentialStore {
 }
 
 async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
+  const attemptId = randomUUID();
   const authConfig = opts.workflow.authConfig;
   const params = { ...opts.params };
   for (const parameter of opts.workflow.parameters) {
@@ -1058,6 +1117,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     } finally {
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
+    observeResponseEvidence(
+      opts,
+      attemptId,
+      requestIndex,
+      req,
+      response,
+      text,
+      responseReadError,
+      liveCredentials,
+    );
     if (response.status >= 400) {
       const bodyPreview = responseReadError
         ? `[response body unavailable: ${responseReadError}]`

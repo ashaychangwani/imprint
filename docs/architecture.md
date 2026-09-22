@@ -25,23 +25,33 @@ advance after a validated response. Stateless and self-contained calls retain
 the full input, and host validation always checks the complete current evidence.
 Prior research stays in the conversation; this does not reset agent history.
 Focused planners share the accepted plan and research, rather than consuming each
-other's output. Their calls overlap within the run's shared adaptive worker budget;
+other's output. Codex delegates their work within one native agent family;
 compilation and execution retain the master's dependency waves.
 
-Fresh teaches start with ten focused worker slots and ten provider admissions.
-Researchers, planners, compilers and optional advisors share the worker budget;
-master/reviewer calls also pass through provider admission. Three distinct provider
-capacity failures in sixty seconds halve the admission limit, down to one. Existing
-work drains without cancellation; a thirty-second cooldown precedes new admissions.
-Explicit longer provider Retry-After delays are honored. After sixty healthy seconds
-and five successful attempts, queued demand can raise the limit by one, up to ten.
-Failures from an older admission generation cannot cascade another reduction.
-Nested recovery wrappers share an attempt identity; backoff releases provider
-permits, and parents awaiting child waves release worker slots. Website errors,
-schema errors and deterministic provider rejection do not reduce capacity.
-The retained `scheduling.jsonl` records admission/release timestamps, queue time,
-capacity events and limit changes. Concurrency is an observed operating estimate,
-not a provider quota guarantee. Site pacing and browser isolation remain separate.
+Codex teaches use one run-owned native coordinator and up to ten concurrent
+native children, which can themselves delegate. Imprint delivers typed role tasks
+through a local MCP bridge; the provider owns spawning, follow-ups, waiting and
+child concurrency. A stable conversation key is bound to the same native child
+for later evidence and schema repairs. The runtime keeps accepted dependency
+waves, exact proof validation, execution, cancellation and the existing provider
+retry policy. It no longer has two admission queues, adaptive lease generations,
+worker yielding or a researcher-specific delegation schema. Other provider paths
+remain available with a static four-worker focused limit.
+
+The bridge exposes each compiler's existing MCP server in that tool's workspace;
+completion still requires its validated sentinel. Shared research exposes immutable
+run-local publish/list/read findings, including corrections and contradictions.
+Agents decide applicability and tool purposes; matching endpoints or parameter
+shapes do not force tool merging. Each tool requires its own successful evidence.
+Role inputs are retained and paged with explicit truncation; selected recording
+request/response examples reach the master before contracts are chosen.
+
+`native-agents/events.jsonl` records assignments, bindings, calls and SDK lifecycle.
+`native-agents/usage.json` records root and descendant usage from their own provider
+rollouts, including counter resets after provider restarts, excluding forked ancestor history. Coordinator token totals alone omit
+children. Missing cache-write or other counts remain null, not invented zeroes.
+This is a reported snapshot when cancellation prevents a final terminal event.
+Site pacing and browser isolation remain separate from provider concurrency.
 Capture timeout summaries keep up to twelve distinct displayed response facts,
 ordered by latest occurrence. Identical facts are grouped with a count; differing
 matcher results or navigation scopes remain distinct. The total and omitted
@@ -921,3 +931,15 @@ These are advisory construction facts, not wire-equivalence or semantic proof.
 Agents decide which differences are intentional and how to repair the request.
 
 `refine` stages installed tools in a separate IMPRINT_HOME and lets an agent select the target and necessary existing dependencies. It does not enter discovery or seed a fresh teach. Publication follows independent recording/live verification and a strict staged audit, checks for concurrent original-artifact changes, and keeps recoverable backups. See refinement.md for current limits.
+
+Per-request research evidence is written immediately after reading each body,
+before cancellation checks, status handling, captures or parsing. Every entry has
+an execution attempt ID, backend, request index, optional recording sequence and
+read timestamp. A body-read failure records unavailable-body metadata. Known login
+values are redacted before retention. `responses.jsonl` and immutable body files
+survive even when an invocation never reaches its final research observation.
+`inspect_result` accepts an observation-bound `evidenceRef` for bounded reads;
+unknown references and out-of-range offsets are rejected. Failed observations
+cannot prove a candidate. Compiler history copies only explicitly listed bodies.
+The existing completed-chain callback remains compatible. Evidence-hook failures
+cannot change tool execution; research reports failed persistence explicitly.

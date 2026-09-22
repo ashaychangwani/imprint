@@ -14,6 +14,7 @@ import {
   discoveryEvidenceDocuments,
   focusedEvidenceDocuments,
   observeIndependentExecution,
+  selectedRecordingEvidenceDocuments,
 } from '../src/imprint/replay-evidence.ts';
 import { buildToolCandidatePayload } from '../src/imprint/tool-candidates.ts';
 import type { Session } from '../src/imprint/types.ts';
@@ -88,6 +89,34 @@ function projectedValues(
 }
 
 describe('factual independent-execution evidence', () => {
+  it('preserves selected request/response examples and explicit truncation before planning', () => {
+    const recording = session();
+    const first = recording.requests[0];
+    if (!first?.response) throw new Error('Missing fixture response');
+    first.body = 'x'.repeat(100_000);
+    first.response.body = 'y'.repeat(100_000);
+    const documents = selectedRecordingEvidenceDocuments(recording, [10]);
+    const projection = buildPromptEvidenceProjection(
+      documents,
+      new Map(),
+      FOCUSED_EVIDENCE_CHARACTER_BUDGET,
+    );
+    const example = projectedValues(projection).find(
+      (entry) => entry.kind === 'selected_recording_example',
+    );
+    expect(example).toMatchObject({
+      recordingRequestSeq: 10,
+      responseBodyAvailable: true,
+      bodyBytes: 100_000,
+      responseBytes: 100_000,
+      previewsTruncated: { body: true, response: true },
+    });
+    expect(String(example?.bodyPreview).length).toBeLessThan(100_000);
+    expect(
+      projectedValues(projection).some((entry) => entry.recordingRequestSeq === 20),
+    ).toBeFalse();
+  });
+
   it('reports exact variation and prior-response correlation without assigning meaning', () => {
     const recording = session();
     const observation = compareIndependentExecution(

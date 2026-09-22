@@ -967,16 +967,19 @@ describe('runWorkflowWithLadder', () => {
 
       const preparedRequests: unknown[] = [];
       const rawChains: unknown[][] = [];
+      const perRequest: unknown[] = [];
       const { result, usedBackend, responseObservations } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
         forceBackend: 'fetch',
         onPreparedRequest: (observation) => preparedRequests.push(observation),
         onRawResponses: (responses) => rawChains.push(responses),
+        onResponseEvidence: (response) => perRequest.push(response),
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
       expect(rawChains).toEqual([[{ q: 'hello', ok: true }]]);
+      expect(perRequest[0]).toMatchObject({ backend: 'fetch', requestIndex: 0, status: 200 });
       expect(responseObservations).toEqual([
         expect.objectContaining({
           backend: 'fetch',
