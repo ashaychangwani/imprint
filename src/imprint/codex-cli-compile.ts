@@ -432,7 +432,9 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
       const response = await family.submit(
         `${sharedPrompt}${initialPrompt}\n\nNative compiler: use list_assignment_tools and call_assignment_tool for this assignment in place of direct imprint-compile MCP names. All writes and tests must go through those tools. After done, give_up, or an auth checkpoint returns, submit a short summary to the host and stop this turn. Native subagents can assist with independent implementation questions; retain separate workspaces and do not substitute their prose for test evidence.`,
         {
-          conversation: `compiler:${opts.absoluteToolDir}`,
+          // The family already scopes this key to the run. Revision directories
+          // change; the public tool's retained compiler conversation must not.
+          conversation: `compiler:${opts.candidate?.toolName ?? opts.absoluteToolDir}`,
           signal: opts.signal,
           call: async (name, args) => {
             const result =

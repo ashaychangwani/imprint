@@ -14965,3 +14965,76 @@ an unused flights-16/home. Teach PID 83446. Target 12:33, assess 13:03, hard sto
 13:33 UTC. Disk 10.79 GiB; both original recordings and collector 6443 verified.
 No runtime/prompt changes during this run. The website validation server was
 stopped; the existing dashboard and evidence collector were left unchanged.
+
+Flights 16 missed the thirty-minute completion target. Initial discovery, advice
+and master selection consumed about nineteen minutes. Location and round-trip
+search have proven research results and overlapping compiler drafts; calendar
+and booking remain unresolved. Booking has invoked the current search producer
+in a fresh isolated workspace. No published/audited completion is claimed.
+
+The master selected four tools and deferred one-way/multi-city before trying
+them. This does not establish the requested best-effort recorded-variant coverage.
+Native packet rereads are lower so far, but no speed or reliability improvement
+is claimed without audited results. A later inspection confirmed shared findings
+were already being published in immutable objects; the initial status inspection
+missed them. The original sixty-minute assessment and ninety-minute deadline remain unchanged.
+The native-finding ledger IDs were corrected to avoid reusing SF-30.
+
+At about forty minutes in Flights 16, the search compiler rejected its accepted
+plan: the proven response contains outbound options only, while the plan requires
+complete round-trip itineraries. It correctly refused to invent a return leg.
+Booking independently encountered the missing complete selection in its fresh
+producer response. This repeats the research-to-plan contract mismatch; native
+concurrency alone cannot establish the missing producer capability. The run
+continues on unchanged code so the retained master can repair the contract.
+
+Flights 16 has five published shared findings by minute forty-three, including
+location request structure, failed booking replay, page-owned search capture,
+the missing return-selection stage, and unsupported calendar-window inputs.
+Publication is demonstrated; reuse and any resulting time saving still need
+separate evidence. Booking chose a two-request repair using fresh producer state.
+
+Flights 16 sixty-minute assessment: continue only within the original ninety
+minutes to verify the narrowed artifacts. The master excluded booking and
+therefore cannot meet the required four-operation acceptance. A native
+coordinator turn ended prematurely around minute 56; one-millisecond cleanup
+and same-family resumption preserved the pending calendar child's conversation.
+Its narrowed candidate was subsequently tested. No provider-capacity failure
+or disk/power interruption explains these contract failures.
+
+Flights 16 ended after 90.02 minutes: one published lookup, two not ready, booking
+excluded. A strict independent audit passed one lookup invocation and its one
+parameter in 39.34 seconds. This is not full Flights acceptance. Teach reported
+34,968,862 input (32,910,976 cache reads included), 216,265 output, zero reported
+cache writes and $25.7212344 base API equivalent; two analysis calls lack usage.
+Audit adds $0.083744. Campaign trace totals through this audit are $293.7193144
+reported base equivalent with seventeen missing analysis usages; separate native
+smokes are accounted separately. No invoice or complete-cost claim.
+
+Reproduced two runtime defects before changing code: revised compiler directories
+changed native child identity, rejecting an otherwise successful 512.8-second
+search compile; verification waited for every sibling compiler, delaying the ready
+lookup about twelve minutes. Compiler keys now follow public tool names within
+the run. The existing per-tool completion callback starts verification immediately,
+while later dependency waves still await verified producers. No new scheduling
+structure was added.
+
+The three focused regressions pass. Broader checks cover 322 unique affected tests:
+62 controller/native integration tests passed, and a 260-test suite initially
+found one stale assertion requiring the removed serial follow-up order. Updating
+that assertion to accepted independent/dependent waves passed all 134 tests in
+its file; the other 126 had already passed. Lint and typecheck pass. Website build
+and desktop/mobile inspection pass without page errors or horizontal overflow;
+the existing bundle-size warning remains. The first website build invocation
+missed bunx in PATH; the corrected invocation passed. No check was bypassed.
+
+The next experiment's human scope now explicitly retains all four required groups,
+best-effort recorded purposes and honest exclusions. This is experiment guidance,
+not a site-specific runtime strategy or evidence supplied from earlier teaches.
+
+The real-provider native-compile-revision-smoke-1 passed: both revision directories
+used the same native compiler child and their own scoped MCP server. Reported
+usage is 348,601 input including 317,696 cache reads, 2,094 output and zero cache
+writes, $0.2925784 base equivalent; both native thread totals are snapshots.
+This intentionally exercises give-up on an empty synthetic recording, not a
+website pass. Prior smoke accounting remains retained separately.

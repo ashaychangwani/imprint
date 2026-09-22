@@ -1183,6 +1183,79 @@ describe('fresh foreground master controller end to end', () => {
     });
   }
 
+  for (const dependent of [false, true]) {
+    it(`checks finished tools without a sibling compilation barrier: dependent=${dependent}`, async () => {
+      await withTemporaryImprintHome(async (root) => {
+        const events: string[] = [];
+        const promotions: string[][] = [];
+        const base = lifecycleFailureFixture({
+          runId: `run-e2e-streamed-verification-${dependent}`,
+          events,
+          promotionBatches: promotions,
+          requestBaselineMvpReview: credibleBaselineMvpReview,
+        });
+        let releaseSibling!: () => void;
+        const producerReviewed = new Promise<void>((resolve) => {
+          releaseSibling = resolve;
+        });
+        let siblingCompiled = false;
+        let reviewedBeforeSiblingCompiled = false;
+        await runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: syntheticSessionPath(root),
+            noInteractive: true,
+            provider: 'codex-cli',
+            maxDurationMs: 5_000,
+          },
+          {
+            ...base,
+            requestMasterDecision: async (input, options) => {
+              if (!base.requestMasterDecision) throw new Error('fixture master missing');
+              const decision = await base.requestMasterDecision(input, options);
+              if (!dependent && decision.desiredPlan) {
+                decision.desiredPlan.chainEdges = [];
+                decision.desiredPlan.buildWaves = [[PRODUCER_ID, CONSUMER_ID]];
+                for (const tool of decision.desiredPlan.tools) {
+                  tool.candidate.dependsOnTools = [];
+                  tool.candidate.dependencySeqs = [];
+                }
+              }
+              return decision;
+            },
+            requestFocusedPlan: async (input, options) => {
+              if (!base.requestFocusedPlan) throw new Error('fixture planner missing');
+              if (input.apiResearch?.length === 1)
+                throw new Error('fixture defers speculative compilation');
+              return await base.requestFocusedPlan(input, options);
+            },
+            compileFocusedTool: async (input) => {
+              if (!base.compileFocusedTool) throw new Error('fixture compiler missing');
+              if (input.tool.id === CONSUMER_ID) {
+                if (dependent) expect(promotions.flat()).toContain(PRODUCER_NAME);
+                await Promise.race([
+                  producerReviewed,
+                  new Promise<void>((resolve) => setTimeout(resolve, 150)),
+                ]);
+                siblingCompiled = true;
+              }
+              return await base.compileFocusedTool(input);
+            },
+            requestBaselineMvpReview: async (input) => {
+              if (input.toolId === PRODUCER_ID) {
+                reviewedBeforeSiblingCompiled = !siblingCompiled;
+                releaseSibling();
+              }
+              return credibleBaselineMvpReview(input);
+            },
+          },
+        );
+        expect(reviewedBeforeSiblingCompiled).toBeTrue();
+        expect(new Set(promotions.flat())).toEqual(new Set([PRODUCER_NAME, CONSUMER_NAME]));
+      });
+    });
+  }
+
   it('overlaps independent planning while preserving producer-first compilation', async () => {
     await withTemporaryImprintHome(async (root) => {
       const events: string[] = [];

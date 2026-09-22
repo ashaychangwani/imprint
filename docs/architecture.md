@@ -39,7 +39,9 @@ Codex teaches use one run-owned native coordinator and up to ten concurrent
 native children, which can themselves delegate. Imprint delivers typed role tasks
 through a local MCP bridge; the provider owns spawning, follow-ups, waiting and
 child concurrency. A stable conversation key is bound to the same native child
-for later evidence and schema repairs. The runtime keeps accepted dependency
+for later evidence and schema repairs. Compiler keys use the public tool name within
+the run, so moving artifacts into a new revision directory retains the same compiler
+conversation. The runtime keeps accepted dependency
 waves, exact proof validation, execution, cancellation and the existing provider
 retry policy. It no longer has two admission queues, adaptive lease generations,
 worker yielding or a researcher-specific delegation schema. Other provider paths
@@ -651,7 +653,9 @@ The public teaching path is one fresh foreground controller:
    arrives from its retained conversation. Cancellation, provider failures and
    host errors retain their existing handling.
 9. A fresh focused compiler builds that tool. Independent tools in the same
-   master-authored wave may compile in parallel. The selected research call's
+   master-authored wave may compile in parallel. Each finished tool starts its checks
+   immediately; it does not wait for sibling compilation. The next dependency wave
+   still waits for verified producers. The selected research call's
    input/observation file and full retained response are copied into its local
    workspace for offline parser tests. These evidence files are not published
    runtime dependencies; the compiler need not repeat the live call to read them.

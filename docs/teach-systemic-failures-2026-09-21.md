@@ -1887,7 +1887,24 @@ base estimate, with the teach's two missing-usage calls still unknown.
 
 | ID | Finding | Correction / status |
 | --- | --- | --- |
-| SF-30 | Native task instructions blur semantic actions and direct MCP execution | Flights 15 round-trip follow-up cited absent direct tools as a blocker. Task metadata/instructions now distinguish JSON host actions from compiler tools; real-provider action/retained-proof smoke passes. Fresh validation pending. |
-| SF-31 | Research repair imposes serial order on independent tools | Flights 15 requested six repairs but round-trip delayed all siblings. Reuse accepted plan waves; an independent-overlap regression failed before and passes after, with producer freshness preserved. Fresh validation pending. |
-| SF-32 | Native task delivery repeats large immutable packets | Flights 15 made 887 reads for 297 pages of unique packets. Cache guidance and removal of redundant dispatch waiting are measured correction candidates; no speed improvement claimed yet. |
-| SF-33 | Shared findings interface is unused | No findings published in Flights 15. Agents must choose applicability; do not auto-classify endpoints or claim memory reuse until observed. |
+| SF-31 | Native task instructions blur semantic actions and direct MCP execution | Flights 15 round-trip follow-up cited absent direct tools as a blocker. Task metadata/instructions now distinguish JSON host actions from compiler tools; real-provider action/retained-proof smoke passes. Fresh validation pending. |
+| SF-32 | Research repair imposes serial order on independent tools | Flights 15 requested six repairs but round-trip delayed all siblings. Reuse accepted plan waves; an independent-overlap regression failed before and passes after, with producer freshness preserved. Fresh validation pending. |
+| SF-33 | Native task delivery repeats large immutable packets | Flights 15 made 887 reads for 297 pages of unique packets. Cache guidance and removal of redundant dispatch waiting are measured correction candidates; no speed improvement claimed yet. |
+| SF-34 | Shared findings interface is unused | No findings published in Flights 15. Flights 16 has five immutable findings by minute 43; publication is demonstrated, but useful reuse and latency benefit remain unproven. Agents choose applicability. |
+
+
+## Flights 16 terminal findings — September 22
+
+Flights 16 ended at the ninety-minute deadline: one published tool, two not ready,
+booking excluded by the master. The independent strict lookup audit passed one
+actual invocation and its one parameter. This is not four-operation acceptance.
+See [the measured retrospective](teach-flights-16-retrospective-2026-09-22.md).
+
+| ID | Systemic defect | Evidence and correction |
+| --- | --- | --- |
+| SF-35 | Native compiler identity follows revision directories instead of the tool | A successful 8.55-minute revised search compile was rejected because its child identity changed. Key the retained compiler by public tool within the run. The regression fails before and passes after, and isolates different tools. |
+| SF-36 | Verification waits for all sibling compilations and then runs serially | The ready lookup draft waited about twelve minutes after final plan acceptance before checks began. Run checks through the existing per-tool completion callback, preserving dependency waves. Independent and dependent regressions pass. |
+
+Neither correction adds a worker pool or scheduler. Full fresh validation remains
+outstanding. The upstream search/booking contract mismatch and unattempted recorded
+variants remain unresolved; native delegation alone does not solve them.

@@ -4778,7 +4778,7 @@ async function compileAndCheckCurrentPlan(input: {
     }
   };
 
-  // Check each wave before starting the next. Tools that reach factual MVP
+  // Check each tool as it finishes, before starting the next wave. Tools that reach factual MVP
   // proof start advisory finesse without being awaited while the next wave
   // compiles. Unrelated tools still proceed after a failure; a declared
   // consumer waits until its exact producer build is a published MVP.
@@ -4810,8 +4810,10 @@ async function compileAndCheckCurrentPlan(input: {
       {
         concurrency: FOCUSED_COMPILE_CONCURRENCY,
         compileTool: async (tool) => await compileTool(tool, waveIndex),
-        acceptCompiledTool: (tool, _localWaveIndex, focused) =>
-          acceptCompiledTool(tool, waveIndex, focused),
+        acceptCompiledTool: async (tool, _localWaveIndex, focused) => {
+          acceptCompiledTool(tool, waveIndex, focused);
+          await checkNewlyCompiledTool({ tool, waveIndex, value: focused });
+        },
       },
     );
     const completed = waveResult.completed
@@ -4821,7 +4823,6 @@ async function compileAndCheckCurrentPlan(input: {
     compiled.completed.push(...completed);
     compiled.failures.push(...waveFailures);
     failures.push(...waveFailures);
-    for (const entry of completed) await checkNewlyCompiledTool(entry);
   }
 
   const waveByToolId = new Map(
