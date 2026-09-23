@@ -38,7 +38,7 @@ describe('run-local shared research', () => {
       ],
     });
     expect(memory.list().entries).toHaveLength(11);
-    expect(memory.list().entries[0]?.conclusion).toBe('Discovery 0');
+    expect(memory.list().entries[0]?.summary).toBe('Discovery 0');
     expect(memory.list().entries[10]?.supersedes).toEqual([first]);
     const read = memory.exchange('reader', {
       runId: memory.runId,
@@ -96,5 +96,34 @@ describe('run-local shared research', () => {
         query: { action: 'read', ref: source, length: 2_001 },
       }),
     ).toThrow();
+  });
+
+  it('delivers a short index and reads a detailed method only by its asset reference', () => {
+    const memory = memoryFixture();
+    const source = memory.remember({ result: 'fixture response' });
+    const method = 'Decode the fixture response by reading each framed record. '.repeat(120);
+    memory.exchange('researcher', {
+      runId: memory.runId,
+      publish: [
+        {
+          ...finding(source, 'Framed response contains a useful record'),
+          applicability: 'fixture response with length framing',
+          limitations: 'Other framing remains untested',
+          asset: method,
+        },
+      ],
+    });
+    const entry = memory.delivery('consumer', true).entries[0];
+    expect(entry?.summary).toBe('Framed response contains a useful record');
+    expect(JSON.stringify(entry)).not.toContain('Decode the fixture response');
+    expect(JSON.stringify(entry)).not.toContain('Other framing remains untested');
+    if (!entry?.assetRef) throw new Error('Detailed asset was not published');
+    const excerpt = memory.exchange('consumer', {
+      runId: memory.runId,
+      query: { action: 'read', ref: entry.assetRef, offset: 0, length: 100 },
+    });
+    expect(JSON.stringify(excerpt.read)).toContain('Decode the fixture response');
+    expect((excerpt.read as { nextOffset: number | null }).nextOffset).toBe(100);
+    expect(memory.delivery('consumer', true).entries).toHaveLength(0);
   });
 });

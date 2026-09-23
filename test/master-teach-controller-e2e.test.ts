@@ -288,6 +288,12 @@ function largeCatalogSyntheticSessionPath(root: string): {
     };
   });
   session.requests.push(...extraRequests);
+  session.events.push({
+    seq: 409,
+    timestamp: 598,
+    type: 'click',
+    detail: JSON.stringify({ text: 'Open a different fixture purpose' }),
+  });
   const navigationRequestSeq = 410;
   session.requests.push({
     seq: navigationRequestSeq,
@@ -1497,6 +1503,8 @@ describe('fresh foreground master controller end to end', () => {
               if (retainedTurnDelta.inspectedRequestSeqs.includes(recording.lastRequestSeq)) {
                 expect(retainedTurnDelta.inspectedRequestSeqs).toEqual([recording.lastRequestSeq]);
                 expect(deltaJson).toContain(`/api/neighbor/${recording.lastRequestSeq}`);
+                expect(deltaJson).toContain('inspected_request_action_context');
+                expect(deltaJson).toContain('Open a different fixture purpose');
                 expect(deltaJson).not.toContain('https://fixture.invalid/api/items/item-1');
                 sawLaterInspectionDelta = true;
               }

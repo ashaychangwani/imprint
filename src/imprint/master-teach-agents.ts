@@ -470,6 +470,26 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       return;
     }
     const { workflow, requestTransformSource, parameterValues } = candidate;
+    const selectedRequestSeqs = workflow.requests.flatMap((request) =>
+      request.recordingRequestSeq === undefined ? [] : [request.recordingRequestSeq],
+    );
+    const selected = new Set(input.tool.candidate.requestSeqs);
+    const substituted = selectedRequestSeqs.filter((seq) => !selected.has(seq));
+    if (substituted.length && !output.recordingReferenceChange)
+      issue(
+        ctx,
+        ['recordingReferenceChange'],
+        `Request ${substituted.join(', ')} is outside this tool's selected recording references. Explain why it is comparable to the intended recorded action, and what remains uncertain; otherwise return partial or ask the master to revise the boundary.`,
+      );
+    if (
+      output.recordingReferenceChange &&
+      !same(output.recordingReferenceChange.selectedRequestSeqs, selectedRequestSeqs)
+    )
+      issue(
+        ctx,
+        ['recordingReferenceChange', 'selectedRequestSeqs'],
+        'selected references must exactly match the candidate request order',
+      );
     if (workflow.site !== input.run.site)
       issue(
         ctx,

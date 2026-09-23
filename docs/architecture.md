@@ -50,6 +50,12 @@ remain available with a static four-worker focused limit.
 The bridge exposes each compiler's existing MCP server in that tool's workspace;
 completion still requires its validated sentinel. Shared research exposes immutable
 run-local publish/list/read findings, including corrections and contradictions.
+The automatic feed contains only bounded summaries and references. Agents may
+publish detailed methods or failed approaches as separate immutable assets and
+read them in bounded excerpts when applicable. Recording inspections include the
+nearest preceding recorded action; if an agent tests a request outside the chosen
+tool references, the handoff must explain comparability and remaining uncertainty.
+The host validates reference identity and leaves purpose judgments to agents.
 Agents decide applicability and tool purposes; matching endpoints or parameter
 shapes do not force tool merging. The boundary advisor and master receive the same
 human guidance, kept separate from recording evidence. They account for distinct

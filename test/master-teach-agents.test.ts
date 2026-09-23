@@ -2389,6 +2389,46 @@ describe('prompts and pre-plan discovery', () => {
         input,
       ),
     ).toThrow('API research response request is absent from the selected recording');
+
+    const alternative = structuredClone(candidate);
+    const alternativeRequest = alternative.workflow.requests[0];
+    if (!alternativeRequest) throw new Error('test candidate has no request');
+    alternativeRequest.recordingRequestSeq = 18;
+    const alternativeTest = {
+      ...output,
+      action: 'test' as const,
+      candidate: alternative,
+      basedOnObservationId: undefined,
+    };
+    expect(() => parseApiResearchOutput(JSON.stringify(alternativeTest), input)).toThrow(
+      "outside this tool's selected recording references",
+    );
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          ...alternativeTest,
+          recordingReferenceChange: {
+            selectedRequestSeqs: [12],
+            comparability: 'Both have the same public query.',
+            remainingUncertainty: 'Recorded actions differ.',
+          },
+        }),
+        input,
+      ),
+    ).toThrow('selected references must exactly match');
+    expect(
+      parseApiResearchOutput(
+        JSON.stringify({
+          ...alternativeTest,
+          recordingReferenceChange: {
+            selectedRequestSeqs: [18],
+            comparability: 'The recorded actions and decoded request fields were compared.',
+            remainingUncertainty: 'Other response shapes remain untested.',
+          },
+        }),
+        input,
+      ).recordingReferenceChange?.selectedRequestSeqs,
+    ).toEqual([18]);
   });
 
   it('accepts the actual planner example with paired recording-backed cases', () => {

@@ -2603,18 +2603,48 @@ function inspectionResearchEvidence(input: {
   independent: IndependentExecutionObservation;
   seeds: Map<string, FreshTeachBootstrapObject>;
 }): PromptEvidenceProjection {
+  // An inspected alternative can belong to a different recorded user action.
+  // Deliver only its closest preceding UI event as a factual comparison cue.
+  const actionContext: FocusedEvidenceDocument = {
+    provenance: 'recording_event',
+    value: {
+      kind: 'inspected_request_action_context',
+      entries: input.requestSeqs.flatMap((seq) => {
+        const request = input.triagedSession.requests.find((entry) => entry.seq === seq);
+        if (!request) return [];
+        const preceding = input.triagedSession.events
+          .filter((event) => event.timestamp <= request.timestamp)
+          .at(-1);
+        return [
+          {
+            recordingRequestSeq: seq,
+            precedingEvent: preceding
+              ? {
+                  seq: preceding.seq,
+                  type: preceding.type,
+                  detail: utf8Prefix(preceding.detail, 400),
+                }
+              : null,
+          },
+        ];
+      }),
+    },
+  };
   return buildPromptEvidenceProjection(
-    focusedEvidenceDocuments({
-      session: input.triagedSession,
-      scope: {
-        toolName: input.tool.candidate.toolName,
-        requestSeqs: input.requestSeqs,
-        representativeSeqs: input.requestSeqs,
-        dependencySeqs: [],
-        eventSeqs: [],
-      },
-      independent: input.independent,
-    }),
+    [
+      actionContext,
+      ...focusedEvidenceDocuments({
+        session: input.triagedSession,
+        scope: {
+          toolName: input.tool.candidate.toolName,
+          requestSeqs: input.requestSeqs,
+          representativeSeqs: input.requestSeqs,
+          dependencySeqs: [],
+          eventSeqs: [],
+        },
+        independent: input.independent,
+      }),
+    ],
     input.seeds,
     API_RESEARCH_INSPECTION_EVIDENCE_CHARACTER_BUDGET,
     new Set(['focused_recording_scope', 'focused_request_summaries', 'focused_event_summaries']),

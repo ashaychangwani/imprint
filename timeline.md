@@ -15319,3 +15319,26 @@ zero; estimated $22.2144944 base equivalent. Full review and limitations are in
 docs/teach-flights-21-review-2026-09-22.md; raw evidence remains private. This
 checkpoint changes documentation only, with no runtime/prompt change, rerun,
 deletion, cron, push or MR.
+
+## September 22 — purpose comparison and selective shared research
+
+Flights21 showed that a one-way researcher substituted a multi-city recording
+request with the same visible inputs. Inspections now include each request's
+nearest preceding recorded action. A candidate using a request outside the
+selected tool references must explain comparability and remaining uncertainty;
+the host checks exact references, while the agent decides purpose. Research
+instructions ask for a partial handoff when a different purpose remains unproven.
+
+Shared findings now deliver short index entries and references. Agents can put a
+working decoding method or failed approach into a separate immutable asset and
+read bounded excerpts when relevant. The index omits detailed methods and
+limitations until requested. Dependent research guidance asks for one coherent
+fresh producer-to-consumer test early, including the complete associated context.
+There is no site-specific runtime rule or new public tool parameter.
+
+Focused regressions cover substituted references, inspected action context, and
+selective asset reads. The full suite passed 2051 tests/6870 assertions across
+106 files. Lint and type checking passed. Website build passed with its existing
+large-chunk warning; desktop and mobile preview had no horizontal overflow.
+The next validation is a fresh isolated Flights teach from the original recording
+on this checkpoint. Do not resume Flights21 or treat these tests as live proof.

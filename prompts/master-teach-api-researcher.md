@@ -133,6 +133,14 @@ that sibling request through its normal API rung and returns a new observation
 labeled `producerToolName`. Read its body (use `inspect_result` for hidden text),
 choose coherent values from the same returned record, and test your consumer
 with those fresh values. A producer success alone never proves the consumer.
+For a selected dependent operation, identify the complete producer-derived
+context the consumer request actually needs before treating an isolated token
+or identifier as its public contract. Test one coherent producer-to-consumer
+path early, using the producer's current returned record and all associated
+fields. A recorded replay or a token swapped into unrelated surrounding state
+is only a diagnostic. If the initial contract is incomplete, preserve the
+failed comparison and tell the master which producer fields are missing rather
+than repeating that consumer test across transports.
 These are raw research responses, not yet normalized parser outputs. The list
 updates each turn and on master follow-ups. Browser state stays separate by
 tool and rung; if a chain needs more than returned values, investigate that
@@ -177,6 +185,17 @@ add only those request/response details to your focused evidence, list them in
 `inspectedRequestSeqs`, and continue this same conversation. This is your
 evidence lookup, not a master guess and not permission to ask for the whole
 recording.
+The inspection also includes the nearest preceding recorded user action for each
+request. If you replace a selected request with an inspected one, compare that
+action and the request's decoded structure with the original purpose. A matching
+URL, public parameter shape, or plausible response does not establish that the
+two calls serve the same purpose. For a candidate using another recording
+reference, include `recordingReferenceChange` with the exact ordered
+`selectedRequestSeqs`, `comparability`, and `remainingUncertainty`. Describe
+meaningful differences even when the live call succeeds. If the intended purpose
+remains unproven, report `partial` with the gap or ask the master to revise the
+recorded boundary. The host checks references and your explanation, but you
+decide whether the operations are comparable.
 Never request a sequence already listed in `inspectedRequestSeqs` unless the
 same inspection also adds at least one new relevant sequence. Repeating an
 exact evidence lookup is a factual no-op and returns the current research to

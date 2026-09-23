@@ -114,6 +114,10 @@ through repairs. Each research pass stays in one native assignment: test and
 inspection results return directly to that researcher, with the same host validation.
 Master, planner and reviewer repairs and shared-memory queries use that same channel,
 without routing every intermediate response through the parent.
+Inspected alternative requests carry their nearest recorded action, and agents
+explain how any substituted request compares with the selected purpose. Shared
+research delivers a short index; detailed methods and failed approaches are
+stored as immutable assets that agents read only when relevant.
 Independent research calls keep separate browser state and reserve paced start times
 without holding a shared site lock through slow responses.
 Master-directed follow-ups resume the same child. Codex owns child lifecycle and concurrency; Imprint retains
