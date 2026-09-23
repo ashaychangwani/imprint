@@ -364,7 +364,11 @@ export class FreshTeachJournal {
       seed.kind === 'json'
         ? this.#putJson(seed.value)
         : this.#putObject('bytes', asBytes(seed.value));
-    if (!sameRef(actual, seed.ref)) throw journalFailure('bootstrap_ref_mismatch');
+    if (!sameRef(actual, seed.ref))
+      throw journalFailure(
+        'bootstrap_ref_mismatch',
+        `expected ${seed.ref.path} (${seed.ref.sha256}), got ${actual.path} (${actual.sha256})`,
+      );
   }
   storeJson(value: unknown): ContentAddressedRef {
     this.#assertActive(this.readState());

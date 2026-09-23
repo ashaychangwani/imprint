@@ -15586,3 +15586,27 @@ rejected. Focused regressions cover producer availability, self-invocation
 chains, and immutable memory reads. The full suite passed 2,058 tests; lint,
 type checking, and diff checks passed. A fresh isolated teach is still needed
 to establish whether these fixes improve publication.
+
+## September 23 — Flights31 proved all research but journal initialization failed
+
+Flights31 was fresh on `767056b` and ended after 87.43 minutes with 0 ready
+tools and no audit. The new dependency gate worked: independent researchers
+started first, dependent researchers waited for their own fresh producers, and
+all 11 research handoffs became proven, including one-way, round-trip, and
+multi-city booking. The master accepted an 11-tool, three-wave plan, but
+journal creation then failed with `bootstrap object ref mismatch`. No tool was
+compiled or published. The slowest focused planner also held the full planner
+batch until about minute 84.5. See
+docs/teach-flights-31-retrospective-2026-09-23.md; all evidence is preserved.
+
+Discovery and initial planning used 22.01 minutes (25.18%), first-pass
+research 39.60 (45.30%), and master review plus later planning and the failed
+journal setup 25.81 (29.52%). Trace usage was 43,771,651 input tokens
+(40,295,040 cache reads), 265,952 output, zero reported cache writes, and
+an estimated $35.3435 base API equivalent. No provider-capacity or disk
+failure caused the terminal error. `jsonRef` now snapshots the canonical
+value when assigning a content hash so later mutation cannot invalidate its
+bootstrap seed; a regression covers journal creation after source mutation.
+The full suite passed 2,059 tests; lint, type checking, and diff checks passed.
+The precise offending Flights31 seed was not logged, so live confirmation still
+requires a new isolated teach. Future mismatch errors now include both refs.

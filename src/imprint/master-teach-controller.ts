@@ -785,7 +785,7 @@ function sha256Id(value: Uint8Array | string): string {
   return `sha256:${createHash('sha256').update(value).digest('hex')}`;
 }
 
-function jsonRef(value: unknown): {
+export function jsonRef(value: unknown): {
   ref: ContentAddressedRef;
   seed: FreshTeachBootstrapObject;
 } {
@@ -795,7 +795,9 @@ function jsonRef(value: unknown): {
     path: `objects/json/${sha256.slice(7)}.json`,
     sha256,
   };
-  return { ref, seed: { ref, kind: 'json', value } };
+  // The journal may open long after this reference is made. Keep the exact
+  // hashed value, even if the caller later extends its research history.
+  return { ref, seed: { ref, kind: 'json', value: JSON.parse(bytes) as unknown } };
 }
 
 function uniqueRefs<Ref extends ContentAddressedRef>(refs: readonly Ref[]): Ref[] {

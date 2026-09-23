@@ -6,6 +6,7 @@ import {
   type CompletionReviewInput,
   CompletionToolResultEvidenceSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
+import { jsonRef } from '../src/imprint/master-teach-controller.ts';
 import {
   type ChainEdge,
   type ContentAddressedRef,
@@ -145,6 +146,25 @@ function fixture(tools = [tool('search-id', 'search', 1)], chainEdges: ChainEdge
   });
   return { journal, root, plan };
 }
+
+it('keeps a bootstrap reference bound to its original value when later research mutates the source', () => {
+  const source = { observations: [{ id: 'first' }] };
+  const snapshot = jsonRef(source);
+  source.observations.push({ id: 'second' });
+  const parent = mkdtempSync(join(tmpdir(), 'imprint-journal-bootstrap-'));
+  temporaryRoots.push(parent);
+  const plan = initialPlan([tool('search-id', 'search', 1)]);
+  const journal = FreshTeachJournal.create({
+    root: join(parent, 'run'),
+    run,
+    plan,
+    validation,
+    sharedManifest: { files: [] },
+    bootstrap: [...bootstrapForPlan(plan), snapshot.seed],
+    now,
+  });
+  expect(journal.readJson(snapshot.ref)).toEqual({ observations: [{ id: 'first' }] });
+});
 
 function desiredFrom(plan: EditableTeachingPlan): DesiredTeachingPlan {
   const { version: _version, revision: _revision, decision: _decision, ...desired } = plan;
