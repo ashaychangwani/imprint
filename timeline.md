@@ -15289,3 +15289,33 @@ flights-21/home,empty research memory,original recording and unchanged scope.
 Target21:18:47,assess21:48:47,hard22:18:47UTC. Recording/collector verified,7GiBfree.
 Code/prompts remain unchanged. No cron,MR,push,deletion,or power gate.
 See docs/teach-flights-20-review-2026-09-22.md for findings and limitations.
+
+## September 22 — audit Flights21 after its deadline
+
+Flights21 ended at 22:25:19 UTC after 96.53 elapsed minutes, zero published and
+seven unfinished. Power logs account for 37.28 minutes asleep, including the
+deadline crossing; non-sleep elapsed time was 59.25 minutes. No new teach started.
+
+The retained-response audit corrects the initial status: repaired round-trip and
+multi-city booking returned both exact selected legs and booking-provider links
+before the final sleep. The missing final research handoff and downstream build/
+verification still make the teach a failure. Fresh one-way booking under the new
+context contract remains unverified.
+
+Separately found a concrete purpose mismatch: the one-way researcher used recording
+request 245 after the Multi-city selection, preserving mode 3 instead of request
+206's mode 2. Plausible one-leg output was accepted as one-way proof and propagated
+to planning/shared findings. This is unproven comparability, not audited coverage.
+
+Other costs: seven recovered schema rejections; repeated framed-response parser
+discovery; two four-backend sweeps before local request/transform repair; and the
+remaining pre-plan research barrier. One lookup draft passed offline mechanics but
+never semantic/live verification. No provider overload, lost booking response or
+disk-exhaustion evidence was found. Research retention and shared-memory delivery
+worked, though useful decoding details were not shared in time.
+
+Input 27,289,736 including 25,099,136 cache reads; output 170,622; reported writes
+zero; estimated $22.2144944 base equivalent. Full review and limitations are in
+docs/teach-flights-21-review-2026-09-22.md; raw evidence remains private. This
+checkpoint changes documentation only, with no runtime/prompt change, rerun,
+deletion, cron, push or MR.
