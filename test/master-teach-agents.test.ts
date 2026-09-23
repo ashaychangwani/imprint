@@ -2267,7 +2267,7 @@ describe('prompts and pre-plan discovery', () => {
     const followUpTurn = await send({
       kind: 'master_follow_up',
       followUp,
-      relevantEvidence: evidence,
+      evidenceRef: evidence.ref,
       currentTool,
       requiredLinks: [],
       requestCatalog: [catalogEntry],
@@ -2276,7 +2276,8 @@ describe('prompts and pre-plan discovery', () => {
     });
     expect(followUpTurn.turnKind).toBe('master_follow_up');
     expect(followUpTurn).toHaveProperty('followUp');
-    expect(followUpTurn).toHaveProperty('relevantEvidence');
+    expect(followUpTurn.evidenceRef).toEqual(evidence.ref);
+    expect(followUpTurn).not.toHaveProperty('relevantEvidence');
     expect(followUpTurn).toHaveProperty('currentTool');
     expect(followUpTurn.requestCatalog).toEqual([catalogEntry]);
     expect(followUpTurn.requestCatalogPage).toEqual({

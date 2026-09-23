@@ -2130,7 +2130,7 @@ export type ApiResearchRetainedTurnDelta =
   | {
       kind: 'master_follow_up';
       followUp: NonNullable<ApiResearchInput['followUp']>;
-      relevantEvidence: ApiResearchInput['evidence'];
+      evidenceRef: ApiResearchInput['evidence']['ref'];
       currentTool?: ApiResearchInput['tool'];
       requiredLinks?: NonNullable<ApiResearchInput['requiredLinks']>;
       requestCatalog?: NonNullable<ApiResearchInput['requestCatalog']>;
@@ -2572,7 +2572,7 @@ export async function requestApiResearchStep(
     ? (({ kind, ...delta }) => ({
         instruction:
           kind === 'master_follow_up'
-            ? 'Continue the same retained API-research conversation. Follow this new master direction and use the newly supplied evidence. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
+            ? 'Continue the same retained API-research conversation. Follow this new master direction using the recording evidence already in this conversation. The evidenceRef identifies the current immutable projection; if a newly selected recorded request is needed, use inspect with its exact request seq to retrieve only that evidence. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
             : kind === 'observation'
               ? 'Continue the same retained API-research conversation. Evaluate this newest factual test result. Return partial only when the selected core result or a required downstream obligation remains incomplete; defer optional breadth and further minimization.'
               : kind === 'catalog_page'

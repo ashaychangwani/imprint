@@ -2111,7 +2111,12 @@ describe('focused API research', () => {
         requestBodyBytes: 0,
         responseBodyBytes: 48,
       };
+      const expandedEvidence = PromptEvidenceProjectionSchema.parse({
+        ref: { path: 'objects/newly-selected-evidence.json', sha256: digest(evidencePayload) },
+        payload: evidencePayload,
+      });
       let testedFollowUp = false;
+      let inspectedRequestSeqs: readonly number[] = [];
       const followUpDeltas: unknown[] = [];
       const result = await researchApiMvpCall({
         run,
@@ -2128,6 +2133,10 @@ describe('focused API research', () => {
         requestCatalog: [revisedCatalogEntry],
         requestCatalogTruncated: false,
         requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
+        inspectRequests: (requestSeqs) => {
+          inspectedRequestSeqs = requestSeqs;
+          return { delta: expandedEvidence, accumulated: expandedEvidence };
+        },
         toolDir,
         agent: {},
         runDeadline: new RunDeadline(Date.now() + 60_000),
@@ -2139,6 +2148,15 @@ describe('focused API research', () => {
             expect(input.observations[0]?.id).toBe(firstObservationId);
             expect(input.previousProgress?.candidate).toEqual(mvp);
             expect(input.previousProgress?.observation?.id).toBe(firstObservationId);
+            if (inspectedRequestSeqs.length === 0) {
+              return {
+                binding,
+                action: 'inspect',
+                requestedRequestSeqs: [13],
+                reason: 'Read the newly selected request before testing it.',
+              };
+            }
+            expect(input.inspectedRequestSeqs).toEqual([13]);
             if (!testedFollowUp) {
               testedFollowUp = true;
               return {
@@ -2166,8 +2184,10 @@ describe('focused API research', () => {
       });
       expect('status' in result).toBeFalse();
       expect(result.candidate).toEqual(completed);
+      expect(inspectedRequestSeqs).toEqual([13]);
       expect(followUpDeltas[0]).toMatchObject({
         kind: 'master_follow_up',
+        evidenceRef: evidence.ref,
         followUp: {
           masterDirection: 'Test a different query and verify the returned record changes.',
         },
@@ -2176,9 +2196,15 @@ describe('focused API research', () => {
         requestCatalogTruncated: false,
         requestCatalogPage: { offset: 0, totalEntries: 1, hasMore: false },
       });
+      expect(followUpDeltas[0]).not.toHaveProperty('relevantEvidence');
       expect(followUpDeltas[0]).not.toHaveProperty('previousProgress');
-      expect(followUpDeltas[1]).toMatchObject({ kind: 'observation' });
-      expect(followUpDeltas[1]).not.toHaveProperty('requestCatalog');
+      expect(followUpDeltas[1]).toEqual({
+        kind: 'inspection',
+        inspectedRequestSeqs: [13],
+        relevantEvidence: expandedEvidence,
+      });
+      expect(followUpDeltas[2]).toMatchObject({ kind: 'observation' });
+      expect(followUpDeltas[2]).not.toHaveProperty('requestCatalog');
     } finally {
       rmSync(toolDir, { recursive: true, force: true });
     }

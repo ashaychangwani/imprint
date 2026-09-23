@@ -544,7 +544,7 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
     ? {
         kind: 'master_follow_up',
         followUp: input.followUp,
-        relevantEvidence: input.evidence,
+        evidenceRef: input.evidence.ref,
         requiredLinks: [...(input.requiredLinks ?? [])],
         ...(researchInputsChanged
           ? {

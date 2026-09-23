@@ -15530,3 +15530,27 @@ clickable proceeds normally. The returned error retains the selector and DOM
 diagnostics so the researcher can choose another action. Focused CDP/backend
 tests passed 138 cases; lint and type checking passed. A new isolated Flights
 teach is required to see whether this saves time or improves publication.
+
+## September 23 — Flights29 proved more research but still missed publication
+
+Flights29 was fresh on `ee126d6` and stopped at 90.03 minutes with 0 ready
+tools and no audit. Round-trip search proved fresh selected-outbound continuation
+around minute 78, and one-way booking proved a fresh producer-to-consumer call
+around minute 90. Round-trip and multi-city booking followups and one compiler
+were still active. Discovery/plan used 22.22 minutes (24.68%), first-pass
+research 33.68 (37.41%), and review/followups/unfinished compilation 34.13
+(37.91%). The browser click change was not exercised. Retained followup prompts
+again carried hundreds of thousands of characters of recording projection.
+Trace usage was 45,565,874 input tokens (41,688,704 cache reads), 328,289
+output, zero reported cache writes, and an estimated $38.7499416 base API
+equivalent. The deadline, not provider capacity, ended the run. See
+docs/teach-flights-29-retrospective-2026-09-23.md. Evidence is preserved.
+
+The retained API-research followup now sends the content-addressed recording
+projection reference instead of resending its full evidence payload. A
+researcher can inspect newly needed exact request sequences through the
+existing bounded evidence action. The initial selected evidence, retained
+conversation, and proof checks are unchanged. A regression covers a revised
+tool boundary that inspects a newly selected request before testing. The full
+suite passed 2,056 tests; lint, type checking, and diff checks passed. This is
+an unvalidated timing change until a new fresh teach succeeds.
