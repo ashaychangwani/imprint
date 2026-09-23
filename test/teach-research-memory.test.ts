@@ -1,6 +1,16 @@
 import { describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
 import type { ContentAddressedRef } from '../src/imprint/master-teach-plan.ts';
-import { SharedResearchExchangeSchema } from '../src/imprint/teach-research-memory.ts';
+import {
+  canonicalTeachingPlanJson,
+  teachingPlanContentSha256,
+} from '../src/imprint/master-teach-plan.ts';
+import {
+  SharedResearchExchangeSchema,
+  readRunResearchJsonObject,
+} from '../src/imprint/teach-research-memory.ts';
 
 import { memoryFixture } from './fixtures/teach-research-memory.ts';
 
@@ -15,6 +25,26 @@ const finding = (
 });
 
 describe('run-local shared research', () => {
+  it('reads pre-journal objects only from the exact run-local content path with matching bytes', () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-research-memory-'));
+    try {
+      const value = { response: 'recorded fixture', requests: [1, 2] };
+      const sha256 = teachingPlanContentSha256(value);
+      const ref = { path: `objects/json/${sha256.slice(7)}.json`, sha256 };
+      const path = join(root, 'research-memory', ref.path);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, canonicalTeachingPlanJson(value));
+      expect(readRunResearchJsonObject(root, ref)).toEqual(value);
+      expect(() =>
+        readRunResearchJsonObject(root, { ...ref, path: 'objects/json/other.json' }),
+      ).toThrow('path does not match');
+      writeFileSync(path, '{"response":"changed"}');
+      expect(() => readRunResearchJsonObject(root, ref)).toThrow('hash mismatch');
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('retains concurrent publications, corrections and contradictions without replacing history', async () => {
     const memory = memoryFixture();
     const source = memory.remember({ raw: 'fixture body' });

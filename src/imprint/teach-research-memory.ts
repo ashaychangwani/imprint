@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { z } from 'zod';
 import { type ContentAddressedRef, ContentAddressedRefSchema } from './master-teach-plan.ts';
 import { PromptIdSchema, utf8Text } from './master-teach-prompt-projections.ts';
@@ -48,6 +51,18 @@ interface FindingEntry {
   finding: Finding;
 }
 const key = (ref: ContentAddressedRef) => `${ref.path}\0${ref.sha256}`;
+
+/** Read an object written before the teach journal was opened. The exact
+ * content path and digest are checked as strictly as journal objects. */
+export function readRunResearchJsonObject(runRoot: string, ref: ContentAddressedRef): unknown {
+  const parsed = ContentAddressedRefSchema.parse(ref);
+  if (parsed.path !== `objects/json/${parsed.sha256.slice(7)}.json`)
+    throw new Error('Shared research reference path does not match its hash');
+  const bytes = readFileSync(join(runRoot, 'research-memory', parsed.path));
+  const digest = `sha256:${createHash('sha256').update(bytes).digest('hex')}`;
+  if (digest !== parsed.sha256) throw new Error('Shared research object hash mismatch');
+  return JSON.parse(bytes.toString('utf8'));
+}
 
 /** Coordinator-owned metadata over the existing run's immutable journal objects.
  * Publication is synchronous, so concurrent agents append without overwriting.

@@ -15554,3 +15554,35 @@ conversation, and proof checks are unchanged. A regression covers a revised
 tool boundary that inspects a newly selected request before testing. The full
 suite passed 2,056 tests; lint, type checking, and diff checks passed. This is
 an unvalidated timing change until a new fresh teach succeeds.
+
+## September 23 — Flights30 exposed dependency scheduling and shared-memory gaps
+
+Flights30 was fresh on `fb2bdd6`. It ended at 90.03 minutes with 0 ready tools
+and no audit. The selected plan had producer-first waves, but first-pass research
+launched all ten tools together. Three booking researchers and multi-city
+continuation blocked before their producers finished; round-trip continuation
+was partial. Followups later proved both fresh continuations. One-way booking
+made a fresh producer-to-consumer live call, but its final proof was rejected:
+an optional shared-research citation failed lookup despite its hashed object
+being present in the run, and the agent's repair changed candidate parameters
+without retesting. The last stretch logged 34 native-family capacity retries and
+exhausted the 90-minute deadline. No disk or power failure occurred.
+
+Discovery/plan took 20.89 minutes (23.21%), first-pass research 23.19
+(25.76%), and review/followups/unfinished compilation 45.94 (51.03%).
+Reference-only followup prompts shrank to about 136–154k characters, but full
+sibling handoffs still contributed 68–88k characters. Trace usage was
+55,774,880 input tokens (51,208,832 cache reads), 393,632 output, zero
+reported cache writes, and an estimated $46.6203648 base API equivalent.
+See docs/teach-flights-30-retrospective-2026-09-23.md. All evidence remains.
+
+The next checkpoint fixes two general mechanical causes seen in Flights30.
+First-pass research now waits for each tool's declared producers to settle,
+without waiting for unrelated tools in the same or earlier build wave. Research
+gets priority over speculative drafts. Pre-journal shared-research objects can
+also be read after the journal opens, but only from this run's exact JSON
+content path with a matching SHA-256 digest. Invalid candidate proof remains
+rejected. Focused regressions cover producer availability, self-invocation
+chains, and immutable memory reads. The full suite passed 2,058 tests; lint,
+type checking, and diff checks passed. A fresh isolated teach is still needed
+to establish whether these fixes improve publication.

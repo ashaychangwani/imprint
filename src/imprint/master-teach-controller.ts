@@ -164,7 +164,7 @@ import {
 } from './replay-evidence.ts';
 import { loadCredentialStore } from './runtime.ts';
 import { resolveExplicitTeachingRecordings, resolveTeachingRecording } from './session-merge.ts';
-import { TeachResearchMemory } from './teach-research-memory.ts';
+import { TeachResearchMemory, readRunResearchJsonObject } from './teach-research-memory.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -2729,9 +2729,17 @@ async function researchSelectedOperations(input: {
   const previousByToolName = new Map(
     (input.previousHandoffs ?? []).map((handoff) => [handoff.toolName, handoff] as const),
   );
-  const targetTools = input.toolIds
+  const selectedTools = input.toolIds
     ? input.plan.tools.filter(({ id }) => input.toolIds?.has(id))
     : input.plan.tools;
+  const selectedById = new Map(selectedTools.map((tool) => [tool.id, tool]));
+  const targetTools = input.plan.buildWaves.flat().flatMap((id) => selectedById.get(id) ?? []);
+  const targetIds = new Set(targetTools.map(({ id }) => id));
+  const idByName = new Map(input.plan.tools.map((tool) => [tool.candidate.toolName, tool.id]));
+  const settled = new Map<string, Promise<void>>();
+  const settle = new Map<string, () => void>();
+  for (const tool of targetTools)
+    settled.set(tool.id, new Promise<void>((resolve) => settle.set(tool.id, resolve)));
   const queuedResearch = new Set(targetTools.map(({ id }) => id));
   const unfinishedResearch = new Set(queuedResearch);
   // A last native researcher can overlap planning with master review when
@@ -2747,194 +2755,210 @@ async function researchSelectedOperations(input: {
     {
       concurrency: FOCUSED_COMPILE_CONCURRENCY,
       compileTool: async (sourceTool) => {
+        const predecessorIds = new Set([
+          ...sourceTool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
+          ...input.plan.chainEdges
+            .filter(({ consumerToolId }) => consumerToolId === sourceTool.id)
+            .map(({ producerToolId }) => producerToolId),
+        ]);
+        await Promise.all(
+          [...predecessorIds]
+            .filter((id) => id !== sourceTool.id && targetIds.has(id))
+            .map((id) => settled.get(id)),
+        );
         queuedResearch.delete(sourceTool.id);
-        const followUp = followUpByToolName.get(sourceTool.candidate.toolName);
-        let evidence = followUp
-          ? followUpResearchEvidence({
-              tool: sourceTool,
-              followUp,
-              triagedSession: input.triagedSession,
-              independent: input.independent,
-              seeds: input.seeds,
-            })
-          : evidenceByTool.get(sourceTool.id);
-        if (!evidence) throw new Error(`API research evidence is missing for "${sourceTool.id}"`);
-        const failureEntries = input.verificationEvidenceByToolName?.get(
-          sourceTool.candidate.toolName,
-        );
-        if (failureEntries?.length) {
-          const payload = { entries: [...evidence.payload.entries, ...failureEntries] };
-          evidence = PromptEvidenceProjectionSchema.parse({
-            ref: addBootstrap(input.seeds, jsonRef(payload)),
-            payload,
-          });
-        }
-        evidenceByTool.set(sourceTool.id, evidence);
-        const { implementationPlan: _implementationPlan, ...tool } = sourceTool;
-        const requiredLinks = apiResearchRequiredLinks(input.plan, sourceTool);
-        const requestCatalog = apiResearchRequestCatalog(input.triagedSession, sourceTool);
-        const firstRequestCatalogPage = apiResearchRequestCatalogPage(requestCatalog, 0);
-        const inspectedRequestSeqs = new Set(followUp?.relevantRequestSeqs ?? []);
-        input.report?.(
-          followUp
-            ? `${tool.candidate.toolName}: continuing API research for the master's missing proof`
-            : `${tool.candidate.toolName}: researching the minimum viable API call`,
-        );
         try {
-          const outcome = await researchApiMvpCall({
-            run: input.run,
-            recordingIndex: input.recordingIndex,
-            session: input.triagedSession,
-            tool,
-            evidence,
-            ...(followUp
-              ? {
-                  followUp: {
-                    masterDirection: followUp.instruction,
-                    missingProof: followUp.missingProof,
-                    relevantRequestSeqs: followUp.relevantRequestSeqs,
-                    siblingResearch: (input.previousHandoffs ?? []).filter(({ toolName }) =>
-                      followUp.relevantToolNames.includes(toolName),
-                    ),
-                  },
-                  previousProgress: previousByToolName.get(tool.candidate.toolName),
-                }
-              : {}),
-            requestCatalog: firstRequestCatalogPage.entries,
-            requestCatalogTruncated: firstRequestCatalogPage.page.hasMore,
-            requestCatalogPage: firstRequestCatalogPage.page,
-            loadNextRequestCatalogPage: (offset) =>
-              apiResearchRequestCatalogPage(requestCatalog, offset),
-            requiredLinks,
-            producers: () => {
-              const available = new Map<
-                string,
-                {
-                  toolName: string;
-                  candidate: ApiResearchResult['candidate'];
-                  summary: string;
-                  toolDir: string;
-                }
-              >();
-              for (const handoff of input.previousHandoffs ?? []) {
-                const sibling = input.plan.tools.find(
-                  ({ candidate }) => candidate.toolName === handoff.toolName,
-                );
-                if (!sibling || handoff.status !== 'proven' || !handoff.candidate) continue;
-                const retained = input.previousResults?.get(handoff.toolName);
-                const compatible =
-                  retained &&
-                  retained.observation.id === handoff.observation?.id &&
-                  teachingPlanContentSha256(retained.candidate) ===
-                    teachingPlanContentSha256(handoff.candidate) &&
-                  apiResearchCoversToolBoundary(sibling, retained);
-                // Use the same boundary check as planning. A retained, exactly
-                // bound successful candidate can remain callable after metadata
-                // changes; another invocation's proof cannot stand in for it.
-                if (
-                  apiResearchInputsSha256(sibling) !== handoff.researchInputsSha256 &&
-                  !compatible
-                )
-                  continue;
-                available.set(handoff.toolName, {
-                  toolName: handoff.toolName,
-                  candidate: handoff.candidate,
-                  summary: handoff.summary,
-                  toolDir: pathJoin(input.stagingRoot, 'api-research', sibling.id),
-                });
-              }
-              for (const [id, result] of resultsByToolId) {
-                const sibling = input.plan.tools.find((entry) => entry.id === id);
-                if (sibling)
-                  available.set(sibling.candidate.toolName, {
-                    toolName: sibling.candidate.toolName,
-                    candidate: result.candidate,
-                    summary: result.summary,
-                    toolDir: result.toolDir,
+          const followUp = followUpByToolName.get(sourceTool.candidate.toolName);
+          let evidence = followUp
+            ? followUpResearchEvidence({
+                tool: sourceTool,
+                followUp,
+                triagedSession: input.triagedSession,
+                independent: input.independent,
+                seeds: input.seeds,
+              })
+            : evidenceByTool.get(sourceTool.id);
+          if (!evidence) throw new Error(`API research evidence is missing for "${sourceTool.id}"`);
+          const failureEntries = input.verificationEvidenceByToolName?.get(
+            sourceTool.candidate.toolName,
+          );
+          if (failureEntries?.length) {
+            const payload = { entries: [...evidence.payload.entries, ...failureEntries] };
+            evidence = PromptEvidenceProjectionSchema.parse({
+              ref: addBootstrap(input.seeds, jsonRef(payload)),
+              payload,
+            });
+          }
+          evidenceByTool.set(sourceTool.id, evidence);
+          const { implementationPlan: _implementationPlan, ...tool } = sourceTool;
+          const requiredLinks = apiResearchRequiredLinks(input.plan, sourceTool);
+          const requestCatalog = apiResearchRequestCatalog(input.triagedSession, sourceTool);
+          const firstRequestCatalogPage = apiResearchRequestCatalogPage(requestCatalog, 0);
+          const inspectedRequestSeqs = new Set(followUp?.relevantRequestSeqs ?? []);
+          input.report?.(
+            followUp
+              ? `${tool.candidate.toolName}: continuing API research for the master's missing proof`
+              : `${tool.candidate.toolName}: researching the minimum viable API call`,
+          );
+          try {
+            const outcome = await researchApiMvpCall({
+              run: input.run,
+              recordingIndex: input.recordingIndex,
+              session: input.triagedSession,
+              tool,
+              evidence,
+              ...(followUp
+                ? {
+                    followUp: {
+                      masterDirection: followUp.instruction,
+                      missingProof: followUp.missingProof,
+                      relevantRequestSeqs: followUp.relevantRequestSeqs,
+                      siblingResearch: (input.previousHandoffs ?? []).filter(({ toolName }) =>
+                        followUp.relevantToolNames.includes(toolName),
+                      ),
+                    },
+                    previousProgress: previousByToolName.get(tool.candidate.toolName),
+                  }
+                : {}),
+              requestCatalog: firstRequestCatalogPage.entries,
+              requestCatalogTruncated: firstRequestCatalogPage.page.hasMore,
+              requestCatalogPage: firstRequestCatalogPage.page,
+              loadNextRequestCatalogPage: (offset) =>
+                apiResearchRequestCatalogPage(requestCatalog, offset),
+              requiredLinks,
+              producers: () => {
+                const available = new Map<
+                  string,
+                  {
+                    toolName: string;
+                    candidate: ApiResearchResult['candidate'];
+                    summary: string;
+                    toolDir: string;
+                  }
+                >();
+                for (const handoff of input.previousHandoffs ?? []) {
+                  const sibling = input.plan.tools.find(
+                    ({ candidate }) => candidate.toolName === handoff.toolName,
+                  );
+                  if (!sibling || handoff.status !== 'proven' || !handoff.candidate) continue;
+                  const retained = input.previousResults?.get(handoff.toolName);
+                  const compatible =
+                    retained &&
+                    retained.observation.id === handoff.observation?.id &&
+                    teachingPlanContentSha256(retained.candidate) ===
+                      teachingPlanContentSha256(handoff.candidate) &&
+                    apiResearchCoversToolBoundary(sibling, retained);
+                  // Use the same boundary check as planning. A retained, exactly
+                  // bound successful candidate can remain callable after metadata
+                  // changes; another invocation's proof cannot stand in for it.
+                  if (
+                    apiResearchInputsSha256(sibling) !== handoff.researchInputsSha256 &&
+                    !compatible
+                  )
+                    continue;
+                  available.set(handoff.toolName, {
+                    toolName: handoff.toolName,
+                    candidate: handoff.candidate,
+                    summary: handoff.summary,
+                    toolDir: pathJoin(input.stagingRoot, 'api-research', sibling.id),
                   });
-              }
-              return [...available.values()].filter(
-                ({ toolName }) =>
-                  toolName !== tool.candidate.toolName &&
-                  input.plan.tools.some((entry) => entry.candidate.toolName === toolName),
-              );
-            },
-            inspectRequests: (requestSeqs) => {
-              for (const seq of requestSeqs) inspectedRequestSeqs.add(seq);
-              const delta = inspectionResearchEvidence({
-                tool: sourceTool,
-                requestSeqs,
-                triagedSession: input.triagedSession,
-                independent: input.independent,
-                seeds: input.seeds,
+                }
+                for (const [id, result] of resultsByToolId) {
+                  const sibling = input.plan.tools.find((entry) => entry.id === id);
+                  if (sibling)
+                    available.set(sibling.candidate.toolName, {
+                      toolName: sibling.candidate.toolName,
+                      candidate: result.candidate,
+                      summary: result.summary,
+                      toolDir: result.toolDir,
+                    });
+                }
+                return [...available.values()].filter(
+                  ({ toolName }) =>
+                    toolName !== tool.candidate.toolName &&
+                    input.plan.tools.some((entry) => entry.candidate.toolName === toolName),
+                );
+              },
+              inspectRequests: (requestSeqs) => {
+                for (const seq of requestSeqs) inspectedRequestSeqs.add(seq);
+                const delta = inspectionResearchEvidence({
+                  tool: sourceTool,
+                  requestSeqs,
+                  triagedSession: input.triagedSession,
+                  independent: input.independent,
+                  seeds: input.seeds,
+                });
+                evidence = expandedResearchEvidence({
+                  tool: sourceTool,
+                  additionalRequestSeqs: [...inspectedRequestSeqs],
+                  triagedSession: input.triagedSession,
+                  independent: input.independent,
+                  seeds: input.seeds,
+                });
+                evidenceByTool.set(sourceTool.id, evidence);
+                return { delta, accumulated: evidence };
+              },
+              toolDir: pathJoin(input.stagingRoot, 'api-research', tool.id),
+              agent: input.agent,
+              runDeadline: input.runDeadline,
+              signal: input.signal,
+              report: input.report,
+              dependencies: {
+                requestStep: input.deps.requestApiResearchStep,
+                runApiTool: input.deps.runApiResearchTool,
+              },
+            });
+            unfinishedResearch.delete(sourceTool.id);
+            if (isPartialApiResearch(outcome)) {
+              input.report?.(`${tool.candidate.toolName}: API research is partial`);
+              return ApiResearchHandoffSchema.parse({
+                toolName: tool.candidate.toolName,
+                researchInputsSha256: outcome.researchInputsSha256,
+                status: 'partial',
+                summary: outcome.summary,
+                candidate: outcome.candidate,
+                observation: outcome.observation,
+                observations: outcome.observations,
+                missingProof: outcome.missingProof,
               });
-              evidence = expandedResearchEvidence({
-                tool: sourceTool,
-                additionalRequestSeqs: [...inspectedRequestSeqs],
-                triagedSession: input.triagedSession,
-                independent: input.independent,
-                seeds: input.seeds,
-              });
-              evidenceByTool.set(sourceTool.id, evidence);
-              return { delta, accumulated: evidence };
-            },
-            toolDir: pathJoin(input.stagingRoot, 'api-research', tool.id),
-            agent: input.agent,
-            runDeadline: input.runDeadline,
-            signal: input.signal,
-            report: input.report,
-            dependencies: {
-              requestStep: input.deps.requestApiResearchStep,
-              runApiTool: input.deps.runApiResearchTool,
-            },
-          });
-          unfinishedResearch.delete(sourceTool.id);
-          if (isPartialApiResearch(outcome)) {
-            input.report?.(`${tool.candidate.toolName}: API research is partial`);
-            return ApiResearchHandoffSchema.parse({
+            }
+            resultsByToolId.set(tool.id, outcome);
+            input.report?.(`${tool.candidate.toolName}: API research is proven`);
+            const handoff = ApiResearchHandoffSchema.parse({
               toolName: tool.candidate.toolName,
               researchInputsSha256: outcome.researchInputsSha256,
-              status: 'partial',
+              status: 'proven',
               summary: outcome.summary,
               candidate: outcome.candidate,
               observation: outcome.observation,
               observations: outcome.observations,
-              missingProof: outcome.missingProof,
+            });
+            completedHandoffs.set(handoff.toolName, handoff);
+            settle.get(sourceTool.id)?.();
+            if (canDraft())
+              await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft, input.plan, [
+                ...(input.previousHandoffs ?? []).filter(
+                  (previous) => !completedHandoffs.has(previous.toolName),
+                ),
+                ...completedHandoffs.values(),
+              ]);
+            return handoff;
+          } catch (error) {
+            unfinishedResearch.delete(sourceTool.id);
+            if (!(error instanceof ApiResearchBlockedError)) throw error;
+            input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
+            return ApiResearchHandoffSchema.parse({
+              toolName: tool.candidate.toolName,
+              researchInputsSha256: apiResearchInputsSha256(tool),
+              status: 'blocked',
+              summary: error.message,
+              ...(error.observations.length > 0
+                ? { observations: error.observations.slice(-64) }
+                : {}),
             });
           }
-          resultsByToolId.set(tool.id, outcome);
-          input.report?.(`${tool.candidate.toolName}: API research is proven`);
-          const handoff = ApiResearchHandoffSchema.parse({
-            toolName: tool.candidate.toolName,
-            researchInputsSha256: outcome.researchInputsSha256,
-            status: 'proven',
-            summary: outcome.summary,
-            candidate: outcome.candidate,
-            observation: outcome.observation,
-            observations: outcome.observations,
-          });
-          completedHandoffs.set(handoff.toolName, handoff);
-          if (canDraft())
-            await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft, input.plan, [
-              ...(input.previousHandoffs ?? []).filter(
-                (previous) => !completedHandoffs.has(previous.toolName),
-              ),
-              ...completedHandoffs.values(),
-            ]);
-          return handoff;
-        } catch (error) {
-          unfinishedResearch.delete(sourceTool.id);
-          if (!(error instanceof ApiResearchBlockedError)) throw error;
-          input.report?.(`${tool.candidate.toolName}: API research is factually blocked`);
-          return ApiResearchHandoffSchema.parse({
-            toolName: tool.candidate.toolName,
-            researchInputsSha256: apiResearchInputsSha256(tool),
-            status: 'blocked',
-            summary: error.message,
-            ...(error.observations.length > 0
-              ? { observations: error.observations.slice(-64) }
-              : {}),
-          });
+        } finally {
+          settle.get(sourceTool.id)?.();
         }
       },
     },
@@ -6310,8 +6334,20 @@ async function runScheduledFreshTeach(
         const seed = seeds.get(contentRefKey(ref));
         if (seed?.kind === 'json' && teachingPlanContentSha256(seed.value) === ref.sha256)
           return seed.value;
-        if (journal) return journal.readJson(ref);
-        throw new Error('Shared research reference is absent from this run');
+        if (journal) {
+          try {
+            return journal.readJson(ref);
+          } catch (error) {
+            if (
+              !error ||
+              typeof error !== 'object' ||
+              !('code' in error) ||
+              error.code !== 'ENOENT'
+            )
+              throw error;
+          }
+        }
+        return readRunResearchJsonObject(runRoot, ref);
       },
       onEvent: (event) =>
         appendFileSync(pathJoin(runRoot, 'research-memory.jsonl'), `${JSON.stringify(event)}\n`, {
