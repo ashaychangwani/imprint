@@ -15393,3 +15393,21 @@ dependent direct call fails semantically, promotes ready producer-consumer
 work ahead of unrelated partial research, and narrows unproven optional
 controls when a useful smaller tool is already demonstrated. No site-specific
 runtime rule was added. A new isolated teach is required to test this change.
+
+## September 23 — Flights24 stopped after an incorrect tool merge
+
+Flights24 started fresh on `0a38711` and was stopped after 16.74 minutes when
+the master accepted one search tool for distinct one-way, round-trip, and
+multi-city tasks and one booking tool for their different continuations. No
+live response, generated tool or audit resulted. Discovery/advice/plan took
+15.99 minutes (95.51%); just-started research took 0.75 (4.49%). The
+interrupted trace did not export usage, so token and cost figures are unknown.
+Evidence is preserved; see docs/teach-flights-24-retrospective-2026-09-23.md.
+
+Advisor and master guidance now requires a shared public contract and
+verification path to justify merging. Different request construction, result
+meaning, or continuation obligations call for separate tools even when a broad
+goal or endpoint is shared. This is site-neutral and leaves runtime mechanics
+unchanged. Validate with a fresh run, not a Flights24 resume.
+Lint and type checking passed; 206 focused tests and 1,441 assertions passed
+across three files. The prior checkpoint's full suite had 2,051 passing tests.

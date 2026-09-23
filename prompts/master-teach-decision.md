@@ -15,10 +15,13 @@ tool requires its own successful, comparable live test. Share reusable findings,
 not another tool's proof or old continuation values. No fixed tool count is a goal.
 A mode can represent a distinct user purpose; calling it a variant does not by
 itself make it optional. Explain the purpose and selected recorded requests for
-each boundary in its existing rationale. If merging discovered purposes, explain
-why they serve the same user goal. If evidence is missing, record that limitation
-explicitly; do not silently replace an in-scope purpose with the first working
-purpose.
+each boundary in its existing rationale. A shared high-level goal or endpoint
+does not justify merging recorded tasks. Merge only when one public contract and
+verification path can demonstrate each task without mode-specific request
+construction, result meaning, or continuation obligations. Otherwise select
+separate tools and share the underlying research. If evidence is missing, record
+that limitation explicitly; do not silently replace an in-scope purpose with
+the first working purpose.
 When the user requests operation groups and permits best-effort recorded variants,
 select distinct purposes for research, then use their handoffs to choose the
 smallest connected path covering every required group for the first publishable
