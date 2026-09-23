@@ -15610,3 +15610,27 @@ bootstrap seed; a regression covers journal creation after source mutation.
 The full suite passed 2,059 tests; lint, type checking, and diff checks passed.
 The precise offending Flights31 seed was not logged, so live confirmation still
 requires a new isolated teach. Future mismatch errors now include both refs.
+
+## September 23 — Flights32 fixed journal setup, then exhausted planning time
+
+Flights32 was fresh on `fe06474`. All nine first-pass API research paths were
+proven, including fresh booking dependencies. The master chose seven tools,
+excluding one-way search and booking because their recorded response body is
+missing. The journal opened successfully, confirming the bootstrap snapshot
+fix. But the master changed every planner proposal's exact compile-input
+binding, so seven planners ran again. A second master decision ended at minute
+87.7, leaving 2.3 minutes for compilation. The 90-minute deadline stopped
+three active compilers with 0 ready tools and no audit. There was no capacity,
+disk, or power failure. See
+docs/teach-flights-32-retrospective-2026-09-23.md; evidence is preserved.
+
+Discovery and initial planning took 22.42 minutes (24.91%), first-pass
+research and overlapping drafts 30.43 (33.80%), and review/replanning plus
+unfinished compilation 37.18 (41.29%). Trace usage was 46,695,195 input
+tokens (42,856,832 cache reads), 254,599 output, zero reported cache writes,
+and an estimated $37.5881648 base API equivalent. Master guidance now says
+to carry an accepted planner's exact tool and implementation-plan reference
+unchanged, with explanation in its decision reason. Genuine contract changes
+still trigger focused replanning. This prompt-only correction needs a fresh
+teach before any reliability or speed claim. The full suite passed 2,059 tests;
+lint, type checking, and diff checks passed.

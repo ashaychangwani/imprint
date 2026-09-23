@@ -367,6 +367,13 @@ evidence-backed proposal, choose and explain a concrete evidence-backed
 alternative, or make the operation explicitly unresolved in
 `candidateCoverage`. If you reject a proposal, put the exact correction or
 missing evidence in `reason`; the next focused planner receives that guidance.
+When accepting a proposal, carry its complete tool object and
+`implementationPlan` reference unchanged into `desiredPlan`. Put explanatory
+wording in the decision `reason`, not in the accepted tool's descriptions,
+notes, or strategy reason: even wording changes invalidate that plan's exact
+compile-input binding and require another focused-planner pass. Change only
+tools whose contract or evidence actually needs revision, and explain that
+change so the retained planner can repair the affected tool.
 
 Reject an implementation plan whose instructions require a value but do not
 name how the artifact can obtain it from its recorded requests, a declared
