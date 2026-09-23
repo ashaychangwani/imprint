@@ -338,8 +338,10 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
   return ApiResearchOutputSchema.superRefine((output, ctx) => {
     if (!same(output.binding, apiResearchBinding(input)))
       issue(ctx, ['binding'], 'stale API-research binding');
+    if (output.candidate && output.candidateRef)
+      issue(ctx, ['candidateRef'], 'supply a complete candidate or a retained reference, not both');
     if (output.testCases) {
-      if (output.action !== 'test' || !output.candidate)
+      if (output.action !== 'test' || (!output.candidate && !output.candidateRef))
         issue(ctx, ['testCases'], 'batches require a test candidate');
       else
         for (const [index, test] of output.testCases.entries()) {
@@ -350,7 +352,14 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
           const checked = apiResearchOutputSchema(input).safeParse({
             ...output,
             testCases: undefined,
-            candidate: { ...output.candidate, parameterValues: test.parameterValues },
+            ...(output.candidate
+              ? { candidate: { ...output.candidate, parameterValues: test.parameterValues } }
+              : {
+                  candidateRef: {
+                    ...output.candidateRef,
+                    parameterValues: test.parameterValues,
+                  },
+                }),
           });
           if (!checked.success) issue(ctx, ['testCases', index], checked.error.message);
         }
@@ -363,7 +372,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
         )
       )
         issue(ctx, ['producerCall'], 'choose an available producer and supply its parameters');
-      if (output.candidate || output.basedOnObservationId)
+      if (output.candidate || output.candidateRef || output.basedOnObservationId)
         issue(ctx, ['candidate'], 'calling a producer does not prove the consumer');
       return;
     }
@@ -401,6 +410,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       }
       for (const field of [
         'candidate',
+        'candidateRef',
         'basedOnObservationId',
         'missingProof',
         'requestedRequestSeqs',
@@ -413,6 +423,8 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       issue(ctx, ['resultQuery'], 'only result inspection may request live text');
     if (output.action === 'catalog') {
       if (output.candidate) issue(ctx, ['candidate'], 'catalog paging does not test a candidate');
+      if (output.candidateRef)
+        issue(ctx, ['candidateRef'], 'catalog paging does not test a candidate');
       if (output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], 'catalog paging cannot claim a tested candidate');
       if (output.missingProof)
@@ -425,6 +437,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
     }
     if (output.action === 'inspect') {
       if (output.candidate) issue(ctx, ['candidate'], 'inspection does not test a candidate');
+      if (output.candidateRef) issue(ctx, ['candidateRef'], 'inspection does not test a candidate');
       if (output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], 'inspection cannot claim a tested candidate');
       if (output.missingProof)
@@ -448,6 +461,8 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
     if (output.action === 'blocked') {
       if (output.candidate)
         issue(ctx, ['candidate'], 'blocked research cannot hand off a candidate');
+      if (output.candidateRef)
+        issue(ctx, ['candidateRef'], 'blocked research cannot hand off a candidate');
       if (output.basedOnObservationId)
         issue(ctx, ['basedOnObservationId'], 'blocked research cannot claim a proven observation');
       if (output.missingProof)
@@ -463,6 +478,27 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
         issue(ctx, ['missingProof'], 'partial research requires the exact missing proof');
       if (output.action === 'proven' && output.missingProof)
         issue(ctx, ['missingProof'], 'proven research cannot have missing proof');
+    }
+    if (output.candidateRef) {
+      if (output.action === 'test' && output.candidateRef.testBackend === undefined)
+        issue(ctx, ['candidateRef', 'testBackend'], 'a referenced test must select its backend');
+      if (output.action === 'test' && output.basedOnObservationId)
+        issue(ctx, ['basedOnObservationId'], 'a new test cannot claim an older observation');
+      if (output.action === 'test' && output.missingProof)
+        issue(ctx, ['missingProof'], 'a new test cannot claim a settled proof gap');
+      const referenced = input.observations.find(
+        ({ id }) => id === output.candidateRef?.observationId,
+      );
+      if (!referenced || referenced.producerToolName)
+        issue(ctx, ['candidateRef', 'observationId'], 'reference is not a test of this tool');
+      if (
+        output.action !== 'test' &&
+        output.basedOnObservationId !== output.candidateRef.observationId
+      )
+        issue(ctx, ['candidateRef', 'observationId'], 'proof must reference its exact observation');
+      // The host resolves the immutable candidate and validates the complete
+      // replacement before execution or proof acceptance.
+      return;
     }
     const candidate = output.candidate;
     if (!candidate) {

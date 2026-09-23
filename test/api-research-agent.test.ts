@@ -1622,6 +1622,191 @@ describe('focused API research', () => {
     ).toThrow('proven candidate differs from the tested request');
   });
 
+  it('reuses an immutable tested candidate with explicit new inputs and exact final proof', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-ref-'));
+    const original = apiCandidate('retained', 'fetch');
+    let turns = 0;
+    const calls: Record<string, string | number | boolean>[] = [];
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        session,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 10_000),
+        dependencies: {
+          requestStep: async (input) => {
+            turns++;
+            const prior = input.observations.at(-1);
+            const output =
+              turns === 1
+                ? { binding, action: 'test', candidate: original, reason: 'First recorded call.' }
+                : turns === 2
+                  ? {
+                      binding,
+                      action: 'test',
+                      candidateRef: {
+                        observationId: prior?.id,
+                        parameterValues: { query: 'beta' },
+                        testBackend: 'fetch',
+                      },
+                      reason: 'Same workflow with another recorded input.',
+                    }
+                  : {
+                      binding,
+                      action: 'proven',
+                      candidateRef: {
+                        observationId: prior?.id,
+                        parameterValues: { query: 'beta' },
+                        testBackend: 'fetch',
+                      },
+                      basedOnObservationId: prior?.id,
+                      reason: 'Exact second observation is semantic proof.',
+                    };
+            return parseApiResearchOutput(JSON.stringify(output), input);
+          },
+          runApiTool: async ({ parameters }) => {
+            calls.push(parameters);
+            return {
+              result: { ok: true, data: { items: [{ id: String(parameters.query) }] } },
+              executionMechanism: 'fetch',
+            };
+          },
+        },
+      });
+      expect(turns).toBe(3);
+      expect(calls).toEqual([{ query: 'alpha' }, { query: 'beta' }]);
+      expect(result.candidate.workflow).toEqual(original.workflow);
+      expect(result.candidate.parameterValues).toEqual({ query: 'beta' });
+      expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(result.candidate));
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(toolDir, 'candidate-registry', `${result.observations?.[0]?.id}.json`),
+            'utf8',
+          ),
+        ),
+      ).toEqual(original);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects foreign and substituted candidate references before accepting proof', () => {
+    const tested = apiCandidate('tested', 'fetch');
+    const observation = {
+      id: 'own-observation',
+      candidateSha256: apiResearchCandidateSha256(tested),
+      executionMechanism: 'fetch',
+      backendAttempts: [],
+      responseObservations: [],
+      result: { ok: true, preview: '{"items":[{"id":"item-1"}]}' },
+    };
+    const input = { run, recordingIndex, tool, evidence, observations: [observation] };
+    const ref = {
+      observationId: 'another-run-or-tool',
+      parameterValues: { query: 'alpha' },
+      testBackend: 'fetch',
+    };
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({ binding, action: 'test', candidateRef: ref, reason: 'Foreign.' }),
+        input,
+      ),
+    ).toThrow('reference is not a test of this tool');
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding,
+          action: 'test',
+          candidateRef: { ...ref, observationId: observation.id },
+          basedOnObservationId: observation.id,
+          reason: 'A test cannot inherit proof.',
+        }),
+        input,
+      ),
+    ).toThrow('a new test cannot claim an older observation');
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding,
+          action: 'proven',
+          candidateRef: { ...ref, observationId: observation.id },
+          basedOnObservationId: 'another-invocation',
+          reason: 'Substituted proof.',
+        }),
+        input,
+      ),
+    ).toThrow('proof must reference its exact observation');
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding: { ...binding, runId: 'other-run' },
+          action: 'test',
+          candidateRef: { ...ref, observationId: observation.id },
+          reason: 'Stale run.',
+        }),
+        input,
+      ),
+    ).toThrow('stale API-research binding');
+  });
+
+  it('does not let a reference change test inputs while claiming the old observation', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-ref-proof-'));
+    const original = apiCandidate('retained', 'fetch');
+    let calls = 0;
+    try {
+      await expect(
+        researchApiMvpCall({
+          run,
+          recordingIndex,
+          tool,
+          evidence,
+          session,
+          toolDir,
+          agent: {},
+          runDeadline: new RunDeadline(Date.now() + 10_000),
+          dependencies: {
+            requestStep: async (input) => {
+              const prior = input.observations[0];
+              return parseApiResearchOutput(
+                JSON.stringify(
+                  prior
+                    ? {
+                        binding,
+                        action: 'proven',
+                        candidateRef: {
+                          observationId: prior.id,
+                          parameterValues: { query: 'different' },
+                          testBackend: 'fetch',
+                        },
+                        basedOnObservationId: prior.id,
+                        reason: 'Wrong invocation must be rejected.',
+                      }
+                    : { binding, action: 'test', candidate: original, reason: 'First test.' },
+                ),
+                input,
+              );
+            },
+            runApiTool: async () => {
+              calls++;
+              return {
+                result: { ok: true, data: { items: [{ id: 'alpha' }] } },
+                executionMechanism: 'fetch',
+              };
+            },
+          },
+        }),
+      ).rejects.toThrow('candidate differs from the tested request');
+      expect(calls).toBe(1);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('admits bounded inspection from any shown catalog page but rejects unknown requests', () => {
     const input = {
       run,

@@ -15411,3 +15411,32 @@ goal or endpoint is shared. This is site-neutral and leaves runtime mechanics
 unchanged. Validate with a fresh run, not a Flights24 resume.
 Lint and type checking passed; 206 focused tests and 1,441 assertions passed
 across three files. The prior checkpoint's full suite had 2,051 passing tests.
+
+## September 23 — Flights25 proved research paths but timed out before tools
+
+Flights25 was fresh on `e3796d1` and retained separate flight purposes. It
+ended at the 90-minute hard deadline with 0 published tools and no audit.
+Live research proved location lookup, one-way and multi-city searches, initial
+round-trip search, a narrowed 7×7 date grid, and multi-city booking with a
+fresh two-leg selection. One-way booking returned real offers only through a
+fixed first-result click that ignored the caller's Southwest selection, so
+the master correctly excluded it. Round-trip booking was deferred.
+
+Discovery and the first plan took 17.65 minutes; parallel initial research
+took 32.68; review, follow-ups, and final planning consumed 39.70. Six
+planners began only at minute 87.6 and hit the deadline. The run reported
+41,143,693 input tokens (37,678,464 cache reads), 283,255 output, zero
+reported cache writes, and an estimated $34.5974016 base API equivalent.
+There were no native-family errors; disk remained usable. Details and limits
+are in docs/teach-flights-25-retrospective-2026-09-23.md. Evidence is intact.
+
+An internal candidate reference now lets a researcher reuse an earlier tested
+workflow and transform without emitting it again. Every referenced test still
+chooses explicit inputs and backend, and the host resolves it only from this
+run's tool directory. Full candidate input remains supported. A proof claim
+must cite the same observation and pass the existing exact-candidate check;
+foreign, stale, or changed-input references are rejected. This targets the
+repeated large candidate output seen in Flights25; it is not yet a measured
+speed improvement. The affected controller/research checks passed 285 tests,
+lint and type checking passed. Validate with a new isolated teach, not a
+Flights25 resume.

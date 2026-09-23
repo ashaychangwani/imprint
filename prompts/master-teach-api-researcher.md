@@ -49,11 +49,20 @@ Copy `validationContext.binding` exactly. Return one JSON object and nothing
 else.
 
 For `partial` or `proven`, `basedOnObservationId` must identify your own
-successful test and `candidate` must be that exact tested object, including
-parameter values, request-transform source, and backend selection. Do not
+successful test and the candidate or reference must identify that exact tested
+object, including parameter values, request-transform source, and backend selection. Do not
 reconstruct or improve it while reporting proof. If it changed, return `test`
 first. If no successful test supports the handoff, report the unresolved gap
 as `blocked` instead of attaching untested changes to an older observation.
+You may use `candidateRef: { observationId, parameterValues, testBackend? }`
+instead of repeating a full tested candidate. The reference resolves only to a
+candidate retained for this tool in this run. For another `test`, supply explicit
+parameter values and `testBackend`; the host applies them to the referenced
+workflow and transform. For `partial` or `proven`, cite the same observation in
+`candidateRef.observationId` and `basedOnObservationId`, with its exact tested
+parameter values and backend. Omit `testBackend` only if the referenced test
+omitted it. Changing the workflow or transform requires a full candidate and a
+new test. Never supply both `candidate` and `candidateRef`.
 
 Network-capture timeouts can include a bounded observed-response summary:
 endpoints without query values, methods, resource types, statuses and navigation
@@ -761,6 +770,8 @@ For `proven`, include the identical `candidate` and add
 `missingProof`, an array of concrete remaining proof gaps. A partial candidate
 must have a successful cited observation. For `blocked`, omit `candidate`,
 `basedOnObservationId`, and `missingProof`.
+For `test`, `proven`, or `partial`, `candidateRef` may replace `candidate` as
+described above; a final claim still needs `basedOnObservationId`.
 For `inspect`, omit those fields and include only `requestedRequestSeqs` from
 the supplied compact catalog. Omit `requestedRequestSeqs` for every other
 action.

@@ -21,6 +21,7 @@ import { abortSignalError } from './concurrency.ts';
 import { inspectEvidenceText } from './evidence-inspection.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import {
+  ApiResearchCandidateSchema,
   ApiResearchInputSchema,
   ApiResearchObservationSchema,
 } from './master-teach-agent-contracts.ts';
@@ -39,6 +40,7 @@ import {
   apiResearchCandidateSha256,
   apiResearchInputsSha256,
   apiResearchStableInputsSha256,
+  parseApiResearchOutput,
   type requestApiResearchStep,
 } from './master-teach-agents.ts';
 import { teachingPlanContentSha256 } from './master-teach-plan.ts';
@@ -59,6 +61,10 @@ import type { ConcreteBackend } from './types.ts';
 
 const RESULT_PREVIEW_BYTES = 12_000;
 const TRUNCATED_PREVIEW_SUFFIX = '\n[preview truncated]';
+
+function retainedCandidatePath(toolDir: string, observationId: string): string {
+  return pathJoin(toolDir, 'candidate-registry', `${observationId}.json`);
+}
 
 export interface ApiResearchResult {
   researchInputsSha256: string;
@@ -589,6 +595,26 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
         decision =
           pending ??
           (await input.dependencies.requestStep(researchInput, input.agent, retainedTurnDelta));
+        if (decision.candidateRef) {
+          const reference = decision.candidateRef;
+          const prior = observations.find(({ id }) => id === reference.observationId);
+          if (!prior || prior.producerToolName)
+            throw new Error('API research candidate reference is outside this tool');
+          const stored = ApiResearchCandidateSchema.parse(
+            JSON.parse(readFileSync(retainedCandidatePath(input.toolDir, prior.id), 'utf8')),
+          );
+          if (apiResearchCandidateSha256(stored) !== prior.candidateSha256)
+            throw new Error('API research candidate reference does not match retained proof');
+          const candidate: ApiResearchCandidate = {
+            ...stored,
+            parameterValues: reference.parameterValues,
+            ...(reference.testBackend === undefined ? {} : { testBackend: reference.testBackend }),
+          };
+          decision = parseApiResearchOutput(
+            JSON.stringify({ ...decision, candidateRef: undefined, candidate }),
+            researchInput,
+          );
+        }
         if (!pending && decision.action === 'test' && decision.testCases && decision.candidate) {
           const candidate = decision.candidate;
           pendingTests.push(
@@ -785,6 +811,14 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
       let rawResponses: unknown[] | undefined;
       const observationId = randomUUID();
       const candidateSha256 = apiResearchCandidateSha256(candidate);
+      // A candidate reference is scoped to this run's tool directory and to an
+      // actual retained observation. Never overwrite an earlier test candidate.
+      const candidatePath = retainedCandidatePath(input.toolDir, observationId);
+      mkdirSync(pathJoin(input.toolDir, 'candidate-registry'), { recursive: true });
+      writeFileSync(candidatePath, `${JSON.stringify(candidate)}\n`, {
+        encoding: 'utf8',
+        flag: 'wx',
+      });
       const responseEvidence: NonNullable<ApiResearchObservation['responseEvidence']> = [];
       const observed = await input.dependencies.runApiTool({
         cdpPool,

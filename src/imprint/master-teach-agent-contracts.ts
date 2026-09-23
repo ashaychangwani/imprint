@@ -378,6 +378,14 @@ export const ApiResearchOutputSchema = strictObject({
     project: utf8Text(1, 8_000).optional(),
   }).optional(),
   candidate: ApiResearchCandidateSchema.optional(),
+  /** Reuse an exact candidate from this tool's retained test observation. */
+  candidateRef: strictObject({
+    observationId: PromptIdSchema,
+    parameterValues: ScalarParameterValuesSchema,
+    testBackend: z
+      .enum(['auto', 'fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'])
+      .optional(),
+  }).optional(),
   /** Agent explanation when its executable request references differ from the
    * selected tool's recorded requests. The host checks identity, not purpose. */
   recordingReferenceChange: strictObject({
