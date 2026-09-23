@@ -1461,6 +1461,83 @@ describe('fresh foreground master controller end to end', () => {
     });
   }
 
+  it('plans a proven dependent during native master review without compiling it early', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const base = lifecycleFailureFixture({
+        runId: 'native-dependent-plan-overlap',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const deadline = new RunDeadline(Date.now() + 600_000);
+      const family = new NativeTeachAgents(
+        { root: join(root, 'native-family'), model: 'fixture', deadline },
+        async () => {
+          throw new Error('Fixture must not use a provider');
+        },
+      );
+      let producerProven!: () => void;
+      const producerReady = new Promise<void>((resolve) => {
+        producerProven = resolve;
+      });
+      let dependentPlannerStarted!: () => void;
+      const dependentPlan = new Promise<void>((resolve) => {
+        dependentPlannerStarted = resolve;
+      });
+      let reviewed = false;
+      let plannedBeforeReview = false;
+      let compiledBeforeReview = false;
+      await family.run(() =>
+        runFreshMasterTeach(
+          {
+            site: SITE,
+            fromSession: syntheticSessionPath(root),
+            noInteractive: true,
+            provider: 'codex-cli',
+            maxDurationMs: 600_000,
+          },
+          {
+            ...base,
+            requestApiResearchStep: async (input, ...rest) => {
+              if (!base.requestApiResearchStep) throw new Error('Missing researcher');
+              const decision = await base.requestApiResearchStep(input, ...rest);
+              if (input.tool.id === PRODUCER_ID && decision.action === 'proven') producerProven();
+              if (input.tool.id === CONSUMER_ID && decision.action === 'proven')
+                await producerReady;
+              return decision;
+            },
+            requestFocusedPlan: async (input) => {
+              if (!base.requestFocusedPlan) throw new Error('Missing planner');
+              if (input.tool.id === CONSUMER_ID) {
+                plannedBeforeReview ||= !reviewed;
+                dependentPlannerStarted();
+              }
+              return await base.requestFocusedPlan(input);
+            },
+            requestMasterDecision: async (input, options) => {
+              if (!base.requestMasterDecision) throw new Error('Missing master');
+              if (input.decisionPurpose === 'research_review') {
+                await Promise.race([
+                  dependentPlan,
+                  new Promise<void>((resolve) => setTimeout(resolve, 300)),
+                ]);
+                reviewed = true;
+              }
+              return await base.requestMasterDecision(input, options);
+            },
+            compileFocusedTool: async (input) => {
+              if (!base.compileFocusedTool) throw new Error('Missing compiler');
+              if (input.tool.id === CONSUMER_ID && !reviewed) compiledBeforeReview = true;
+              return await base.compileFocusedTool(input);
+            },
+          },
+        ),
+      );
+      expect(plannedBeforeReview).toBeTrue();
+      expect(compiledBeforeReview).toBeFalse();
+    });
+  });
+
   it('pages to omitted requests and sends sequential inspections without repeating prior evidence', async () => {
     await withTemporaryImprintHome(async (root) => {
       const recording = largeCatalogSyntheticSessionPath(root);

@@ -15440,3 +15440,33 @@ repeated large candidate output seen in Flights25; it is not yet a measured
 speed improvement. The affected controller/research checks passed 285 tests,
 lint and type checking passed. Validate with a new isolated teach, not a
 Flights25 resume.
+
+## September 23 — Flights26 proved fresh booking selection, then missed planning
+
+Flights26 ran fresh on `5a16bab` and ended at the 90-minute deadline with
+0 ready tools and no audit. Research proved location lookup, one-way search,
+a date grid, and browser-owned one-way booking from a fresh search result.
+Two selected flights, Southwest WN496 and Alaska AS1307, produced different
+matching booking responses through a parameter-derived click. Direct booking
+POSTs returned protocol error 13, and fixed-position/unclickable selectors
+were rejected before the final proof.
+
+Discovery and initial planning took 19.28 minutes; first-pass research took
+20.04; master reviews and follow-up research took 50.71, leaving four
+focused planners to start around minute 85. Three timed out before normal
+compilation. A separate candidate-reference validation defect discarded a
+semantic multi-city response: the reference failed to carry its already
+accepted recording-change explanation. The initial one-way recording choice
+also included multi-city request 245 without its preceding action cue.
+Usage was 38,847,371 input tokens (35,963,904 cache reads), 240,045 output,
+zero reported cache writes, and an estimated $30.7203296 base API equivalent.
+No provider-family, power, or disk failure explains the outcome. See
+docs/teach-flights-26-retrospective-2026-09-23.md; all failed evidence remains.
+
+The next checkpoint retains validated provenance with each immutable candidate
+reference, delivers the nearest recorded action with selected request evidence,
+and lets native agents plan proven tools during master review when time permits.
+Dependent compilers still wait for producer-first build waves, and final plans
+reuse only exact compatible drafts. Focused controller/research/evidence tests
+passed 107 cases; lint and type checking passed. A new isolated teach is
+required to establish whether this improves reliability or timing.

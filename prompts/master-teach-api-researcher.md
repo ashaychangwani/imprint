@@ -194,6 +194,10 @@ whether another page exists. If the needed shape is absent and `hasMore` is
 true, return `action: "catalog"`; the host will show the next compact page in
 this same retained conversation. This makes every recorded request reachable
 without dumping request bodies or the whole index into one turn.
+The initial focused evidence also lists the nearest preceding action for each
+selected representative request. Check it against this tool's purpose before
+your first test; if it conflicts, inspect comparable requests and report a
+recording-reference correction rather than treating the master selection as proof.
 
 When you identify a relevant call on the current or an earlier page, return
 `action: "inspect"` with up to 32 exact `requestedRequestSeqs`. The host will

@@ -79,7 +79,9 @@ research where applicable and document any evidence-backed exclusions. Choose
 comparable captured response bodies for each parser fixture; never silently
 substitute another purpose or mode merely because it has a body. The supplied
 selectedRecordingEvidence contains the advisor's selected wire examples, with
-explicit missing-body/truncation facts, before you choose the contracts.
+explicit missing-body/truncation facts and each request's nearest preceding
+user action, before you choose the contracts. Correct a selected request whose
+action serves another purpose before assigning it as a representative fixture.
 
 `discovery.recordingResponseBodySeqs` lists the captured response bodies available
 for parser fixtures. Use it when selecting the mode, before research begins.

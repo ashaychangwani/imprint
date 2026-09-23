@@ -159,6 +159,7 @@ import {
   discoveryEvidenceDocuments,
   focusedEvidenceDocuments,
   observeIndependentExecution,
+  recordingRequestPrecedingEvent,
   selectedRecordingEvidenceDocuments,
 } from './replay-evidence.ts';
 import { loadCredentialStore } from './runtime.ts';
@@ -177,6 +178,7 @@ import {
 import { NativeTeachAgents, currentNativeTeachAgents } from './native-teach-agents.ts';
 
 const FOCUSED_COMPILE_CONCURRENCY = 4;
+const SPECULATIVE_PLANNING_MIN_REMAINING_MS = 180_000;
 const DEFAULT_PLAYBOOK_CHECK_TIMEOUT_MS = 150_000;
 const TOOL_INVOCATION_SETTLE_GRACE_MS = DEFAULT_PLAYBOOK_CLEANUP_TIMEOUT_MS + 500;
 export const DISCOVERY_EVIDENCE_CHARACTER_BUDGET = 750_000;
@@ -2574,20 +2576,46 @@ function expandedResearchEvidence(input: {
     ...input.additionalRequestSeqs,
   ]);
   for (const seq of owned) supportSeqs.delete(seq);
+  const actionSeqs = [
+    ...new Set([
+      ...(input.tool.candidate.representativeSeqs.length
+        ? input.tool.candidate.representativeSeqs
+        : input.tool.candidate.requestSeqs),
+      ...input.additionalRequestSeqs,
+    ]),
+  ].slice(0, 32);
   return buildPromptEvidenceProjection(
-    focusedEvidenceDocuments({
-      session: input.triagedSession,
-      scope: {
-        toolName: input.tool.candidate.toolName,
-        requestSeqs: [...owned],
-        representativeSeqs: [
-          ...new Set([...input.tool.candidate.representativeSeqs, ...input.additionalRequestSeqs]),
-        ],
-        dependencySeqs: [...supportSeqs],
-        eventSeqs: input.tool.candidate.eventSeqs,
+    [
+      {
+        provenance: 'recording_event',
+        value: {
+          kind: 'selected_request_action_context',
+          entries: actionSeqs.map((recordingRequestSeq) => ({
+            recordingRequestSeq,
+            precedingEvent: recordingRequestPrecedingEvent(
+              input.triagedSession,
+              recordingRequestSeq,
+            ),
+          })),
+        },
       },
-      independent: input.independent,
-    }),
+      ...focusedEvidenceDocuments({
+        session: input.triagedSession,
+        scope: {
+          toolName: input.tool.candidate.toolName,
+          requestSeqs: [...owned],
+          representativeSeqs: [
+            ...new Set([
+              ...input.tool.candidate.representativeSeqs,
+              ...input.additionalRequestSeqs,
+            ]),
+          ],
+          dependencySeqs: [...supportSeqs],
+          eventSeqs: input.tool.candidate.eventSeqs,
+        },
+        independent: input.independent,
+      }),
+    ],
     input.seeds,
     input.maximumCharacters ?? FOCUSED_EVIDENCE_CHARACTER_BUDGET,
     new Set(['focused_recording_scope', 'focused_request_summaries', 'focused_event_summaries']),
@@ -2610,21 +2638,10 @@ function inspectionResearchEvidence(input: {
     value: {
       kind: 'inspected_request_action_context',
       entries: input.requestSeqs.flatMap((seq) => {
-        const request = input.triagedSession.requests.find((entry) => entry.seq === seq);
-        if (!request) return [];
-        const preceding = input.triagedSession.events
-          .filter((event) => event.timestamp <= request.timestamp)
-          .at(-1);
         return [
           {
             recordingRequestSeq: seq,
-            precedingEvent: preceding
-              ? {
-                  seq: preceding.seq,
-                  type: preceding.type,
-                  detail: utf8Prefix(preceding.detail, 400),
-                }
-              : null,
+            precedingEvent: recordingRequestPrecedingEvent(input.triagedSession, seq),
           },
         ];
       }),
@@ -2695,6 +2712,8 @@ async function researchSelectedOperations(input: {
     handoff: ApiResearchHandoff,
     evidence: PromptEvidenceProjection,
     canDraft: () => boolean,
+    plan: EditableTeachingPlan,
+    knownHandoffs: readonly ApiResearchHandoff[],
   ) => Promise<void>;
 }): Promise<PrePlanApiResearch> {
   const evidenceByTool = focusedEvidenceForPlan({
@@ -2715,7 +2734,14 @@ async function researchSelectedOperations(input: {
     : input.plan.tools;
   const queuedResearch = new Set(targetTools.map(({ id }) => id));
   const unfinishedResearch = new Set(queuedResearch);
-  const canDraft = () => queuedResearch.size === 0 && unfinishedResearch.size > 0;
+  // A last native researcher can overlap planning with master review when
+  // enough time remains. Ordinary drafts still overlap unfinished research.
+  const canDraft = () =>
+    queuedResearch.size === 0 &&
+    (unfinishedResearch.size > 0 ||
+      (Boolean(currentNativeTeachAgents()) &&
+        input.runDeadline.deadlineMs - Date.now() >= SPECULATIVE_PLANNING_MIN_REMAINING_MS));
+  const completedHandoffs = new Map<string, ApiResearchHandoff>();
   const researched = await compileEveryToolInBuildWaves(
     { tools: targetTools, buildWaves: [targetTools.map(({ id }) => id)] },
     {
@@ -2887,7 +2913,14 @@ async function researchSelectedOperations(input: {
             observation: outcome.observation,
             observations: outcome.observations,
           });
-          if (canDraft()) await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft);
+          completedHandoffs.set(handoff.toolName, handoff);
+          if (canDraft())
+            await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft, input.plan, [
+              ...(input.previousHandoffs ?? []).filter(
+                (previous) => !completedHandoffs.has(previous.toolName),
+              ),
+              ...completedHandoffs.values(),
+            ]);
           return handoff;
         } catch (error) {
           unfinishedResearch.delete(sourceTool.id);
@@ -2979,6 +3012,7 @@ async function reviewApiResearchBeforePlanning(input: {
     decision: MasterDecision;
     decisionRef: ContentAddressedRef;
   }) => EditableTeachingPlan;
+  onProven?: Parameters<typeof researchSelectedOperations>[0]['onProven'];
 }): Promise<ReviewedPrePlanApiResearch> {
   let plan = input.initialPlan;
   if (plan.tools.length === 0) {
@@ -3049,6 +3083,7 @@ async function reviewApiResearchBeforePlanning(input: {
         toolIds: new Set(missingTools.map(({ id }) => id)),
         previousHandoffs: [...handoffs.values()],
         previousResults: results,
+        onProven: input.onProven,
       });
       mergeResearch(plan, fresh);
     }
@@ -3186,6 +3221,7 @@ async function reviewApiResearchBeforePlanning(input: {
         toolIds: staleSiblingIds,
         previousHandoffs: [...handoffs.values()],
         previousResults: results,
+        onProven: input.onProven,
       });
       mergeResearch(plan, refreshedSiblings);
     }
@@ -3248,6 +3284,7 @@ async function reviewApiResearchBeforePlanning(input: {
         followUps: ready.map(({ followUp }) => followUp),
         previousHandoffs: latestHandoffs,
         previousResults: results,
+        onProven: input.onProven,
       });
       mergeResearch(plan, continued);
     }
@@ -3438,8 +3475,8 @@ async function discoverAndPlan(input: {
   const initialPlanObject = jsonRef(initialPlan);
   addBootstrap(input.seeds, initialPlanObject);
 
-  // Draft only when every queued researcher has started and another researcher
-  // still supplies useful overlap. Keep the plan if overlap ends before compile.
+  // Draft once queued research has started. A final researcher can overlap the
+  // master's review; exact-boundary checks discard work invalidated by a revision.
   // Drafts are never published until the master's final plan and normal checks.
   const earlyDrafts = new Map<
     string,
@@ -3454,18 +3491,28 @@ async function discoverAndPlan(input: {
   let draftFailure: unknown;
   const prepareEarlyDraft: NonNullable<
     Parameters<typeof researchSelectedOperations>[0]['onProven']
-  > = async (tool, result, handoff, evidence, canDraft) => {
-    // Consumers still wait for their declared producers and normal build
-    // waves. Early work must not bypass the existing producer-first checks.
+  > = async (tool, result, _handoff, evidence, canDraft, currentPlan, knownHandoffs) => {
+    const speculativePlanningHasTime =
+      Boolean(currentNativeTeachAgents()) &&
+      input.runDeadline.deadlineMs - Date.now() >= SPECULATIVE_PLANNING_MIN_REMAINING_MS;
+    const hasDependencies =
+      tool.candidate.dependsOnTools.length > 0 ||
+      currentPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id);
+    const provenNames = new Set(
+      knownHandoffs.filter(({ status }) => status === 'proven').map(({ toolName }) => toolName),
+    );
+    // Draft a consumer only after its researchers have proven the producers.
+    // Final execution still follows the accepted build waves and chain checks.
     if (
       !canDraft() ||
-      tool.candidate.dependsOnTools.length > 0 ||
-      initialPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id)
+      (tool.strategy !== undefined && tool.strategy.kind !== 'api') ||
+      (hasDependencies && !speculativePlanningHasTime) ||
+      tool.candidate.dependsOnTools.some((name) => !provenNames.has(name))
     )
       return;
     try {
       const [bundle] = await requestFocusedPlannerBundles({
-        plan: initialPlan,
+        plan: currentPlan,
         discoveryRun: run,
         recordingIndex,
         triagedSession: input.triage.session,
@@ -3473,7 +3520,7 @@ async function discoverAndPlan(input: {
         seeds: input.seeds,
         agent: input.agent,
         deps: input.deps,
-        apiResearch: [handoff],
+        apiResearch: knownHandoffs,
         evidenceByTool: new Map([[tool.id, evidence]]),
         toolIds: new Set([tool.id]),
       });
@@ -3489,6 +3536,9 @@ async function discoverAndPlan(input: {
           evidenceRefs: [],
         }),
       });
+      // Dependent proposals overlap review; their compilers still wait for
+      // accepted producer-first build waves.
+      if (hasDependencies) return;
       if (!canDraft()) return;
       input.report?.(
         `${tool.candidate.toolName}: compiling a draft while other research continues`,
@@ -3520,6 +3570,19 @@ async function discoverAndPlan(input: {
       );
     }
   };
+  const queueEarlyDraft: NonNullable<
+    Parameters<typeof researchSelectedOperations>[0]['onProven']
+  > = async (...args) => {
+    const draft = prepareEarlyDraft(...args);
+    // Native admission belongs to Codex. A draft must not hold completed
+    // research behind another barrier before master review.
+    if (!currentNativeTeachAgents()) return await draft;
+    nativeDrafts.push(
+      draft.catch((error) => {
+        draftFailure ??= error;
+      }),
+    );
+  };
   let research: Awaited<ReturnType<typeof reviewApiResearchBeforePlanning>>;
   try {
     const firstPassResearch = await researchSelectedOperations({
@@ -3535,17 +3598,7 @@ async function discoverAndPlan(input: {
       runDeadline: input.runDeadline,
       signal: input.signal,
       report: input.report,
-      onProven: async (...args) => {
-        const draft = prepareEarlyDraft(...args);
-        // Native admission belongs to Codex. Its unrelated draft must not hold
-        // completed research behind another barrier before master review.
-        if (!currentNativeTeachAgents()) return await draft;
-        nativeDrafts.push(
-          draft.catch((error) => {
-            draftFailure ??= error;
-          }),
-        );
-      },
+      onProven: queueEarlyDraft,
     });
     research = await reviewApiResearchBeforePlanning({
       initialPlan,
@@ -3565,6 +3618,11 @@ async function discoverAndPlan(input: {
       report: input.report,
       now: input.now,
       selfContainedFirstReview: Boolean(input.selected),
+      onProven:
+        currentNativeTeachAgents() &&
+        input.runDeadline.deadlineMs - Date.now() >= SPECULATIVE_PLANNING_MIN_REMAINING_MS
+          ? queueEarlyDraft
+          : undefined,
     });
   } finally {
     // Keep ownership until every started draft settles, including failure paths.

@@ -353,6 +353,11 @@ const ApiResearchBindingSchema = strictObject({
   toolName: SemanticToolCandidateSchema.shape.toolName,
   compileInputsSha256: PromptShaSchema,
 });
+export const RecordingReferenceChangeSchema = strictObject({
+  selectedRequestSeqs: z.array(z.number().int().nonnegative()).min(1).max(32),
+  comparability: utf8Text(1, 2_000),
+  remainingUncertainty: utf8Text(1, 2_000),
+});
 export const ApiResearchOutputSchema = strictObject({
   binding: ApiResearchBindingSchema,
   action: z.enum([
@@ -388,11 +393,7 @@ export const ApiResearchOutputSchema = strictObject({
   }).optional(),
   /** Agent explanation when its executable request references differ from the
    * selected tool's recorded requests. The host checks identity, not purpose. */
-  recordingReferenceChange: strictObject({
-    selectedRequestSeqs: z.array(z.number().int().nonnegative()).min(1).max(32),
-    comparability: utf8Text(1, 2_000),
-    remainingUncertainty: utf8Text(1, 2_000),
-  }).optional(),
+  recordingReferenceChange: RecordingReferenceChangeSchema.optional(),
   testCases: z
     .array(
       strictObject({

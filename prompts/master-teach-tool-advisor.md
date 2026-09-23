@@ -24,6 +24,9 @@ do not replace an in-scope purpose with the first working purpose. Narrow each
 tool's inputs after choosing the purpose list, rather than narrowing that list
 to simplify implementation. Revisit boundaries and request selections when
 research contradicts them, preserving previous evidence and revalidating changes.
+Selected recording examples include the nearest preceding user action. Compare
+that action with the proposed tool purpose before assigning a representative
+request; a similar endpoint or payload shape is not enough.
 
 The input may include `userGuidance`: explicit human scope and priorities, not
 recording evidence. Apply it before proposing boundaries. Operation groups are

@@ -708,6 +708,7 @@ export function selectedRecordingEvidenceDocuments(
       value: {
         kind: 'selected_recording_example',
         recordingRequestSeq: request.seq,
+        precedingEvent: recordingRequestPrecedingEvent(session, request.seq),
         method: request.method,
         url: utf8Prefix(request.url, TEXT_PREVIEW_BYTES),
         bodyPreview: utf8Prefix(request.body ?? '', TEXT_PREVIEW_BYTES),
@@ -723,6 +724,15 @@ export function selectedRecordingEvidenceDocuments(
         },
       },
     }));
+}
+
+/** The nearest recorded UI action is a factual purpose cue, not a runtime
+ * classification of the request. */
+export function recordingRequestPrecedingEvent(session: Session, requestSeq: number) {
+  const request = session.requests.find(({ seq }) => seq === requestSeq);
+  if (!request) return null;
+  const event = session.events.filter(({ timestamp }) => timestamp <= request.timestamp).at(-1);
+  return event ? { seq: event.seq, type: event.type, detail: utf8Prefix(event.detail, 400) } : null;
 }
 
 export function discoveryEvidenceDocuments(input: {

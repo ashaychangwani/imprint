@@ -24,6 +24,7 @@ import {
   ApiResearchCandidateSchema,
   ApiResearchInputSchema,
   ApiResearchObservationSchema,
+  RecordingReferenceChangeSchema,
 } from './master-teach-agent-contracts.ts';
 import type {
   ApiResearchCandidate,
@@ -64,6 +65,10 @@ const TRUNCATED_PREVIEW_SUFFIX = '\n[preview truncated]';
 
 function retainedCandidatePath(toolDir: string, observationId: string): string {
   return pathJoin(toolDir, 'candidate-registry', `${observationId}.json`);
+}
+
+function retainedReferenceChangePath(toolDir: string, observationId: string): string {
+  return pathJoin(toolDir, 'candidate-registry', `${observationId}.reference-change.json`);
 }
 
 export interface ApiResearchResult {
@@ -610,8 +615,19 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
             parameterValues: reference.parameterValues,
             ...(reference.testBackend === undefined ? {} : { testBackend: reference.testBackend }),
           };
+          const changePath = retainedReferenceChangePath(input.toolDir, prior.id);
+          const recordingReferenceChange =
+            decision.recordingReferenceChange ??
+            (existsSync(changePath)
+              ? RecordingReferenceChangeSchema.parse(JSON.parse(readFileSync(changePath, 'utf8')))
+              : undefined);
           decision = parseApiResearchOutput(
-            JSON.stringify({ ...decision, candidateRef: undefined, candidate }),
+            JSON.stringify({
+              ...decision,
+              candidateRef: undefined,
+              candidate,
+              ...(recordingReferenceChange ? { recordingReferenceChange } : {}),
+            }),
             researchInput,
           );
         }
@@ -819,6 +835,14 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
         encoding: 'utf8',
         flag: 'wx',
       });
+      // A reference names the tested request and its accepted provenance
+      // explanation. Keep both immutable so a repeat need not restate it.
+      if (decision.recordingReferenceChange)
+        writeFileSync(
+          retainedReferenceChangePath(input.toolDir, observationId),
+          `${JSON.stringify(decision.recordingReferenceChange)}\n`,
+          { encoding: 'utf8', flag: 'wx' },
+        );
       const responseEvidence: NonNullable<ApiResearchObservation['responseEvidence']> = [];
       const observed = await input.dependencies.runApiTool({
         cdpPool,

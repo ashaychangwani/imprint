@@ -1695,6 +1695,95 @@ describe('focused API research', () => {
     }
   });
 
+  it('retains an accepted recording-reference change across exact candidate references', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-ref-provenance-'));
+    const candidate = apiCandidate('alternate', 'fetch');
+    const firstRequest = candidate.workflow.requests[0];
+    const recordedRequest = session.requests[0];
+    if (!firstRequest || !recordedRequest) throw new Error('Missing fixture request');
+    firstRequest.recordingRequestSeq = 13;
+    const change = {
+      selectedRequestSeqs: [13],
+      comparability: 'The inspected document initiates the same selected API operation.',
+      remainingUncertainty: 'The second current input still needs a live test.',
+    };
+    let turns = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex: { ...recordingIndex, requestSeqs: [12, 13] },
+        tool,
+        evidence,
+        session: {
+          ...session,
+          requests: [...session.requests, { ...recordedRequest, seq: 13, timestamp: 2 }],
+        },
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 10_000),
+        dependencies: {
+          requestStep: async (input) => {
+            turns++;
+            const prior = input.observations.at(-1);
+            const output =
+              turns === 1
+                ? {
+                    binding,
+                    action: 'test',
+                    candidate,
+                    recordingReferenceChange: change,
+                    reason: 'First live call.',
+                  }
+                : turns === 2
+                  ? {
+                      binding,
+                      action: 'test',
+                      candidateRef: {
+                        observationId: prior?.id,
+                        parameterValues: { query: 'beta' },
+                        testBackend: 'fetch',
+                      },
+                      reason: 'Repeat the accepted request with another current input.',
+                    }
+                  : {
+                      binding,
+                      action: 'proven',
+                      candidateRef: {
+                        observationId: prior?.id,
+                        parameterValues: { query: 'beta' },
+                        testBackend: 'fetch',
+                      },
+                      basedOnObservationId: prior?.id,
+                      reason: 'Second observation confirms the same request.',
+                    };
+            return parseApiResearchOutput(JSON.stringify(output), input);
+          },
+          runApiTool: async ({ parameters }) => ({
+            result: { ok: true, data: { items: [{ id: String(parameters.query) }] } },
+            executionMechanism: 'fetch',
+          }),
+        },
+      });
+      expect(turns).toBe(3);
+      expect(result.observations).toHaveLength(2);
+      expect(result.candidate.parameterValues).toEqual({ query: 'beta' });
+      expect(
+        JSON.parse(
+          readFileSync(
+            join(
+              toolDir,
+              'candidate-registry',
+              `${result.observations?.[1]?.id}.reference-change.json`,
+            ),
+            'utf8',
+          ),
+        ),
+      ).toEqual(change);
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('rejects foreign and substituted candidate references before accepting proof', () => {
     const tested = apiCandidate('tested', 'fetch');
     const observation = {

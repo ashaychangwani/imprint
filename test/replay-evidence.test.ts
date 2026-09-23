@@ -95,6 +95,12 @@ describe('factual independent-execution evidence', () => {
     if (!first?.response) throw new Error('Missing fixture response');
     first.body = 'x'.repeat(100_000);
     first.response.body = 'y'.repeat(100_000);
+    recording.events.unshift({
+      seq: 9,
+      timestamp: 9,
+      type: 'click',
+      detail: 'Choose a different recorded purpose',
+    });
     const documents = selectedRecordingEvidenceDocuments(recording, [10]);
     const projection = buildPromptEvidenceProjection(
       documents,
@@ -106,6 +112,11 @@ describe('factual independent-execution evidence', () => {
     );
     expect(example).toMatchObject({
       recordingRequestSeq: 10,
+      precedingEvent: {
+        seq: 9,
+        type: 'click',
+        detail: 'Choose a different recorded purpose',
+      },
       responseBodyAvailable: true,
       bodyBytes: 100_000,
       responseBytes: 100_000,
