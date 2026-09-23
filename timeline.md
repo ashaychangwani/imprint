@@ -15470,3 +15470,24 @@ Dependent compilers still wait for producer-first build waves, and final plans
 reuse only exact compatible drafts. Focused controller/research/evidence tests
 passed 107 cases; lint and type checking passed. A new isolated teach is
 required to establish whether this improves reliability or timing.
+
+## September 23 — Flights27 corrected request purpose but missed publication
+
+Flights27 was fresh on `73cda93`. The advisor correctly distinguished one-way
+request 206 from multi-city request 245 using the preceding recorded action.
+Research proved location lookup/details, all three search modes, and fresh
+multi-city booking. Browser-owned one-way booking returned a matching fresh
+AS1307 offer, but its proposed public selection input was not wired into the
+navigation URL. Round-trip booking lacked a completed two-leg producer value.
+The date grid returned 49 fares but its four range parameters were unused.
+
+The run ended at the 90.03-minute deadline with 0 published tools and no audit.
+Discovery/initial planning used 18.34 minutes, first-pass research 19.63, and
+review/follow-ups/unfinished publication 52.06. The final master review began
+at minute 89. The trace reports 43,646,125 input tokens (39,920,768 cache
+reads), 333,369 output, zero reported cache writes, and an estimated
+$37.5371152 base API equivalent. No provider-capacity, power, or disk failure
+explains this result. Details and preserved evidence are in
+docs/teach-flights-27-retrospective-2026-09-23.md. The recording-context and
+candidate-reference fixes worked in research, but audited repeatability is
+still unproven.
