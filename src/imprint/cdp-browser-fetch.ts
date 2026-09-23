@@ -141,6 +141,26 @@ export function buildNavigationClickTargetExpression(selector: string): string {
   })()`;
 }
 
+function nonClickableTargetKey(diagnostic: unknown): string | undefined {
+  if (!diagnostic || typeof diagnostic !== 'object') return undefined;
+  const value = diagnostic as Record<string, unknown>;
+  if (!['zero_area', 'disabled', 'center_hit_other_element'].includes(String(value.reason))) {
+    return undefined;
+  }
+  const target = value.target;
+  if (!target || typeof target !== 'object') return undefined;
+  const element = target as Record<string, unknown>;
+  return JSON.stringify({
+    reason: value.reason,
+    matchedCount: value.matchedCount,
+    tag: element.tag,
+    id: element.id,
+    class: element.class,
+    role: element.role,
+    pointerEvents: element.pointerEvents,
+  });
+}
+
 export interface CdpBrowserFetch {
   /** typeof fetch — executes the request inside the live trusted Chrome page. */
   readonly fetchImpl: typeof fetch;
@@ -442,6 +462,9 @@ export interface CdpBrowserFetchOptions {
   /** Per-CDP-command timeout (ms). Default 20000. Prevents a wedged browser
    *  or CDP socket from hanging an MCP tool call forever. */
   cdpCommandTimeoutMs?: number;
+  /** Return a stable, non-clickable navigation target to the researcher before
+   *  the full page-navigation deadline. Missing targets still get that deadline. */
+  stableNonClickableWaitMs?: number;
   /** Launch a visible window instead of headless. Default false (headless). Only
    *  needed as a fallback on a GPU-less host where headless WebGL falls back to
    *  SwiftShader and the site fingerprints it — pair with `display`/Xvfb. */
@@ -2138,6 +2161,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       if (interaction.action !== 'click') continue;
       let point: { x: number; y: number } | undefined;
       let targetDiagnostic: unknown;
+      let nonClickableKey: string | undefined;
+      let nonClickableSince = 0;
+      let stableNonClickable = false;
       while (Date.now() < deadline) {
         if (client !== c)
           throw new Error('browser closed while waiting for navigation click target');
@@ -2168,12 +2194,23 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           point = { x: value.x, y: value.y };
           break;
         }
+        const nextKey = nonClickableTargetKey(targetDiagnostic);
+        if (nextKey !== nonClickableKey) {
+          nonClickableKey = nextKey;
+          nonClickableSince = Date.now();
+        } else if (
+          nextKey &&
+          Date.now() - nonClickableSince >= (opts.stableNonClickableWaitMs ?? 30_000)
+        ) {
+          stableNonClickable = true;
+          break;
+        }
         await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
       }
       if (client !== c) throw new Error('browser closed while waiting for navigation click target');
       if (!point || Date.now() >= deadline) {
         throw new Error(
-          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} within ${timeoutMs}ms${targetDiagnostic ? `; target diagnostics: ${JSON.stringify(targetDiagnostic)}` : ''}`,
+          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} ${stableNonClickable ? 'after a stable non-clickable target' : `within ${timeoutMs}ms`}${targetDiagnostic ? `; target diagnostics: ${JSON.stringify(targetDiagnostic)}` : ''}`,
         );
       }
       if (networkCapture?.matcher.actionIndex === actionIndex) {

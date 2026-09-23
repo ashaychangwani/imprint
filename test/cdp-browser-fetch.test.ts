@@ -1251,6 +1251,7 @@ describe('navigation network-response capture', () => {
     let serial = 0;
     let targetAttempts = 0;
     let targetState = 'delayed';
+    let firstStableTargetAttemptAt = 0;
     const reads: string[] = [];
     const listeners: Record<string, (event: unknown) => void> = {};
     const emit = (id: string, phase: 'start' | 'response' | 'finish' | 'fail') => {
@@ -1290,6 +1291,20 @@ describe('navigation network-response capture', () => {
                 if (targetState === 'diagnostic') {
                   return {
                     result: { value: { diagnostic: { reason: 'zero_area', matchedCount: 2 } } },
+                  };
+                }
+                if (targetState === 'stable-diagnostic') {
+                  if (!firstStableTargetAttemptAt) firstStableTargetAttemptAt = Date.now();
+                  return {
+                    result: {
+                      value: {
+                        diagnostic: {
+                          reason: 'center_hit_other_element',
+                          matchedCount: 4,
+                          target: { tag: 'div', class: 'collapsed', pointerEvents: 'none' },
+                        },
+                      },
+                    },
                   };
                 }
                 if (targetState === 'transport-error') throw new Error('CDP disconnected');
@@ -1381,6 +1396,7 @@ describe('navigation network-response capture', () => {
       baseUrl: 'https://fixture.test',
       abckWaitSeconds: 0,
       cdpCommandTimeoutMs: 100,
+      stableNonClickableWaitMs: 100,
     });
     const actions = [
       { action: 'click' as const, selector: '#menu' },
@@ -1456,6 +1472,18 @@ describe('navigation network-response capture', () => {
           expect(targetAttempts).toBe(1);
         }
       }
+      targetState = 'stable-diagnostic';
+      await expect(
+        browser.navigate?.('https://fixture.test/page', {
+          waitUntil: 'domcontentloaded',
+          timeoutMs: 2000,
+          pollIntervalMs: 10,
+          actions,
+          networkResponse,
+        }),
+      ).rejects.toThrow('after a stable non-clickable target');
+      expect(Date.now() - firstStableTargetAttemptAt).toBeLessThan(1000);
+      expect(clicked).toBe(0);
       expect(reads).toEqual(['chosen-2', 'chosen-3', 'menu-4']);
     } finally {
       await browser.close();

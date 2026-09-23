@@ -15498,3 +15498,35 @@ path through each required operation group, record the other attempted purposes
 as deferred, and revisit them only if the chosen path fails. It must not keep
 an unused public input. This changes agent priority, not proof rules or the
 runtime scheduler. Validate it with a fresh isolated teach.
+
+## September 23 — Flights28 narrowed contracts too late to publish
+
+Flights28 was fresh on `a99e80d` and ended at the 90.03-minute deadline with
+0 ready tools and no audit. First-pass research took longer than Flights27,
+but the master did choose focused followups and eventually narrowed round-trip
+search to outbound results and Date grid to its page-owned nearby-date matrix.
+That removed unproved continuation and four ignored grid-window inputs. A
+standalone booking page returned a live two-leg offer from a caller-supplied
+booking URL, but it was not connected to a fresh generated search selection.
+The booking token and leg fields were only presence-checked. Narrow proof arrived
+around minute 88; booking compilation was still running at the deadline.
+
+Discovery/plan used 16.32 minutes (18.12%), first-pass research 25.26
+(28.05%), and review/followups/unfinished publication 48.46 (53.82%). Two
+round-trip browser clicks each waited about 120 seconds on a non-clickable DOM
+target and were labeled NETWORK despite exact selector diagnostics. One focused
+followup resent about 269,000 characters of recording evidence into its retained
+conversation. Usage was 40,435,774 input tokens (37,320,704 cache reads),
+245,876 output, zero reported cache writes, and an estimated $32.3060816 base
+API equivalent. No provider-capacity, power, or disk failure explains the
+outcome. See docs/teach-flights-28-retrospective-2026-09-23.md; all evidence
+remains intact. Next test a small general fast-fail correction for stable
+non-clickable browser targets, then run a new isolated teach.
+
+The browser click correction now watches the same diagnosed non-clickable
+target for at most 30 seconds after page readiness. A missing or changing
+target still gets the agent's full navigation deadline; a target that becomes
+clickable proceeds normally. The returned error retains the selector and DOM
+diagnostics so the researcher can choose another action. Focused CDP/backend
+tests passed 138 cases; lint and type checking passed. A new isolated Flights
+teach is required to see whether this saves time or improves publication.
