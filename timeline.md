@@ -15491,3 +15491,10 @@ explains this result. Details and preserved evidence are in
 docs/teach-flights-27-retrospective-2026-09-23.md. The recording-context and
 candidate-reference fixes worked in research, but audited repeatability is
 still unproven.
+
+The next small, site-neutral prompt correction targets the first research
+review. The master should choose follow-ups for the smallest evidence-backed
+path through each required operation group, record the other attempted purposes
+as deferred, and revisit them only if the chosen path fails. It must not keep
+an unused public input. This changes agent priority, not proof rules or the
+runtime scheduler. Validate it with a fresh isolated teach.

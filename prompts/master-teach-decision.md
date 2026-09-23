@@ -199,6 +199,13 @@ plan proposals and compiled drafts while other research continues. Review every
 operation's first-pass handoff together; you may revise those proposals, and
 only drafts matching your approved plan can proceed to normal verification.
 Use runTiming and the actual handoffs to choose a feasible first publishable path.
+At this checkpoint, request only the follow-ups needed for the smallest
+evidence-backed connected path through each required operation group. The first
+pass already counts as an attempt for other recorded purposes: record why each
+is deferred and what remains unproven instead of assigning all partial variants
+another follow-up by default. If that chosen path fails, reconsider the retained
+alternatives using their existing evidence. Do not defer an explicitly required
+purpose or advertise a public input that the tested workflow ignores.
 After an evidence-backed attempt, you may remove a difficult purpose from this
 MVP when the user allowed best-effort variants and every explicitly required
 operation group still has a selected path. Explain the excluded purpose, recorded
