@@ -15368,3 +15368,28 @@ checking passed. Two full-suite attempts each had one unrelated timing-
 sensitive test failure that passed alone; the final full run passed 2051 tests
 and 6870 assertions across 106 files. The fresh teach is still required as
 live validation of this prompt decision. Commit this checkpoint before that run.
+
+## September 23 — Flights23 retained evidence and next narrow correction
+
+Flights23 was a fresh 90-minute teach on `8a58a54`. It ended with 0 ready tools,
+so no independent audit was possible. Location lookup, one-way search,
+multi-city search and round-trip search obtained semantic research proof.
+The date grid returned useful initial fares but could not support its four
+advertised window bounds. Fresh one-way, round-trip and multi-city booking
+selections still returned application error 13. The one-way browser-action
+route proven in Flights22 was not retried in time. The first plan's broad
+producer wave delayed all booking follow-ups until minute 77.
+
+Discovery and planning used 20.69 minutes (22.98%); first-pass research 25.24
+(28.04%); review and follow-ups 44.10 (48.98%). The trace reports 44,971,894
+input tokens (41,388,544 cache reads), 284,153 output, zero reported cache
+writes, and an estimated $36.5718776 base equivalent. No native-family error,
+lost-response or disk-exhaustion cause was found. Full evidence and limits are
+in docs/teach-flights-23-retrospective-2026-09-23.md; raw evidence remains
+private and intact.
+
+Agent guidance now prioritizes a recorded browser action after a fresh
+dependent direct call fails semantically, promotes ready producer-consumer
+work ahead of unrelated partial research, and narrows unproven optional
+controls when a useful smaller tool is already demonstrated. No site-specific
+runtime rule was added. A new isolated teach is required to test this change.

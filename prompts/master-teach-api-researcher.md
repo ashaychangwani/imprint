@@ -141,6 +141,13 @@ fields. A recorded replay or a token swapped into unrelated surrounding state
 is only a diagnostic. If the initial contract is incomplete, preserve the
 failed comparison and tell the master which producer fields are missing rather
 than repeating that consumer test across transports.
+When a coherent fresh consumer request still returns only an application/protocol
+error, inspect the recorded user action and page navigation associated with the
+consumer request. If that action could let the page construct the request, test
+one browser-owned, action-scoped network capture before declaring the consumer
+blocked. Repeating direct requests with changed headers or Referers does not test
+whether the page must establish its own session state. Cite the recorded action
+and response separately, and keep the producer values from one fresh record.
 These are raw research responses, not yet normalized parser outputs. The list
 updates each turn and on master follow-ups. Browser state stays separate by
 tool and rung; if a chain needs more than returned values, investigate that

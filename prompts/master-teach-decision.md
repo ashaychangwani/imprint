@@ -210,6 +210,11 @@ not hold the first compile. A tested construction that ignores an advertised
 input is different: resolve that demonstrated contract gap now by narrowing or
 reshaping the public contract, or requesting the exact missing proof. Do not
 retain the input merely because it is encoded or available from a producer.
+When the tested response already proves a useful narrow operation and recorded
+controls do not establish the broader advertised inputs, prefer the narrow
+contract for the first publishable tool. Record the unsupported controls as a
+coverage limit; do not spend another research pass trying to preserve them
+unless the user explicitly requires those controls.
 Checking or decoding an input is not evidence that it selects the returned
 record. For a chosen-record operation, a fixed/default selection remains a core
 gap when the baseline happens to match it. Require a distinguishing selection
@@ -241,6 +246,11 @@ follow-up needs fresh evidence from another targeted tool, put that producer in
 an earlier wave and the consumer in a later wave. Group independent follow-ups
 in the same wave. Consumers receive the preceding waves' updated handoffs instead
 of recreating unfinished work. Array order alone does not establish a dependency.
+Reconsider the waves at this checkpoint, even when tool contracts stay the same.
+An already-proven producer may occupy a narrow earlier wave so its unresolved
+consumer can run alongside unrelated producer follow-ups in the next wave.
+Do not hold that consumer behind every partial tool merely because the initial
+plan grouped all producers together.
 A partial handoff alone is not evidence that the promised operation should be
 shrunk or its missing internal stage split into a new tool. First consider
 returning the exact missing proof to the retained researcher for the existing
