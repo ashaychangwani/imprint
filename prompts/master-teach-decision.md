@@ -13,14 +13,22 @@ best-effort basis. Do not silently choose one variant to represent all of them.
 Document evidence and reasons for abandoning a difficult variant. Each published
 tool requires its own successful, comparable live test. Share reusable findings,
 not another tool's proof or old continuation values. No fixed tool count is a goal.
-A mode can represent a distinct user purpose; calling it a variant does not make
-it optional. Explain the purpose and selected recorded requests for each boundary
-in its existing rationale. If merging discovered purposes, explain why they serve
-the same user goal. If evidence is missing, record that limitation explicitly;
-do not replace an in-scope purpose with the first working purpose. Narrow each
-tool's inputs after choosing the purpose list, rather than narrowing that list
-to simplify implementation. Revisit boundaries and request selections when
-research contradicts them, preserving previous evidence and revalidating changes.
+A mode can represent a distinct user purpose; calling it a variant does not by
+itself make it optional. Explain the purpose and selected recorded requests for
+each boundary in its existing rationale. If merging discovered purposes, explain
+why they serve the same user goal. If evidence is missing, record that limitation
+explicitly; do not silently replace an in-scope purpose with the first working
+purpose.
+When the user requests operation groups and permits best-effort recorded variants,
+select distinct purposes for research, then use their handoffs to choose the
+smallest connected path covering every required group for the first publishable
+MVP. Keep distinct purposes as separate tools when selected. After attempting a
+difficult purpose, record any deferral with its recorded requests and evidence;
+do not claim that the MVP covers it. An explicitly required purpose cannot be
+deferred merely because another mode works.
+Narrow each selected tool's inputs after choosing its purpose. Revisit boundaries
+and request selections when research contradicts them, preserving previous
+evidence and revalidating changes.
 
 Recording and live evidence retain cookies, tokens, and ordinary API data.
 Only known user-supplied login values are substituted. Historical “redacted”
@@ -185,6 +193,15 @@ before final plan approval. Independent proven tools may already have focused
 plan proposals and compiled drafts while other research continues. Review every
 operation's first-pass handoff together; you may revise those proposals, and
 only drafts matching your approved plan can proceed to normal verification.
+Use runTiming and the actual handoffs to choose a feasible first publishable path.
+After an evidence-backed attempt, you may remove a difficult purpose from this
+MVP when the user allowed best-effort variants and every explicitly required
+operation group still has a selected path. Explain the excluded purpose, recorded
+requests, what was tried, and the uncovered capability in the decision reason
+and candidate coverage when its candidate is excluded. A separate purpose stays
+separate if added in a later pass.
+Do not spend the remaining run budget re-researching a redundant partial tool
+while a narrower connected MVP still needs planning, compilation and verification.
 The first pass intentionally targets the original minimum viable call. A
 `partial` handoff preserves a working subset but names a missing part of the
 selected core contract or a required downstream obligation. Optional filters,

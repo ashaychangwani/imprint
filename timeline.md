@@ -15342,3 +15342,29 @@ selective asset reads. The full suite passed 2051 tests/6870 assertions across
 large-chunk warning; desktop and mobile preview had no horizontal overflow.
 The next validation is a fresh isolated Flights teach from the original recording
 on this checkpoint. Do not resume Flights21 or treat these tests as live proof.
+
+## September 23 — Flights22 retrospective and narrower first MVP guidance
+
+Flights22 was a fresh 90-minute teach from the original Google Flights recording
+on `5d3eefa`. It ended with 0 ready tools, so there was no independent audit.
+The one-way plan used the correct recorded request 206; request 245 stayed with
+multi-city. Shared findings used short index entries and separate assets, with
+eight published findings and six targeted reads. Research proved one-way search
+and booking, multi-city continuation, and a narrowed fare grid, while round-trip
+search remained partial and multi-city booking returned protocol error 13 after
+a fresh coherent chain. The master retained all nine purposes; final planning
+was still blocked when a calendar follow-up hit the deadline. The trace reports
+42,245,396 input tokens (39,021,184 cache reads), 274,110 output tokens, zero
+reported cache writes, zero missing usage spans, and an estimated $33.9875216
+base API equivalent. Full timing, failure facts, and limitations are in
+docs/teach-flights-22-retrospective-2026-09-23.md; raw evidence remains private.
+
+The master prompt now says that after trying recorded purposes, it may defer
+difficult best-effort variants with explicit evidence when every user-required
+operation group retains a connected first-MVP path. It must keep separate tools
+for distinct purposes when it selects them and must not claim deferred coverage.
+This changes agent prioritization, not runtime proof rules. Lint and type
+checking passed. Two full-suite attempts each had one unrelated timing-
+sensitive test failure that passed alone; the final full run passed 2051 tests
+and 6870 assertions across 106 files. The fresh teach is still required as
+live validation of this prompt decision. Commit this checkpoint before that run.
