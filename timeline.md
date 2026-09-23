@@ -15634,3 +15634,13 @@ unchanged, with explanation in its decision reason. Genuine contract changes
 still trigger focused replanning. This prompt-only correction needs a fresh
 teach before any reliability or speed claim. The full suite passed 2,059 tests;
 lint, type checking, and diff checks passed.
+
+## September 23 — Pause new teaches after Flights33
+
+At the user's request, Flights33 is the last teach in this campaign. It was
+already running on `997bd9f` when the request arrived. No further teach will
+be started. The 12-hour retrospective in
+docs/teach-12-hour-retrospective-2026-09-23.md covers Flights26–32, the
+measured stage time and token/cost totals, and the remaining publication
+bottleneck. Flights33 was still in discovery at the retrospective cutoff, so
+its outcome is not counted as a success or failure there.
