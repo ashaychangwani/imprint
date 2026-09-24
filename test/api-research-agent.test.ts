@@ -1622,6 +1622,68 @@ describe('focused API research', () => {
     ).toThrow('proven candidate differs from the tested request');
   });
 
+  it('preserves exact tested proof when the master narrows public parameters', () => {
+    const tested = apiCandidate('tested');
+    const narrowedTool = {
+      ...tool,
+      candidate: { ...tool.candidate, likelyParams: [] },
+    };
+    const narrowedBinding = {
+      ...binding,
+      compileInputsSha256: apiResearchInputsSha256(narrowedTool),
+    };
+    const observation = {
+      id: 'narrowed-observation',
+      candidateSha256: apiResearchCandidateSha256(tested),
+      executionMechanism: 'fetch',
+      backendAttempts: [],
+      responseObservations: [],
+      result: { ok: true, preview: '{"items":[{"id":"item-1"}]}' },
+    };
+    const input = {
+      run,
+      recordingIndex,
+      tool: narrowedTool,
+      evidence,
+      observations: [observation],
+    };
+    expect(
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding: narrowedBinding,
+          action: 'proven',
+          candidate: tested,
+          basedOnObservationId: observation.id,
+          reason: 'The former query is fixed internal test context.',
+        }),
+        input,
+      ).action,
+    ).toBe('proven');
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding: narrowedBinding,
+          action: 'test',
+          candidate: tested,
+          reason: 'A new test cannot restore the removed public query.',
+        }),
+        input,
+      ),
+    ).toThrow('workflow parameters changed');
+    expect(() =>
+      parseApiResearchOutput(
+        JSON.stringify({
+          binding: narrowedBinding,
+          action: 'proven',
+          candidate: { ...tested, parameterValues: { query: 'different' } },
+          basedOnObservationId: observation.id,
+          reason: 'A different invocation is not the cited observation.',
+        }),
+        input,
+      ),
+    ).toThrow('proven candidate differs from the tested request');
+  });
+
   it('reuses an immutable tested candidate with explicit new inputs and exact final proof', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-ref-'));
     const original = apiCandidate('retained', 'fetch');

@@ -15824,3 +15824,27 @@ the full 2,067-test suite, lint, and type checking passed. The trace reports
 45,148,862 input tokens (41,022,592 cache reads), 353,726 output, zero
 reported cache writes, and a $39.9886368 base API-equivalent lower bound
 with three analysis spans missing usage. A fresh teach follows.
+
+## September 24 — Flights42 exposed a narrowed-proof handoff conflict
+
+Flights42 ran fresh for 77.6 minutes and was stopped before compilation to
+fix a deterministic research-handoff loop. Location and one-way search API
+research succeeded. Round-trip and multi-city initial searches returned
+substantive responses, but their later-leg continuations remained unproven.
+One-way booking research found that a fixed first-result click ignored a
+selected-flight input, then proved a narrower first-displayed-itinerary tool.
+Date-grid research captured the recorded 49-cell grid from a fixed page but
+could not prove route/date parameter control.
+
+The master narrowed date grid to a no-input fixed snapshot. Its exact
+successful observation had been tested with eight former internal parameter
+values. Research-output validation required the old tested workflow to match
+the new public zero-parameter shape, although later coverage validation
+already allowed narrowing. Exact immutable proof was rejected repeatedly as
+`workflow parameters changed`. The final research handoff now accepts an
+unchanged tested candidate with extra fixed former inputs after narrowing;
+new tests and altered proof remain rejected. See
+docs/teach-flights-42-unbounded-retrospective-2026-09-24.md. The trace reports
+39,645,197 input tokens (36,871,040 cache reads), 240,650 output, zero
+reported cache writes, and a $30.658044 base API-equivalent estimate with no
+missing analysis usage. A fresh teach follows after validation.

@@ -557,7 +557,17 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
     const actualParameters = workflow.parameters
       .map(({ name, type }) => ({ name, type }))
       .sort((left, right) => left.name.localeCompare(right.name));
-    if (!same(actualParameters, expectedParameters))
+    // A master may narrow a tested public boundary by fixing former inputs.
+    // A final handoff must still cite the exact tested candidate below; new
+    // tests must use the current public parameter shape.
+    const narrowedProof =
+      (output.action === 'proven' || output.action === 'partial') &&
+      expectedParameters.every((expected) =>
+        actualParameters.some(
+          (actual) => actual.name === expected.name && actual.type === expected.type,
+        ),
+      );
+    if (!same(actualParameters, expectedParameters) && !narrowedProof)
       issue(ctx, ['candidate', 'workflow', 'parameters'], 'workflow parameters changed');
     for (const parameter of workflow.parameters) {
       if (!(parameter.name in parameterValues) && parameter.default === undefined)
