@@ -15759,3 +15759,24 @@ passes still cannot complete, and cancellation is journaled. See
 docs/teach-flights-38-unbounded-retrospective-2026-09-24.md. Focused tests,
 the full suite (2,065 tests), lint, type checking, and diff checks passed. A
 fresh teach follows.
+
+## September 24 — Flights39 reached publication, then review budgets expired
+
+Flights39 ran fresh on `aa2f8e4` for 120.07 minutes and published location
+lookup, location details, and one-way search. Booking consumed a fresh one-way
+search itinerary and passed its mechanical chain check. The first date-grid
+review found a missing per-cell opaque token; the retained compiler fixed it
+and the next live output included the token. Booking and date grid still did
+not publish because their independent recording reviews exceeded one shared
+five-minute budget while inspecting recorded and live responses. The master
+kept the accepted plan, and the coordinator stopped when the same unresolved
+proof notices recurred. This was a review-budget problem, not a space issue.
+
+Raw-source expectations and parser evaluation now each get five minutes. A
+phase timeout retries the same pending review turn with retained evidence and
+bounded backoff; hard run deadlines and cancellation still stop. See
+docs/teach-flights-39-unbounded-retrospective-2026-09-24.md. Focused tests,
+the full suite (2,066 tests), lint, type checking, and diff checks passed.
+The trace reports 63,667,510 input tokens (59,475,328 cache reads), 373,481
+output, zero reported cache writes, and a $48.0284792 base API-equivalent
+lower bound with two analysis spans missing usage. A fresh teach follows.

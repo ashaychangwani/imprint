@@ -1,9 +1,10 @@
 /** Independent, offline evidence review. Never creates live challenge requests. */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { z } from 'zod';
 import { decodeBodyStructure } from './body-structure.ts';
+import { abortableDelay } from './concurrency.ts';
 import { projectEvidence } from './evidence-inspection.ts';
 export { projectEvidence } from './evidence-inspection.ts';
 import { importModuleFresh } from './import-module-fresh.ts';
@@ -13,7 +14,11 @@ import {
   requestRecordingEvidenceStep,
 } from './master-teach-agents.ts';
 import type { ImplementationPlanPayload } from './master-teach-plan.ts';
-import { boundedRunDeadline } from './provider-retry.ts';
+import {
+  ProviderDeadlineError,
+  boundedRunDeadline,
+  providerControlError,
+} from './provider-retry.ts';
 import type { Session, Workflow } from './types.ts';
 
 type Params = Record<string, string | number | boolean>;
@@ -222,22 +227,29 @@ export async function verifyRecordingEvidence(input: {
   let expectations: z.infer<typeof FactsSchema>[] | undefined;
   if (existsSync(factsPath))
     expectations = z.array(FactsSchema).parse(JSON.parse(readFileSync(factsPath, 'utf8')));
-  // Keep the existing shared deadline; evidence review may use at most five minutes.
-  const deadlineMs = Math.min(
-    input.agent.runDeadline?.deadlineMs ?? input.agent.deadlineMs ?? Number.POSITIVE_INFINITY,
-    Date.now() + 300_000,
-  );
-  const agent = {
-    ...input.agent,
-    analyzer:
-      input.agent.analyzer ??
-      resolveProvider({ provider: input.agent.provider, model: input.agent.model }),
-    timeoutMs: undefined,
-    deadlineMs,
-    runDeadline: boundedRunDeadline(input.agent.runDeadline, deadlineMs),
+  const analyzer =
+    input.agent.analyzer ??
+    resolveProvider({ provider: input.agent.provider, model: input.agent.model });
+  const phaseAgent = () => {
+    const deadlineMs = Math.min(
+      input.agent.runDeadline?.deadlineMs ?? input.agent.deadlineMs ?? Number.POSITIVE_INFINITY,
+      Date.now() + 300_000,
+    );
+    return {
+      ...input.agent,
+      analyzer,
+      timeoutMs: undefined,
+      deadlineMs,
+      runDeadline: boundedRunDeadline(input.agent.runDeadline, deadlineMs),
+    };
   };
   for (const phase of ['expectations', 'evaluation'] as const) {
     if (phase === 'expectations' && expectations) continue;
+    // Raw-source inspection and parser evaluation each receive their own budget.
+    // A phase deadline is a provider interruption, not a verdict on retained
+    // evidence. Retry the same turn with its conversation and frozen facts.
+    let agent = phaseAgent();
+    let deadlineRetries = 0;
     const texts =
       phase === 'expectations'
         ? sourceTexts
@@ -261,12 +273,46 @@ export async function verifyRecordingEvidence(input: {
     let finished = false;
     // Six inspections/repairs, then one final decision using the last result.
     for (let turn = 0; turn < 7; turn++) {
-      const decision = await request(
-        payload,
-        StepSchema,
-        agent,
-        `evidence:${sourceKey}:${phase}:${phase === 'evaluation' ? actualKey : ''}`,
-      );
+      let decision: z.infer<typeof StepSchema>;
+      while (true) {
+        try {
+          decision = await request(
+            payload,
+            StepSchema,
+            agent,
+            `evidence:${sourceKey}:${phase}:${phase === 'evaluation' ? actualKey : ''}`,
+          );
+          break;
+        } catch (error) {
+          const control = providerControlError(error);
+          if (
+            !(control instanceof ProviderDeadlineError) ||
+            control.scope !== 'phase' ||
+            input.agent.signal?.aborted ||
+            Date.now() >=
+              (input.agent.runDeadline?.deadlineMs ??
+                input.agent.deadlineMs ??
+                Number.POSITIVE_INFINITY)
+          )
+            throw error;
+          deadlineRetries++;
+          appendFileSync(
+            join(input.directory, `${sourceKey}-${actualKey}.retries.jsonl`),
+            `${JSON.stringify({
+              phase,
+              turn,
+              attempt: deadlineRetries,
+              timestamp: new Date().toISOString(),
+              reason: control.message,
+            })}\n`,
+          );
+          await abortableDelay(
+            Math.min(30_000, 1_000 * 2 ** Math.min(deadlineRetries - 1, 5)),
+            input.agent.signal,
+          );
+          agent = phaseAgent();
+        }
+      }
       writeFileSync(
         join(input.directory, `${sourceKey}-${actualKey}.${phase}-${turn}.json`),
         JSON.stringify({ payload, decision }),

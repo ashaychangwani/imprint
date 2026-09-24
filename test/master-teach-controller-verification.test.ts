@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { verifyRecordingMvp } from '../src/imprint/master-teach-controller.ts';
 import { ProviderDeadlineError } from '../src/imprint/provider-retry.ts';
 
-it('keeps a missing-fixture reviewer timeout as unverified evidence', async () => {
+it('keeps a hard run deadline as unverified evidence', async () => {
   const input = {
     tool: {
       candidate: {
@@ -38,7 +38,7 @@ it('keeps a missing-fixture reviewer timeout as unverified evidence', async () =
       provider: 'codex-cli',
       analyzer: {
         analyze: async () => {
-          throw new ProviderDeadlineError(Date.now(), undefined, 'phase');
+          throw new ProviderDeadlineError(Date.now(), undefined, 'run');
         },
       },
     },

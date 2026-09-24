@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ImplementationPlanPayload } from '../src/imprint/master-teach-plan.ts';
+import { ProviderDeadlineError } from '../src/imprint/provider-retry.ts';
 import {
   type RecordingFixture,
   decodeEvidenceResponses,
@@ -44,6 +45,44 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('retries a phase provider deadline with retained expectations and the same evaluation turn', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-phase-retry-'));
+    let calls = 0;
+    let expiredDeadline = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory,
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema, agent) => {
+        calls++;
+        if (calls === 1)
+          return schema.parse({
+            action: 'finish',
+            reason: 'Raw facts established',
+            comparability,
+            expectations,
+          });
+        expect(payload).toHaveProperty('phase', 'evaluation');
+        expect(payload).toHaveProperty('expectations', expectations);
+        if (calls === 2) {
+          expiredDeadline = agent.deadlineMs ?? 0;
+          throw new ProviderDeadlineError(expiredDeadline, undefined, 'phase');
+        }
+        expect(agent.deadlineMs).toBeGreaterThan(expiredDeadline);
+        return schema.parse({ action: 'finish', status: 'passed', reason: 'Parser matches' });
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(calls).toBe(3);
+    const retryFile = readdirSync(directory).find((name) => name.endsWith('.retries.jsonl'));
+    expect(retryFile).toBeDefined();
+    expect(JSON.parse(readFileSync(join(directory, retryFile ?? ''), 'utf8'))).toMatchObject({
+      phase: 'evaluation',
+      turn: 0,
+      attempt: 1,
+    });
+  });
   it('reviews live parser fidelity without claiming an unavailable recorded response', async () => {
     const live = fixtures()[1];
     live.recordedRequests = [
