@@ -2521,6 +2521,29 @@ describe('prompts and pre-plan discovery', () => {
     ).toThrow('have no captured response body');
   });
 
+  it('allows an explicitly live-only case only when its recorded response is missing', () => {
+    const input = { ...focusedInput(), recordingResponseBodySeqs: [] };
+    const output = structuredClone(focusedOutput(input));
+    const live = output.implementationPlan.verificationCases.find(({ check }) => check === 'live');
+    if (!live) throw new Error('fixture live case missing');
+    live.recordingFixtureUnavailable = true;
+    output.implementationPlan.verificationCases = [live];
+    expect(parseFocusedPlannerOutput(JSON.stringify(output), input)).toEqual(output);
+    expect(() =>
+      parseFocusedPlannerOutput(JSON.stringify(output), {
+        ...input,
+        recordingResponseBodySeqs: live.recordedCall?.requestSeqs,
+      }),
+    ).toThrow('confirmed missing recorded response body');
+    const invalidReplay = structuredClone(output);
+    const replayCase = invalidReplay.implementationPlan.verificationCases[0];
+    if (!replayCase) throw new Error('fixture verification case missing');
+    replayCase.check = 'replay';
+    expect(() => parseFocusedPlannerOutput(JSON.stringify(invalidReplay), input)).toThrow(
+      'Only live cases may lack a recording fixture',
+    );
+  });
+
   it('runs one strict focused planner on only one tool and repairs invalid JSON once', async () => {
     const input = focusedInput();
     const output = focusedOutput(input);

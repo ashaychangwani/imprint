@@ -245,6 +245,28 @@ export class RunDeadline implements RunDeadlineRef {
   }
 }
 
+/** A rolling horizon keeps an explicitly unbounded teach cancellable while
+ * retaining finite per-call timers and ordinary phase deadlines. */
+export class RollingRunDeadline implements RunDeadlineRef {
+  readonly scope = 'run' as const;
+
+  constructor(
+    private readonly horizonMs = 12 * 60 * 60_000,
+    private readonly now: () => number = Date.now,
+  ) {
+    if (!Number.isFinite(horizonMs) || horizonMs <= 0)
+      throw new Error('Rolling deadline horizon must be positive and finite');
+  }
+
+  get deadlineMs(): number {
+    return this.now() + this.horizonMs;
+  }
+
+  onChange(): () => void {
+    return () => {};
+  }
+}
+
 export function resolvedRunDeadline(
   ref: RunDeadlineRef | undefined,
   deadlineMs: number | undefined,

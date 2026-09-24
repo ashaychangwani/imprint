@@ -15686,3 +15686,21 @@ docs/teach-flights-35-long-retrospective-2026-09-24.md. The trace reports
 33,133,707 input tokens (30,389,376 cache reads), 228,671 output, zero
 reported cache writes, and a $27.7064944 base API-equivalent estimate. No
 further teach was started.
+
+## September 24 — Repair missing fixtures and native submission; prepare unbounded teach
+
+Flights35 showed two general blockers. A recorded request can exist without a
+captured response body, so a planner cannot truthfully produce a recorded replay
+for it. Focused plans may now identify that exact gap and use a live-only parser
+review tied to the recorded request. The independent reviewer checks retained
+live response bytes against the parser output and reports that recording-response
+fidelity remains unverified. A captured response still requires the normal
+recording/live pair. The native family now rejects a child submission until its
+host validation pass is complete, leaving the same conversation open for repair.
+
+An explicit `imprint teach --unbounded` option removes the whole-run deadline
+while preserving finite action timeouts, retries, and cancellation. The next
+Flights run will use the same recording and four operation groups in a new
+isolated home. Focused regressions, lint, and type checking passed; the full
+suite passed 2,063 tests, and diff checks passed. No live outcome is claimed
+yet.

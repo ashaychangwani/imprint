@@ -125,6 +125,12 @@ export async function runNativeAgentPass<T>(options: {
         {
           conversation: options.conversation,
           signal,
+          beforeSubmit: () => {
+            if (!finished)
+              throw new Error(
+                `Host validation still awaits step ${current?.step ?? step}. Read its remaining pages and call_assignment_tool respond; do not submit role JSON to the family yet.`,
+              );
+          },
           call: async (name, args) => {
             if (name === '__list')
               return {

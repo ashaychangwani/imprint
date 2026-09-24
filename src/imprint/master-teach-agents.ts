@@ -809,15 +809,27 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
           );
           return;
         }
-        if (input.recordingResponseBodySeqs) {
-          const available = new Set(input.recordingResponseBodySeqs);
-          const unavailable = test.recordedCall.requestSeqs.filter((seq) => !available.has(seq));
-          if (unavailable.length)
+        const available = new Set(input.recordingResponseBodySeqs ?? []);
+        const unavailable = test.recordedCall.requestSeqs.filter((seq) => !available.has(seq));
+        if (test.recordingFixtureUnavailable) {
+          if (test.check !== 'live')
             issue(
               ctx,
-              [...path, 'recordedCall', 'requestSeqs'],
-              `Recording requests ${unavailable.join(', ')} have no captured response body. Select a comparable recorded call with an available body; a successful live call cannot replace its recording fixture.`,
+              [...path, 'recordingFixtureUnavailable'],
+              'Only live cases may lack a recording fixture',
             );
+          if (!input.recordingResponseBodySeqs || unavailable.length === 0)
+            issue(
+              ctx,
+              [...path, 'recordingFixtureUnavailable'],
+              'A live-only case requires a confirmed missing recorded response body',
+            );
+        } else if (input.recordingResponseBodySeqs && unavailable.length) {
+          issue(
+            ctx,
+            [...path, 'recordedCall', 'requestSeqs'],
+            `Recording requests ${unavailable.join(', ')} have no captured response body. Select a comparable recorded call with an available body or mark the live case recordingFixtureUnavailable; never claim replay proof from missing bytes.`,
+          );
         }
         if (
           test.recordedCall.requestSeqs.length > output.implementationPlan.requestProvenance.length
@@ -828,6 +840,7 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
             'A recorded response chain cannot exceed the artifact request count. A captured API response replaces its navigation document; cite the response sequence, not both.',
           );
         if (
+          !test.recordingFixtureUnavailable &&
           !cases.some(
             (paired) =>
               paired.check !== test.check &&

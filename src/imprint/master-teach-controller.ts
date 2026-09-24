@@ -141,6 +141,7 @@ import { persistRuntimeBackendsCache } from './probe-backends.ts';
 import { describeAgentActivity, formatElapsed } from './progress.ts';
 import {
   ProviderUnavailableError,
+  RollingRunDeadline,
   RunDeadline,
   type RunDeadlineRef,
   providerControlError,
@@ -215,6 +216,8 @@ export interface FreshTeachOptions {
   provider?: ProviderName;
   model?: string;
   maxDurationMs?: number;
+  /** Keep a finite rolling per-call horizon without a whole-teach deadline. */
+  unbounded?: boolean;
   /** Use one exact recording, or explicitly merge several selected recordings. */
   fromSession?: string | string[];
   /** Reuse only the completed candidate-selection checkpoint from an earlier
@@ -700,6 +703,45 @@ async function verifyRecordingMvp(input: {
       reason:
         'A matched recordedCall and retained live raw responses are required for parser verification.',
     };
+  if (verification.recordingFixtureUnavailable) {
+    const recordedRequests = recordedCall.requestSeqs.map((seq) =>
+      input.session.requests.find((request) => request.seq === seq),
+    );
+    if (
+      recordedRequests.some((request) => !request) ||
+      recordedRequests.every((request) => request?.response?.body !== undefined)
+    )
+      return {
+        status: 'unverified',
+        reason: 'The cited missing recording response could not be confirmed in this session.',
+      };
+    return await verifyRecordingEvidence({
+      operation: {
+        name: input.tool.candidate.toolName,
+        description: input.tool.candidate.description,
+        expectedOutput: input.tool.candidate.expectedOutput,
+      },
+      evidenceMode: 'live_only_missing_recording',
+      fixtures: [
+        {
+          id: `live_${verification.id}`,
+          origin: 'live',
+          requestSeqs: recordedCall.requestSeqs,
+          recordedRequests: recordedRequests.flatMap((request) =>
+            request
+              ? [{ seq: request.seq, method: request.method, url: request.url, body: request.body }]
+              : [],
+          ),
+          freshnessChanges: recordedCall.freshnessChanges,
+          parameters: input.live.parameters,
+          responses: input.live.rawResponses,
+          actual: input.live.result.data,
+        },
+      ],
+      directory: input.directory,
+      agent: input.agent,
+    });
+  }
   try {
     const fixtures = await recordingFixtures({
       ...input,
@@ -1897,7 +1939,7 @@ function llmOptions(opts: FreshTeachOptions): LLMOptions {
 
 function agentOptions(
   opts: FreshTeachOptions,
-  deadline: RunDeadline,
+  deadline: RunDeadlineRef,
   deps?: Partial<MasterTeachAgentOptions>,
 ): MasterTeachAgentOptions {
   const analyzer =
@@ -1908,7 +1950,7 @@ function agentOptions(
   return {
     provider: providerForFreshTeach(opts),
     ...(opts.model ? { model: opts.model } : {}),
-    deadlineMs: deadline.deadlineMs,
+    ...(opts.unbounded ? {} : { deadlineMs: deadline.deadlineMs }),
     runDeadline: deadline,
     signal: opts.signal,
     onProviderRetry: ({ attempt, delayMs, reason }) =>
@@ -6247,7 +6289,9 @@ export async function runFreshMasterTeach(
   mkdirSync(runRoot, { recursive: true, mode: 0o700 });
   const stagingRoot = pathJoin(runRoot, 'staging');
   mkdirSync(stagingRoot, { recursive: true, mode: 0o700 });
-  const deadline = new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
+  const deadline = opts.unbounded
+    ? new RollingRunDeadline()
+    : new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
   const work = () =>
     runScheduledFreshTeach(opts, deps, { site, runId, runRoot, stagingRoot, deadline });
   if (providerForFreshTeach(opts) !== 'codex-cli') return await work();
@@ -6273,7 +6317,7 @@ async function runScheduledFreshTeach(
     runId: string;
     runRoot: string;
     stagingRoot: string;
-    deadline: RunDeadline;
+    deadline: RunDeadlineRef;
   },
 ): Promise<FreshTeachTerminalResult> {
   const { site, runId, runRoot, stagingRoot, deadline } = context;
@@ -6786,6 +6830,7 @@ async function runScheduledFreshTeach(
                     id: test.id,
                     parameters: verificationParameters(test),
                     recordedCall: test.recordedCall,
+                    recordingFixtureUnavailable: test.recordingFixtureUnavailable,
                   })),
                 dependencies: plan.chainEdges
                   .filter(({ consumerToolId }) => consumerToolId === tool.id)

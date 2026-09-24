@@ -289,6 +289,8 @@ const ImplementationVerificationCaseSchema = z
       })
       .strict()
       .optional(),
+    /** The cited recorded request exists, but its response body was not captured. */
+    recordingFixtureUnavailable: z.literal(true).optional(),
     provenance: z
       .object({
         recordingRequestSeqs: VerificationRequestSeqListSchema,

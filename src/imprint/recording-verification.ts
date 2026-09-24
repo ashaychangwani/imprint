@@ -157,6 +157,7 @@ export async function recordingFixtures(input: {
 export async function verifyRecordingEvidence(input: {
   operation: { name: string; description: string; expectedOutput: string };
   fixtures: RecordingFixture[];
+  evidenceMode?: 'paired' | 'live_only_missing_recording';
   directory: string;
   agent: MasterTeachAgentOptions;
   requestStep?: typeof requestRecordingEvidenceStep;
@@ -166,6 +167,7 @@ export async function verifyRecordingEvidence(input: {
   const sources = input.fixtures.map(({ actual: _actual, ...fixture }) => fixture);
   const sourceKey = hash({
     contract: 'recording-evidence-v3',
+    evidenceMode: input.evidenceMode ?? 'paired',
     operation: input.operation,
     sources,
   });
@@ -178,18 +180,32 @@ export async function verifyRecordingEvidence(input: {
   const reportPath = join(input.directory, `${sourceKey}-${actualKey}.review.json`);
   if (existsSync(reportPath)) return JSON.parse(readFileSync(reportPath, 'utf8'));
   const finish = (review: RecordingEvidenceReview): RecordingEvidenceReview => {
-    const result = { ...review, reportPath };
+    const result = {
+      ...review,
+      reason:
+        input.evidenceMode === 'live_only_missing_recording' && review.status === 'passed'
+          ? `Live-response parser review passed; the recorded response body was unavailable. ${review.reason}`
+          : review.reason,
+      reportPath,
+    };
     writeFileSync(reportPath, JSON.stringify(result, null, 2));
     return result;
   };
   writeFileSync(join(input.directory, `${sourceKey}.sources.json`), JSON.stringify(sources));
-  if (
-    !sources.some(({ origin }) => origin === 'recording') ||
-    !sources.some(({ origin }) => origin === 'live')
-  ) {
+  const sourcesComplete =
+    input.evidenceMode === 'live_only_missing_recording'
+      ? sources.length === 1 &&
+        sources[0]?.origin === 'live' &&
+        Boolean(sources[0]?.recordedRequests?.length)
+      : sources.some(({ origin }) => origin === 'recording') &&
+        sources.some(({ origin }) => origin === 'live');
+  if (!sourcesComplete) {
     return finish({
       status: 'unverified',
-      reason: 'Both a recording case and matched live raw responses are required.',
+      reason:
+        input.evidenceMode === 'live_only_missing_recording'
+          ? 'Live-only review requires one retained live response and its recorded request metadata.'
+          : 'Both a recording case and matched live raw responses are required.',
     });
   }
   if (new Set(sources.map(({ id }) => id)).size !== sources.length)
@@ -228,6 +244,7 @@ export async function verifyRecordingEvidence(input: {
         : new Map(input.fixtures.map(({ id, actual }) => [id, text(actual)]));
     let payload: unknown = {
       phase,
+      evidenceMode: input.evidenceMode ?? 'paired',
       currentDate: new Date().toISOString().slice(0, 10),
       operation: input.operation,
       ...(phase === 'evaluation' ? { expectations } : {}),

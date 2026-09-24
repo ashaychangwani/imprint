@@ -3,6 +3,7 @@ import {
   ProviderDeadlineError,
   ProviderReportedError,
   ProviderUnavailableError,
+  RollingRunDeadline,
   RunDeadline,
   boundedRunDeadline,
   combinedDeadlineSignal,
@@ -10,6 +11,14 @@ import {
   jitteredBackoffMs,
   retryTransientProviderFailure,
 } from '../src/imprint/provider-retry.ts';
+
+it('keeps an unbounded run horizon ahead of the current time', () => {
+  let now = 1_000;
+  const deadline = new RollingRunDeadline(500, () => now);
+  expect(deadline.deadlineMs).toBe(1_500);
+  now = 2_000;
+  expect(deadline.deadlineMs).toBe(2_500);
+});
 
 describe('isTransientProviderCapacityError', () => {
   it('recognizes provider-neutral capacity and overload shapes', () => {

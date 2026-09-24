@@ -1,4 +1,4 @@
-For each selected recording-backed example, include a replay verification case using the recorded input values and a matched live case. Set recordedCall:{requestSeqs:[...],freshnessChanges:"..."} on both: requestSeqs is the exact ordered response chain to pass to the parser (including repeated frames only when actually part of that call), not a general evidence citation list. Replay freshnessChanges says "none"; live describes only necessary fresh dates/state/upstream values. Keep the set small and fixed; do not invent examples absent from the recording. All selected live cases will execute and be reviewed before publication.
+For each selected recording-backed example with a captured response body, include a replay verification case using the recorded input values and a matched live case. Set recordedCall:{requestSeqs:[...],freshnessChanges:"..."} on both: requestSeqs is the exact ordered response chain to pass to the parser (including repeated frames only when actually part of that call), not a general evidence citation list. Replay freshnessChanges says "none"; live describes only necessary fresh dates/state/upstream values. Keep the set small and fixed; do not invent examples absent from the recording. All selected live cases will execute and be reviewed before publication. When no comparable recorded response was captured for the same purpose, use only a live case with recordedCall naming the recorded request and recordingFixtureUnavailable:true. State the missing parser fixture as a limitation; never invent replay proof.
 
 TOOL BOUNDARIES FOLLOW USER PURPOSES: Distinct recorded user purposes deserve
 separate tools even when their parameter shapes, dependencies or API endpoint
@@ -37,16 +37,19 @@ Copy `validationContext.binding` exactly.
 
 When supplied, `recordingResponseBodySeqs` lists the recorded requests whose
 response bodies are available for parser fixtures. Select recorded/live pairs
-from those bodies; a request's presence in `recordingIndex` alone is insufficient.
+from those bodies; a request's presence in `recordingIndex` alone is insufficient for replay.
 Keep execution provenance separate from parser fixtures. `requestProvenance`
 describes the exact requests the tested workflow executes; preserve its request IDs
 and any distinct captured-response IDs. `verificationCases[].recordedCall` names
-the comparable recorded input/response fixture. A different fixture does not rename
-an executed request. If research used a missing-body request, find a recorded call
-for the same purpose and justify comparability from the supplied data before
-compilation; otherwise report the gap to the master. Live output cannot substitute
-for a missing recording fixture, and a different purpose is not comparable merely
-because its response has the same shape.
+the comparable recorded request and, when available, its response fixture. A
+different fixture does not rename an executed request. If research used a
+missing-body request, first find a captured call for the same purpose and
+justify comparability. If none exists, mark the live case
+`recordingFixtureUnavailable:true`, cite the exact missing-body request in
+`recordedCall`, and explain the limitation. This verifies the parser against
+fresh retained responses only; it never substitutes live output for a recorded
+response. A different purpose is not comparable merely because its response
+has the same shape.
 
 The MVP runner executes and reviews every selected `live` verification case,
 using its exact inputs and expected result. The first case supplies the primary
@@ -56,9 +59,9 @@ audit uses this same fixed set to assess the advertised parameters. Where the
 recording provides contrasting values, choose cases that establish those core
 mappings; repeating identical inputs does not establish a parameter's effect.
 Do not invent new challenges or demand an exhaustive matrix. If the supplied
-recording evidence cannot settle a required gap, state what remains unproven
-for the master and request the missing recorded evidence or a narrower supported
-contract. Optional breadth can wait.
+recording request and fresh tests cannot settle a required gap, state what remains unproven
+for the master and request a narrower supported contract.
+Optional breadth can wait.
 
 Request research for every selected operation has already finished. Read the
 complete `apiResearch` handoff list before proposing this tool. A proven handoff
@@ -379,6 +382,10 @@ Every new API plan must pair each selected `replay` case with a `live` case.
 Both declare `recordedCall` with the same exact ordered response sequences.
 The host validates this pairing before compilation, runs the parser against
 the recorded and live responses, and requires independent evidence review.
+The sole exception is an explicitly live-only case when its recorded response
+body was not captured: declare `recordingFixtureUnavailable:true` on that live
+case, cite the exact recorded request, and let the host review the retained
+live raw response without claiming replay verification.
 Use exact recorded public values for replay; never invent them. Keep the live
 inputs comparable and describe necessary freshness changes. Exact request
 equality can expose a construction bug, but differences may be legitimate
@@ -499,6 +506,7 @@ Exact output schema (all objects reject extra fields):
       parameterValues:Array<{parameterName,value:string|number|boolean}>,
       expectedResult:string,
       recordedCall:{requestSeqs:integer[],freshnessChanges:string},
+      recordingFixtureUnavailable?:true,
       provenance:{
         recordingRequestSeqs:integer[], recordingEventSeqs:integer[],
         evidenceRefs:content-addressed refs[]

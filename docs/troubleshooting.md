@@ -250,16 +250,22 @@ new teach run.
 
 The timeout covers the foreground teach run and defaults to 12 hours. A large
 recording can require many focused planner, compiler, check, advice, and repair
-calls; override it only when you intentionally want another run-wide deadline:
+calls. Set a different run-wide deadline, or explicitly let the run continue
+until completion or cancellation:
 
 ~~~bash
 imprint teach <site> --timeout 12h
+imprint teach <site> --unbounded
 ~~~
+
+`--unbounded` removes the whole-teach deadline. Individual actions still have
+finite timeouts and provider retries still use backoff; cancel the foreground
+command to stop the run. It cannot be combined with `--timeout`.
 
 Provider capacity and overload errors retry automatically with capped
 exponential backoff and jitter. They do not become artifact failures. Invalid
-requests, authentication errors, schema errors, cancellation, and the run-wide
-deadline are terminal instead of being retried forever.
+requests, authentication errors, schema errors, cancellation, and any configured
+run-wide deadline are terminal instead of being retried forever.
 
 For deeper debugging, enable Phoenix tracing and inspect the focused role or
 tool call that is spending time:

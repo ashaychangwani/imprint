@@ -44,6 +44,53 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('reviews live parser fidelity without claiming an unavailable recorded response', async () => {
+    const live = fixtures()[1];
+    live.recordedRequests = [
+      { seq: 1, method: 'POST', url: 'https://example.test/search', body: '{"route":"A-B"}' },
+    ];
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: [live],
+      evidenceMode: 'live_only_missing_recording',
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-live-only-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        calls++;
+        expect(payload).toHaveProperty('evidenceMode', 'live_only_missing_recording');
+        return calls === 1
+          ? schema.parse({
+              action: 'finish',
+              reason: 'The recorded route and live inputs match',
+              comparability: { status: 'matched', reason: 'Same route and operation' },
+              expectations: [
+                { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
+              ],
+            })
+          : schema.parse({
+              action: 'finish',
+              status: 'passed',
+              reason: 'Live parser output matches',
+            });
+      },
+    });
+    expect(calls).toBe(2);
+    expect(result.status).toBe('passed');
+    expect(result.reason).toContain('recorded response body was unavailable');
+    const missingMetadata = await verifyRecordingEvidence({
+      operation,
+      fixtures: [fixtures()[1]],
+      evidenceMode: 'live_only_missing_recording',
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-live-only-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async () => {
+        throw new Error('No review should run without recorded request metadata');
+      },
+    });
+    expect(missingMetadata.status).toBe('unverified');
+  });
+
   it('accepts exact raw response quotations without requiring JSON-wrapper escaping', async () => {
     const data = fixtures();
     const quotedFacts = data.map((fixture) => {

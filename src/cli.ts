@@ -129,7 +129,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       'Record or load a session, then let the master discover, plan, compile, verify, and emit every supported tool.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path> ...] [--from-candidates <run-id>] [--guidance <text>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test]',
+      'imprint teach <site> [--url <url>] [--from-session <path> ...] [--from-candidates <run-id>] [--guidance <text>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration> | --unbounded] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
@@ -171,6 +171,11 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--timeout <duration>',
         description: 'Foreground teach deadline. Accepts 20m, 12h, 300s, or plain ms. Default 12h.',
+      },
+      {
+        name: '--unbounded',
+        description:
+          'Run teach without a whole-run deadline; individual action timeouts and cancellation remain.',
       },
       {
         name: '--keep-test',
@@ -1504,6 +1509,7 @@ async function main(argv: string[]): Promise<number> {
           provider: { type: 'string' },
           model: { type: 'string' },
           timeout: { type: 'string' },
+          unbounded: { type: 'boolean' },
           'keep-test': { type: 'boolean' },
         },
         allowPositionals: false,
@@ -1532,6 +1538,10 @@ async function main(argv: string[]): Promise<number> {
       }
 
       let teachTimeoutMs: number | undefined;
+      if (values.unbounded && values.timeout) {
+        console.error('error: --unbounded and --timeout cannot be combined');
+        return 2;
+      }
       if (values.timeout) {
         teachTimeoutMs = parseDuration(values.timeout) ?? undefined;
         if (teachTimeoutMs === undefined) {
@@ -1561,6 +1571,7 @@ async function main(argv: string[]): Promise<number> {
               values.provider ?? (values.agent === 'codex' ? 'codex-cli' : 'auto'),
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
+            'imprint.unbounded': values.unbounded ?? false,
             'imprint.agent': values.agent ?? 'master',
             'imprint.no_interactive': values['no-interactive'] ?? false,
           },
@@ -1577,6 +1588,7 @@ async function main(argv: string[]): Promise<number> {
               provider: values.provider as ProviderName | undefined,
               model: values.model,
               maxDurationMs: teachTimeoutMs,
+              unbounded: values.unbounded,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               agent: values.agent === 'codex' ? 'codex' : undefined,
               onProgress: (message) => console.error(`[imprint teach] ${message}`),

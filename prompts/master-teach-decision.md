@@ -89,7 +89,10 @@ for parser fixtures. Use it when selecting the mode, before research begins.
 not proof that an API failed. Preserve valid sibling proposals and research, revise
 the affected tool or evidence choice, and explain the repair in your decision.
 Leave its implementation plan absent so its retained planner can try the revision.
-Do not substitute live output for a missing recording fixture.
+Do not substitute live output for a missing recording fixture. When no
+comparable recorded response exists for an otherwise live-proven capability,
+the focused planner may mark its live case `recordingFixtureUnavailable:true`;
+keep that limitation explicit and require independent live-response review.
 
 Keep the executable path small without discarding its verification evidence.
 A candidate's `requestSeqs` is a recorded evidence pool, not an ordered execution
@@ -472,9 +475,9 @@ plan to the retained compiler conversation. Do not mark the operation
 unresolved until the corrected grounded constructions have actually been tried.
 
 An unavailable recorded response is a verification-plan gap even when the live
-call succeeds. Select comparable captured recording evidence and re-plan the
-affected tool; do not waive the required replay/live check or merely recall its
-parser under the same unusable fixture reference. Preserve unrelated proven tools.
+call succeeds. Seek a comparable captured response for the same purpose first.
+If none exists, use the explicitly marked live-only verification path rather
+than claiming replay proof from missing bytes. Preserve unrelated proven tools.
 
 For a changing recorded field, keep producer availability separate from field
 necessity. “No supported live producer” does not mean “the field is required.”

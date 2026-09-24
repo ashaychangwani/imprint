@@ -38,6 +38,7 @@ interface Assignment {
   result?: string;
   agentId?: string;
   call?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
+  beforeSubmit?: () => void;
   resolve: (result: { text: string; agentId?: string }) => void;
   reject: (error: unknown) => void;
 }
@@ -99,6 +100,7 @@ export class NativeTeachAgents {
       conversation?: string;
       signal?: AbortSignal;
       call?: Assignment['call'];
+      beforeSubmit?: Assignment['beforeSubmit'];
     } = {},
   ): Promise<{ text: string; agentId?: string }> {
     if (this.#failure) return Promise.reject(this.#failure);
@@ -132,6 +134,7 @@ export class NativeTeachAgents {
         conversation: options.conversation ?? id,
         prompt,
         call: options.call,
+        beforeSubmit: options.beforeSubmit,
         resolve: (result) => {
           signal?.removeEventListener('abort', abort);
           resolve(result);
@@ -220,6 +223,7 @@ export class NativeTeachAgents {
       const { text } = z.object({ text: z.string().min(1) }).parse(raw);
       if (!task.agentId)
         throw new Error('Read this assignment with your native agent path before submission');
+      task.beforeSubmit?.();
       if (task.result !== undefined && task.result !== text)
         throw new Error('Cannot replace a submitted response');
       if (task.result === undefined) {

@@ -212,4 +212,30 @@ describe('native teach family bridge', () => {
       rmSync(root, { recursive: true, force: true });
     }
   });
+
+  it('keeps an assignment open when its host pass has not validated the final step', async () => {
+    const { family, root } = fixture();
+    try {
+      let completed = false;
+      const pending = family.submit('Repair step', {
+        conversation: 'focused-planner',
+        call: async () => ({ complete: completed }),
+        beforeSubmit: () => {
+          if (!completed) throw new Error('Host validation still awaits step 3; call respond');
+        },
+      });
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: '/root/planner' });
+      await expect(family.handle('submit', { id, text: '{"plan":"unvalidated"}' })).rejects.toThrow(
+        'Host validation still awaits step 3',
+      );
+      expect(await family.handle('list_assignment_tools', { id })).toEqual({ complete: false });
+      completed = true;
+      await family.handle('submit', { id, text: 'Host-validated pass complete' });
+      expect((await pending).text).toBe('Host-validated pass complete');
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
