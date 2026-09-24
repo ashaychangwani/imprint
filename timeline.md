@@ -15797,3 +15797,7 @@ repair path. A two-live-case regression covers a semantic rejection after a
 passed transport receipt. See
 docs/teach-flights-40-unbounded-retrospective-2026-09-24.md. Focused tests,
 the full 2,066-test suite, lint, and type checking passed. A fresh teach follows.
+The trace reports 57,093,817 input tokens (52,677,376 cache reads), 356,968
+output, zero reported cache writes, and a $45.8760744 base API-equivalent
+lower bound with one analysis span missing usage. Flights41 started fresh on
+`20bfc88`.
