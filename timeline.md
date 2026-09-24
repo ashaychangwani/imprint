@@ -15704,3 +15704,24 @@ Flights run will use the same recording and four operation groups in a new
 isolated home. Focused regressions, lint, and type checking passed; the full
 suite passed 2,063 tests, and diff checks passed. No live outcome is claimed
 yet.
+
+## September 24 — Flights36 passed two tools; reviewer deadline escaped
+
+Flights36 used `63915d8` and `--unbounded` in a fresh isolated home. It ran
+138.56 minutes and published date grid and location search, with four other
+tools unresolved and no post-teach audit. One-way booking research used fresh
+one-way search output. The planner handled the missing recorded response for
+request 206 without fabricating replay proof. A one-way compiler caught a
+response-index versus DOM-ordinal contradiction, and the master repaired both
+producer and booking plans in their retained conversations.
+
+The run ended because the new live-only recording-evidence path let its
+five-minute reviewer deadline escape and terminate the whole teach. The paired
+path already converted that error to an unverified result. Both paths now use
+the same error handling, with a focused regression. See
+docs/teach-flights-36-unbounded-retrospective-2026-09-24.md. The trace reports
+59,592,892 input tokens (55,285,504 cache reads), 372,266 output, zero
+reported cache writes, and a $46.7891 base API-equivalent lower bound; two
+analysis spans have missing usage. The focused regression, full suite (2,064
+tests), lint, type checking, and diff checks passed. The next teach must start
+fresh on the fix.

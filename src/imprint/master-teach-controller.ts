@@ -673,7 +673,7 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   };
 };
 
-async function verifyRecordingMvp(input: {
+export async function verifyRecordingMvp(input: {
   tool: EditableTeachingTool;
   compiled: CompiledFocusedTool;
   live: LiveCheckResult;
@@ -703,46 +703,53 @@ async function verifyRecordingMvp(input: {
       reason:
         'A matched recordedCall and retained live raw responses are required for parser verification.',
     };
-  if (verification.recordingFixtureUnavailable) {
-    const recordedRequests = recordedCall.requestSeqs.map((seq) =>
-      input.session.requests.find((request) => request.seq === seq),
-    );
-    if (
-      recordedRequests.some((request) => !request) ||
-      recordedRequests.every((request) => request?.response?.body !== undefined)
-    )
-      return {
-        status: 'unverified',
-        reason: 'The cited missing recording response could not be confirmed in this session.',
-      };
-    return await verifyRecordingEvidence({
-      operation: {
-        name: input.tool.candidate.toolName,
-        description: input.tool.candidate.description,
-        expectedOutput: input.tool.candidate.expectedOutput,
-      },
-      evidenceMode: 'live_only_missing_recording',
-      fixtures: [
-        {
-          id: `live_${verification.id}`,
-          origin: 'live',
-          requestSeqs: recordedCall.requestSeqs,
-          recordedRequests: recordedRequests.flatMap((request) =>
-            request
-              ? [{ seq: request.seq, method: request.method, url: request.url, body: request.body }]
-              : [],
-          ),
-          freshnessChanges: recordedCall.freshnessChanges,
-          parameters: input.live.parameters,
-          responses: input.live.rawResponses,
-          actual: input.live.result.data,
-        },
-      ],
-      directory: input.directory,
-      agent: input.agent,
-    });
-  }
   try {
+    if (verification.recordingFixtureUnavailable) {
+      const recordedRequests = recordedCall.requestSeqs.map((seq) =>
+        input.session.requests.find((request) => request.seq === seq),
+      );
+      if (
+        recordedRequests.some((request) => !request) ||
+        recordedRequests.every((request) => request?.response?.body !== undefined)
+      )
+        return {
+          status: 'unverified',
+          reason: 'The cited missing recording response could not be confirmed in this session.',
+        };
+      return await verifyRecordingEvidence({
+        operation: {
+          name: input.tool.candidate.toolName,
+          description: input.tool.candidate.description,
+          expectedOutput: input.tool.candidate.expectedOutput,
+        },
+        evidenceMode: 'live_only_missing_recording',
+        fixtures: [
+          {
+            id: `live_${verification.id}`,
+            origin: 'live',
+            requestSeqs: recordedCall.requestSeqs,
+            recordedRequests: recordedRequests.flatMap((request) =>
+              request
+                ? [
+                    {
+                      seq: request.seq,
+                      method: request.method,
+                      url: request.url,
+                      body: request.body,
+                    },
+                  ]
+                : [],
+            ),
+            freshnessChanges: recordedCall.freshnessChanges,
+            parameters: input.live.parameters,
+            responses: input.live.rawResponses,
+            actual: input.live.result.data,
+          },
+        ],
+        directory: input.directory,
+        agent: input.agent,
+      });
+    }
     const fixtures = await recordingFixtures({
       ...input,
       workflow: input.compiled.workflow,
