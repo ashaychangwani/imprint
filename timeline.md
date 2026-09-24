@@ -15671,3 +15671,18 @@ during the run; retained run evidence was 104 MiB. The trace reports
 reported cache writes, and a $33.5465984 base API-equivalent estimate. See
 docs/teach-flights-34-long-retrospective-2026-09-24.md. No further teach was
 started.
+
+## September 24 — Flights35 ended in focused-planner protocol failure
+
+After removing regenerable dependencies from old experiment homes, Flights35
+started fresh without the 90-minute override. It ended on its own at minute
+55.90 with 0 ready and 4 not ready; no audit ran. Space was not the blocker:
+7.3 GiB remained. The master chose four tools, but the first focused planner
+for one-way search could not satisfy the recorded/live case rule because its
+selected recording requests had no captured response bodies. On its third
+repair step, the native child submitted JSON through the family instead of
+the host validation tool; the bridge terminated the entire teach. See
+docs/teach-flights-35-long-retrospective-2026-09-24.md. The trace reports
+33,133,707 input tokens (30,389,376 cache reads), 228,671 output, zero
+reported cache writes, and a $27.7064944 base API-equivalent estimate. No
+further teach was started.
