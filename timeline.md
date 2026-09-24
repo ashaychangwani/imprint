@@ -15644,3 +15644,21 @@ docs/teach-12-hour-retrospective-2026-09-23.md covers Flights26–32, the
 measured stage time and token/cost totals, and the remaining publication
 bottleneck. Flights33 was still in discovery at the retrospective cutoff, so
 its outcome is not counted as a success or failure there.
+
+## September 24 — Flights33 published one tool; longer teach started
+
+Flights33 used `997bd9f` and the 90-minute deadline. It ended with one ready
+location-search tool, three not ready, and no audit. The master kept two exact
+planner proposals and revised only the round-trip search/booking pair for
+missing chain paths. Compilation began near minute 56 instead of Flights32's
+minute 87.7. Round-trip search and date grid passed contract and live checks
+but did not clear result/chain review before the deadline; booking did not
+compile. The process took 98.28 wall minutes including deadline cleanup.
+See docs/teach-flights-33-retrospective-2026-09-24.md. One usage span is
+missing, so reported token and cost totals are lower bounds.
+
+The user then authorized a fresh teach without the 90-minute cutoff.
+Flights34-long started in a new isolated home on the same implementation,
+with no CLI timeout override. Imprint's default and the one-shot driver both
+allow up to 12 hours. No cron or recurring monitor was created. Its outcome
+is still pending; no success claim follows from its longer allowance.
