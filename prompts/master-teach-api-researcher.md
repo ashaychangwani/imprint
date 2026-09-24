@@ -211,7 +211,11 @@ action and the request's decoded structure with the original purpose. A matching
 URL, public parameter shape, or plausible response does not establish that the
 two calls serve the same purpose. For a candidate using another recording
 reference, include `recordingReferenceChange` with the exact ordered
-`selectedRequestSeqs`, `comparability`, and `remainingUncertainty`. Describe
+`selectedRequestSeqs`, `comparability`, and `remainingUncertainty`.
+`selectedRequestSeqs` must list the `recordingRequestSeq` of each executed
+`candidate.workflow.requests` step in workflow order. It does not list the
+tool's recorded examples or a response captured by a navigation step unless
+that response is itself an executed workflow request. Describe
 meaningful differences even when the live call succeeds. If the intended purpose
 remains unproven, report `partial` with the gap or ask the master to revise the
 recorded boundary. The host checks references and your explanation, but you

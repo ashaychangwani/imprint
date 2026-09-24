@@ -2416,7 +2416,7 @@ describe('prompts and pre-plan discovery', () => {
         }),
         input,
       ),
-    ).toThrow('selected references must exactly match');
+    ).toThrow("execution workflow requests' recordingRequestSeq order [18]; received [12]");
     expect(
       parseApiResearchOutput(
         JSON.stringify({

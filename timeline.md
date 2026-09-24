@@ -15725,3 +15725,19 @@ reported cache writes, and a $46.7891 base API-equivalent lower bound; two
 analysis spans have missing usage. The focused regression, full suite (2,064
 tests), lint, type checking, and diff checks passed. The next teach must start
 fresh on the fix.
+
+## September 24 — Flights37 exposed a recording-reference repair loop
+
+Flights37 ran fresh on `b372285` for 54.59 minutes. One-way search, multi-city
+search, one-way booking, and the date grid reached proven API research. A live
+round-trip search also returned a full shopping payload, but the researcher
+could not submit its narrowed proven handoff: it repeatedly reported the tool's
+recorded examples `[104,730]` in a field that requires the executed workflow
+request order `[618]`. The validator's generic error did not reveal that
+expected value, and the master repeated the wrong repair direction. I stopped
+the run before publication; all evidence remains. The validator now reports
+expected and received arrays, and the researcher prompt distinguishes workflow
+requests from examples and captured responses. See
+docs/teach-flights-37-unbounded-retrospective-2026-09-24.md. Focused tests,
+the full suite (2,064 tests), lint, type checking, and diff checks passed. A
+fresh teach follows.

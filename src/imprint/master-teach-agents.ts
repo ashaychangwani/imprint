@@ -524,7 +524,7 @@ function apiResearchOutputSchema(input: ApiResearchInput) {
       issue(
         ctx,
         ['recordingReferenceChange', 'selectedRequestSeqs'],
-        'selected references must exactly match the candidate request order',
+        `selected references must match the execution workflow requests' recordingRequestSeq order ${JSON.stringify(selectedRequestSeqs)}; received ${JSON.stringify(output.recordingReferenceChange.selectedRequestSeqs)}. The tool's recorded examples and captured response references are separate from these executed requests`,
       );
     if (workflow.site !== input.run.site)
       issue(
