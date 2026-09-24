@@ -15661,4 +15661,13 @@ The user then authorized a fresh teach without the 90-minute cutoff.
 Flights34-long started in a new isolated home on the same implementation,
 with no CLI timeout override. Imprint's default and the one-shot driver both
 allow up to 12 hours. No cron or recurring monitor was created. Its outcome
-is still pending; no success claim follows from its longer allowance.
+was interrupted at minute 41.59 because disk space reached 486 MiB. It ended
+with 0 ready and 12 unfinished; no audit ran. Five research paths were proven,
+four partial, two booking paths factually blocked, and one booking path still
+active. The booking researchers found missing intermediate selection context
+between fresh search and booking. MacOS allocated 6.5 GiB of new swap files
+during the run; retained run evidence was 104 MiB. The trace reports
+41,204,467 input tokens (38,007,936 cache reads), 277,865 output, zero
+reported cache writes, and a $33.5465984 base API-equivalent estimate. See
+docs/teach-flights-34-long-retrospective-2026-09-24.md. No further teach was
+started.
