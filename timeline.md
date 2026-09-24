@@ -15780,3 +15780,20 @@ the full suite (2,066 tests), lint, type checking, and diff checks passed.
 The trace reports 63,667,510 input tokens (59,475,328 cache reads), 373,481
 output, zero reported cache writes, and a $48.0284792 base API-equivalent
 lower bound with two analysis spans missing usage. A fresh teach follows.
+
+## September 24 — Flights40 exposed a final-sweep repair bypass
+
+Flights40 ran fresh on `bd755b8` for 101.7 minutes. It retained 39 research
+response records and reached live checks, but published no tools. The location
+parser omitted four nearby components in a recorded suggestion, and its
+independent reviewer rejected it. A passed transport receipt then caused the
+controller's final sweep to try approving the already-rejected result. It
+threw a misleading missing-result error instead of giving the semantic
+finding to the master for repair. The round-trip review phase reached its
+five-minute limit once and successfully retried in the same conversation.
+
+The final sweep now leaves any tool with a recorded failure to the normal
+repair path. A two-live-case regression covers a semantic rejection after a
+passed transport receipt. See
+docs/teach-flights-40-unbounded-retrospective-2026-09-24.md. Focused tests,
+the full 2,066-test suite, lint, and type checking passed. A fresh teach follows.

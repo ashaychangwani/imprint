@@ -4686,7 +4686,22 @@ describe('fresh foreground master controller end to end', () => {
           ...base,
           requestFocusedPlan: async (plannerInput) => {
             if (plannerInput.revisionContext) repairPlannerCalls += 1;
-            return await baseRequestFocusedPlan(plannerInput);
+            const planned = await baseRequestFocusedPlan(plannerInput);
+            const liveCase = planned.implementationPlan?.verificationCases.find(
+              ({ check }) => check === 'live',
+            );
+            if (!planned.implementationPlan || !liveCase)
+              throw new Error('fixture expected a live verification case');
+            return FocusedPlannerOutputSchema.parse({
+              ...planned,
+              implementationPlan: {
+                ...planned.implementationPlan,
+                verificationCases: [
+                  ...planned.implementationPlan.verificationCases,
+                  { ...liveCase, id: `live_secondary_${plannerInput.tool.id}` },
+                ],
+              },
+            });
           },
           detectToolCandidates: async () => ({
             ...validateToolCandidateDetection({
@@ -4755,7 +4770,7 @@ describe('fresh foreground master controller end to end', () => {
       expect(terminal.readyTools).toBe(1);
       expect(terminal.nonReadyTools).toBe(0);
       expect(repairAttempts).toBe(1);
-      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(2);
+      expect(events.filter((event) => event === `review:${PRODUCER_ID}`)).toHaveLength(3);
       expect(events.filter((event) => event === `compile:${PRODUCER_ID}`)).toHaveLength(2);
       expect(repairPlannerCalls).toBe(0);
       expect(completionReviewCalls).toBe(1);

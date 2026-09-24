@@ -5209,6 +5209,9 @@ async function compileAndCheckCurrentPlan(input: {
   verifiedToolIds.clear();
   for (const tool of plan.tools) {
     if (dependencyBlockedToolIds.has(tool.id)) continue;
+    // A passed transport receipt can remain after semantic review rejects a live case.
+    // Preserve that finding for master repair instead of treating the receipt as approval.
+    if (failures.some(({ toolId }) => toolId === tool.id)) continue;
     const proofFailures = mechanicalProofFailures(plan, finalSnapshot, tool.id);
     if (proofFailures.length === 0) {
       const focused = compiledByToolId.get(tool.id);
