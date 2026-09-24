@@ -65,6 +65,7 @@ const StepSchema = z
     reason: z.string().min(1),
   })
   .strict();
+const MAX_EVIDENCE_INSPECTIONS = 12;
 const hash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string =>
@@ -271,8 +272,9 @@ export async function verifyRecordingEvidence(input: {
     const initialPayload = payload;
     const inspections: unknown[] = [];
     let finished = false;
-    // Six inspections/repairs, then one final decision using the last result.
-    for (let turn = 0; turn < 7; turn++) {
+    // Complex nested responses can need several corrected projections. Keep
+    // reads bounded while allowing the reviewer to finish from full evidence.
+    for (let turn = 0; turn <= MAX_EVIDENCE_INSPECTIONS; turn++) {
       let decision: z.infer<typeof StepSchema>;
       while (true) {
         try {
@@ -318,7 +320,7 @@ export async function verifyRecordingEvidence(input: {
         JSON.stringify({ payload, decision }),
       );
       if (decision.action === 'inspect') {
-        if (turn === 6) break;
+        if (turn === MAX_EVIDENCE_INSPECTIONS) break;
         const body = texts.get(decision.sourceId ?? '');
         if (body === undefined)
           return finish({
@@ -345,14 +347,14 @@ export async function verifyRecordingEvidence(input: {
               projected: projected.slice(0, 32_000),
               characters: projected.length,
               truncated: projected.length > 32_000,
-              remainingInspections: 5 - turn,
+              remainingInspections: MAX_EVIDENCE_INSPECTIONS - 1 - turn,
             };
           } catch (error) {
             payload = {
               phase,
               sourceId: decision.sourceId,
               inspectionError: error instanceof Error ? error.message : String(error),
-              remainingInspections: 5 - turn,
+              remainingInspections: MAX_EVIDENCE_INSPECTIONS - 1 - turn,
             };
           }
         } else {
@@ -365,7 +367,7 @@ export async function verifyRecordingEvidence(input: {
             offset: start,
             characters: body.length,
             text: start < 0 ? '' : body.slice(start, start + 32_000),
-            remainingInspections: 5 - turn,
+            remainingInspections: MAX_EVIDENCE_INSPECTIONS - 1 - turn,
           };
         }
         inspections.push(payload);
@@ -400,7 +402,7 @@ export async function verifyRecordingEvidence(input: {
               'Independent expectations must cover each source once, cite literal raw evidence, and include an explicit comparability assessment. Decoded projections may use different escaping. Repair the proof against existing evidence; parser output is still hidden.',
             requiredSourceIds: sources.map(({ id }) => id),
             invalidCitations,
-            remainingInspections: Math.max(0, 5 - turn),
+            remainingInspections: Math.max(0, MAX_EVIDENCE_INSPECTIONS - 1 - turn),
           };
           inspections.push(payload);
           if (input.agent.provider !== 'codex-cli')

@@ -45,6 +45,40 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('allows a complex source review to finish after corrected bounded inspections', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-deep-inspection-'));
+    let inspections = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory,
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        if ((payload as { phase?: string }).phase === 'evaluation')
+          return schema.parse({ action: 'finish', status: 'passed', reason: 'Parser matches' });
+        if (inspections < 8) {
+          inspections++;
+          return schema.parse({
+            action: 'inspect',
+            sourceId: 'recorded',
+            project: '(responses) => responses[0]',
+            reason: 'Inspect the retained source',
+          });
+        }
+        return schema.parse({
+          action: 'finish',
+          reason: 'Raw facts established',
+          comparability,
+          expectations,
+        });
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(inspections).toBe(8);
+    expect(readdirSync(directory).filter((name) => name.includes('.expectations-'))).toHaveLength(
+      9,
+    );
+  });
   it('retries a phase provider deadline with retained expectations and the same evaluation turn', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-phase-retry-'));
     let calls = 0;

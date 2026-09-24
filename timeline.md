@@ -15801,3 +15801,26 @@ The trace reports 57,093,817 input tokens (52,677,376 cache reads), 356,968
 output, zero reported cache writes, and a $45.8760744 base API-equivalent
 lower bound with one analysis span missing usage. Flights41 started fresh on
 `20bfc88`.
+
+## September 24 — Flights41 published two tools but exhausted evidence inspection
+
+Flights41 ran fresh for 143.8 minutes. Location lookup failed its first
+independent review, then the retained compiler repaired it and it published.
+One-way search switched from a failing direct POST to a page-issued API call,
+passed its live-only parser review, and published. Multi-city search returned
+substantive live results, but its latest recorded parser revision remained
+unverified after the reviewer spent all six inspections navigating nested
+response frames. One-way booking used fresh search output, but it selected a
+different flight from the recorded booking case, so its review correctly
+rejected comparability. Date grid remained unresolved after its exact
+candidate returned application errors. The master repeated the same plan and
+failure state, and the run stopped with two ready and three not ready.
+
+Each independent review phase now allows twelve bounded inspections so a
+reviewer can recover from mistaken projections of complex retained evidence.
+Proof and comparability requirements are unchanged. See
+docs/teach-flights-41-unbounded-retrospective-2026-09-24.md. Focused tests,
+the full 2,067-test suite, lint, and type checking passed. The trace reports
+45,148,862 input tokens (41,022,592 cache reads), 353,726 output, zero
+reported cache writes, and a $39.9886368 base API-equivalent lower bound
+with three analysis spans missing usage. A fresh teach follows.
