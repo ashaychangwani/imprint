@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { runNativeAgentPass } from '../src/imprint/native-agent-pass.ts';
 import { NativeTeachAgents, currentNativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
 import { RunDeadline } from '../src/imprint/provider-retry.ts';
 
@@ -23,6 +24,48 @@ const tasks = async (family: NativeTeachAgents) =>
   };
 
 describe('native teach family bridge', () => {
+  it('releases a validated pass when the child never acknowledges completion', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-native-ack-'));
+    let assignmentId: string | undefined;
+    const family = new NativeTeachAgents(
+      { root, model: 'fixture', deadline: new RunDeadline(Date.now() + 10_000) },
+      async (bridge) => {
+        const id = (await tasks(bridge)).tasks[0]?.id;
+        assignmentId = id;
+        await bridge.handle('read_assignment', { id, agentId: '/root/researcher' });
+        expect(
+          await bridge.handle('call_assignment_tool', {
+            id,
+            name: 'respond',
+            args: { step: 1, text: '{"proven":true}' },
+          }),
+        ).toEqual({ complete: true });
+        // Simulate a native child that remains alive after the host pass.
+      },
+    );
+    try {
+      expect(
+        await runNativeAgentPass({
+          family,
+          conversation: 'tool:lookup:api-researcher',
+          logPath: join(root, 'pass.jsonl'),
+          acknowledgmentGraceMs: 10,
+          run: async (analyzer) => JSON.parse((await analyzer.analyze('role', {})).text),
+        }),
+      ).toEqual({ proven: true });
+      expect(readFileSync(join(root, 'pass.jsonl'), 'utf8')).toContain(
+        'pass.acknowledgment_timeout',
+      );
+      expect(readFileSync(join(root, 'events.jsonl'), 'utf8')).toContain('assignment.cancelled');
+      await expect(
+        family.handle('submit', { id: assignmentId, text: 'late acknowledgment' }),
+      ).rejects.toThrow('Unknown or cancelled assignment');
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it('rejects failed creation journaling without enqueueing orphan work', async () => {
     const { family, root } = fixture();
     try {

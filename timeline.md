@@ -15741,3 +15741,21 @@ requests from examples and captured responses. See
 docs/teach-flights-37-unbounded-retrospective-2026-09-24.md. Focused tests,
 the full suite (2,064 tests), lint, type checking, and diff checks passed. A
 fresh teach follows.
+
+## September 24 — Flights38 reached research, then exposed native acknowledgment hang
+
+Flights38 ran fresh on `f66a50c` for 60.96 minutes. Location lookup, one-way
+search, and multi-city search reached proven API research. A location-details
+host pass also produced a proven result, but its native child never sent the
+final acknowledgment: the assignment stayed pending for about 39 minutes
+after the successful final `respond`. Date-grid, round-trip search, and
+round-trip booking research were partial; one-way booking was factually
+blocked by mismatched browser selection state. Multi-city booking was still
+testing fresh producer output when I stopped the run. No tools were published.
+
+The native pass now releases only a completed, host-validated assignment if
+its final acknowledgment is absent after 10 seconds. Unfinished or invalid
+passes still cannot complete, and cancellation is journaled. See
+docs/teach-flights-38-unbounded-retrospective-2026-09-24.md. Focused tests,
+the full suite (2,065 tests), lint, type checking, and diff checks passed. A
+fresh teach follows.

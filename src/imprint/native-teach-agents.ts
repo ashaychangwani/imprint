@@ -126,6 +126,11 @@ export class NativeTeachAgents {
     const promise = new Promise<{ text: string; agentId?: string }>((resolve, reject) => {
       const abort = () => {
         this.#assignments.delete(id);
+        try {
+          this.#event('assignment.cancelled', { id, conversation: options.conversation ?? id });
+        } catch {
+          // Cancellation must still release the assignment if journaling fails.
+        }
         reject(signal ? abortSignalError(signal) : new Error('Assignment cancelled'));
       };
       signal?.addEventListener('abort', abort, { once: true });

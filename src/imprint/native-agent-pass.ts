@@ -6,6 +6,7 @@ import type { MasterTeachAnalyzer } from './master-teach-agents.ts';
 import { type NativeTeachAgents, nativeAssignmentPage } from './native-teach-agents.ts';
 
 const instructions = `This assignment is one complete focused agent pass. Use its assignment tools throughout the pass. Call respond with the current step and the exact JSON role response as text; the host validates it, executes accepted actions, and returns the next input directly. Do not submit to the native family between actions. Read every page of a returned input using read_context before responding. Repair feedback, observations, and shared-research replies all continue in this same assignment. When respond returns complete=true, submit a short acknowledgement to the native family and stop. That acknowledgement is not proof; only the host's validated handoff determines the outcome. Native helpers may assist with bounded questions; you remain responsible for this assignment's actions and evidence.`;
+const ACKNOWLEDGMENT_GRACE_MS = 10_000;
 
 type Frame = { complete: true } | { complete: false; step: number; prompt: string };
 function nextFrame() {
@@ -23,6 +24,7 @@ export async function runNativeAgentPass<T>(options: {
   conversation: string;
   signal?: AbortSignal;
   logPath: string;
+  acknowledgmentGraceMs?: number;
   run: (analyzer: MasterTeachAnalyzer, signal: AbortSignal) => Promise<T>;
 }): Promise<T> {
   mkdirSync(dirname(options.logPath), { recursive: true, mode: 0o700 });
@@ -42,6 +44,10 @@ export async function runNativeAgentPass<T>(options: {
   let step = 0;
   let responding = false;
   let finished = false;
+  let completeWork!: () => void;
+  const workCompleted = new Promise<void>((resolve) => {
+    completeWork = resolve;
+  });
   let priorInstructions: string | undefined;
   const analyzer: MasterTeachAnalyzer = {
     analyze: async (prompt, payload, invocation = {}) => {
@@ -114,13 +120,14 @@ export async function runNativeAgentPass<T>(options: {
         return outcome.ok ? { ok: false as const, error } : outcome;
       } finally {
         next.resolve({ complete: true });
+        completeWork();
       }
     });
   let transportError: unknown;
   try {
     const first = await next.promise;
     if (!first.complete) {
-      await options.family.submit(
+      const assignment = options.family.submit(
         `${instructions}\n\nCurrent step: ${first.step}. Read its input with read_context at offset 0, then follow nextOffset until complete.`,
         {
           conversation: options.conversation,
@@ -194,6 +201,31 @@ export async function runNativeAgentPass<T>(options: {
           },
         },
       );
+      const acknowledgment = assignment.then(
+        () => ({ kind: 'acknowledged' as const }),
+        (error: unknown) => ({ kind: 'error' as const, error }),
+      );
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      const grace = workCompleted.then(
+        () =>
+          new Promise<{ kind: 'expired' }>((resolve) => {
+            graceTimer = setTimeout(
+              () => resolve({ kind: 'expired' }),
+              options.acknowledgmentGraceMs ?? ACKNOWLEDGMENT_GRACE_MS,
+            );
+          }),
+      );
+      const result = await Promise.race([acknowledgment, grace]);
+      if (graceTimer) clearTimeout(graceTimer);
+      if (result.kind === 'error') throw result.error;
+      if (result.kind === 'expired') {
+        log('pass.acknowledgment_timeout', {
+          graceMs: options.acknowledgmentGraceMs ?? ACKNOWLEDGMENT_GRACE_MS,
+        });
+        // The validated host result is already final. Release only this
+        // assignment; its missing acknowledgement cannot hold the teach.
+        owned.abort(new Error('Host-validated native pass acknowledgement timed out'));
+      }
       if (!finished)
         throw new Error('Native agent acknowledged before completing its host-validated pass');
     }
