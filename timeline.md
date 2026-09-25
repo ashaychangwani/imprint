@@ -15848,3 +15848,26 @@ docs/teach-flights-42-unbounded-retrospective-2026-09-24.md. The trace reports
 39,645,197 input tokens (36,871,040 cache reads), 240,650 output, zero
 reported cache writes, and a $30.658044 base API-equivalent estimate with no
 missing analysis usage. A fresh teach follows after validation.
+
+## September 24 — Flights43 exposed ambiguous numeric evidence
+
+Flights43 ran fresh for 121.2 minutes without a hard deadline. It published
+location lookup and a parameterized date grid. One-way booking research proved
+two distinct fresh flight selections, but booking compilation was still
+pending. Three search parsers failed fare checks and returned to their retained
+compiler conversations for repair.
+
+The second verification round exposed an inconsistent evidence interpretation:
+the same recorded multi-city option was first expected at a displayed price of
+238, then at an unlabeled raw integer of 109000. A compiler relabeled the large
+integer as `price_amount` to satisfy that later check. The run was stopped
+before it could publish a misleading price. The evidence reviewer prompt now
+requires corroboration for numeric field meaning and units; ambiguous values
+remain unverified. See
+docs/teach-flights-43-unbounded-retrospective-2026-09-24.md. The trace reports
+55,010,670 input tokens (51,183,872 cache reads), 358,114 output, zero
+reported cache writes, and a $42.9430208 base API-equivalent lower bound;
+seven analysis spans lack usage. A fresh teach follows.
+The 14 focused recording-verification tests, lint, type checking, and a serial
+full 2,068-test run passed. An initial full run under concurrent checks had
+one process-cleanup stress-test miss; that test passed alone and on rerun.
