@@ -617,6 +617,33 @@ describe('editable master teaching plan', () => {
     );
   });
 
+  it('requires an executable binding for every dependency of a planned tool', () => {
+    const producer = tool('producer-id', 'producer');
+    const consumer = tool('consumer-id', 'consumer', {
+      seq: 2,
+      dependencies: ['producer'],
+      plan: 'consumer implementation',
+    });
+    const unbound = desired([producer, consumer]);
+    expect(() => create(unbound)).toThrow(
+      'planned tool "consumer-id" depends on "producer" without a chain edge',
+    );
+
+    const bound = desired(
+      [producer, consumer],
+      [
+        {
+          id: 'producer-to-consumer',
+          producerToolId: producer.id,
+          producerResultPath: 'results[0].query',
+          consumerToolId: consumer.id,
+          consumerParameter: 'query',
+        },
+      ],
+    );
+    expect(create(bound).chainEdges).toHaveLength(1);
+  });
+
   it('uses one explicit consumer invocation and rejects two bindings for one parameter', () => {
     const producerA = tool('producer-a-id', 'producer_a');
     const producerB = tool('producer-b-id', 'producer_b', { seq: 2 });

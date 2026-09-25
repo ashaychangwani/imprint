@@ -6160,6 +6160,9 @@ describe('fresh foreground master controller end to end', () => {
             } else if (input.verificationFindings) {
               desiredPlan = desiredFromCurrent(input);
               desiredPlan.chainEdges = [];
+              const consumer = desiredPlan.tools.find(({ id }) => id === CONSUMER_ID);
+              if (!consumer) throw new Error('missing consumer fixture');
+              consumer.candidate.dependsOnTools = [];
               removedTimedOutChain = true;
               outcome = 'revised';
               reason = 'Remove the chain whose factual host receipt timed out.';

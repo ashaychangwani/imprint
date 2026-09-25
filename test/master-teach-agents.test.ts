@@ -3187,8 +3187,10 @@ describe('canonical planning and immutable execution', () => {
       ...focusedInput(detailTool),
       incomingChainEdges: [],
     };
+    const unlinkedOutput = focusedOutput(detailInput);
+    unlinkedOutput.tool.candidate.dependsOnTools = [];
     const detailProposal = hostedProposal(
-      focusedOutput(detailInput),
+      unlinkedOutput,
       'runs/run-fixture-1/proposals/unlinked-detail.json',
     );
     const input: MasterDecisionInput = {

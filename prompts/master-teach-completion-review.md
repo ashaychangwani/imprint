@@ -19,7 +19,11 @@ failures may be superseded by a current receipt for the exact current tool
 execution. For `completed` and `partial`, the host admits this review only after
 contract and live pass for every current tool. A recorded-request comparison, when present, is
 diagnostic evidence rather than a runtime veto. Every current chain edge passes
-against exact builds, and the plan contains at least one tool. Every original
+against exact builds, and the plan contains at least one tool. For a capability
+that consumes a changing value from another public tool, require an executable
+chain receipt using a fresh producer result. A standalone live case that copies
+a token from research does not establish that composition; report the missing
+proof if the plan omits the required dependency or edge. Every original
 discovery row in `candidateCoverage` must either
 resolve to a current tool or carry an explicit exclusion reason. Each exclusion
 is supplied as an `exclusion` claim: compare it with the discovery evidence and

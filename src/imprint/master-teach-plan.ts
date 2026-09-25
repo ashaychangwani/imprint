@@ -955,6 +955,21 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
     ids.add(edge.id);
     tuples.add(tuple);
   }
+  for (const consumer of plan.tools) {
+    if (!consumer.implementationPlan) continue;
+    for (const producerName of consumer.candidate.dependsOnTools) {
+      const bound = plan.chainEdges.some(
+        (edge) =>
+          edge.consumerToolId === consumer.id &&
+          tools.get(edge.producerToolId)?.candidate.toolName === producerName,
+      );
+      if (!bound) {
+        throw new TeachingPlanValidationError(
+          `planned tool "${consumer.id}" depends on "${producerName}" without a chain edge`,
+        );
+      }
+    }
+  }
   chainInvocationsInOrder(plan.chainEdges);
 }
 

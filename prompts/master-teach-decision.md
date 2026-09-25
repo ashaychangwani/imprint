@@ -724,6 +724,11 @@ every reference to that public name before returning.
 
 Represent each producer-to-consumer parameter flow explicitly in `chainEdges`:
 producer tool ID and public result path, then consumer tool ID and parameter.
+An accepted implementation plan needs an incoming edge from every tool in its
+`dependsOnTools` list. Remove dependencies that only order research; for actual
+continuation inputs, revise the public producer output or consumer contract
+until the value can be bound. Do not substitute a token retained from research
+for a fresh producer result in a live case.
 Edges with the same consumer tool and `consumerInvocationId` form one call; omit
 that optional ID for the original single call per consumer. Each parameter may
 be bound once within a call. Set `producerChainEdgeId` to an edge of an earlier

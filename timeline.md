@@ -15891,3 +15891,21 @@ reported cache writes, and a $34.6426496 base API-equivalent lower bound;
 six analysis spans lack usage. A fresh teach follows after validation.
 The 48 focused tests, lint, type checking, and serial full 2,068-test suite
 passed for this prompt checkpoint.
+
+## September 25 — Flights45 exposed unbound dependencies
+
+Flights45 ran fresh and unbounded for 261.7 minutes. Seven tools reached the
+built-in MVP gate, including multi-city next-leg search, but no external audit
+ran. A first verifier chose an earlier response frame; a second pass caught
+and repaired that ordering error. Round-trip verification changed a still-valid
+recorded date and was returned to the planner. Multi-city booking parsed real
+seller results but omitted two recorded conditions. Its live case also reused
+the exact token from research instead of executing a declared producer chain.
+Several other planned dependencies had no chain edges. We stopped the run to
+add a general plan-consistency check before another fresh teach. See
+docs/teach-flights-45-unbounded-retrospective-2026-09-25.md. The trace reports
+89,266,984 input tokens (84,524,416 cache reads), 440,501 output, zero
+reported cache writes, and a $61.5900584 base API-equivalent lower bound;
+seven analysis spans lack usage. Disk and power were not the blockers.
+The plan-consistency checkpoint passed all 2,069 tests, lint, and type
+checking. Flights46 will start from a fresh home on this code.

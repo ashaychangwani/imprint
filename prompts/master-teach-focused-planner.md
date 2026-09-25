@@ -418,6 +418,12 @@ it for the original single call. Repeated calls use distinct IDs. An optional
 `producerChainEdgeId` names an edge of the earlier producer call whose output
 is required; without it the source is the standalone live result. Preserve
 those explicit references and leave the complete acyclic schedule to the master.
+Every tool listed in `dependsOnTools` must supply at least one executable
+incoming edge before this implementation plan is accepted. If a sibling only
+informed research or build order and supplies no runtime value, remove that
+dependency instead. A token copied from a research test into a live case is
+not a producer binding; revise the producer result or consumer input contract
+to expose the required scalar, then test the fresh chain.
 Do not add this tool to its own `dependsOnTools` or split its public boundary
 merely to call it again. Tool IDs in this wire format must exactly equal the
 corresponding public `candidate.toolName`; invocation IDs and edge IDs identify

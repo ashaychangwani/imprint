@@ -174,6 +174,10 @@ function desiredFrom(plan: EditableTeachingPlan): DesiredTeachingPlan {
 function implementation(toolValue: EditableTeachingTool): ImplementationPlanPayload {
   const api = toolValue.strategy?.kind === 'api';
   const requestSeqs = api ? toolValue.candidate.requestSeqs : [];
+  const parameterValues = toolValue.candidate.likelyParams.map(({ name: parameterName }) => ({
+    parameterName,
+    value: 'fixture-value',
+  }));
   return {
     version: 1,
     toolId: toolValue.id,
@@ -182,7 +186,11 @@ function implementation(toolValue: EditableTeachingTool): ImplementationPlanPayl
       artifactRequestIndex,
       recordingRequestSeq,
     })),
-    parameterMappings: [],
+    parameterMappings: toolValue.candidate.likelyParams.map(({ name: parameterName }) => ({
+      parameterName,
+      artifactRequestIndices: [0],
+      guidance: 'Apply this parameter to the request.',
+    })),
     responseDependencies: [],
     resultSources: [
       {
@@ -197,7 +205,7 @@ function implementation(toolValue: EditableTeachingTool): ImplementationPlanPayl
             {
               id: 'recorded_replay',
               check: 'replay' as const,
-              parameterValues: [],
+              parameterValues,
               expectedResult: 'Return the recorded result shape.',
               provenance: {
                 recordingRequestSeqs: requestSeqs,
@@ -210,7 +218,7 @@ function implementation(toolValue: EditableTeachingTool): ImplementationPlanPayl
       {
         id: 'current_live',
         check: 'live',
-        parameterValues: [],
+        parameterValues,
         expectedResult: 'Return a current result shape.',
         provenance: {
           recordingRequestSeqs: requestSeqs,
@@ -593,11 +601,23 @@ describe('small fresh teach journal', () => {
   });
 
   it('invalidates only a revised tool and its consumers while keeping unrelated builds', () => {
-    const { journal } = fixture([
-      tool('producer-id', 'producer', 1),
-      tool('consumer-id', 'consumer', 2, ['producer']),
-      tool('other-id', 'other', 3),
-    ]);
+    const producerTool = tool('producer-id', 'producer', 1);
+    const consumer = tool('consumer-id', 'consumer', 2, ['producer']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'Identifier from the producer.' },
+    ];
+    const { journal } = fixture(
+      [producerTool, consumer, tool('other-id', 'other', 3)],
+      [
+        {
+          id: 'producer-to-consumer',
+          producerToolId: producerTool.id,
+          producerResultPath: '[0].id',
+          consumerToolId: consumer.id,
+          consumerParameter: 'item_id',
+        },
+      ],
+    );
     acceptImplementations(journal);
     issueBuild(journal, 'producer-id');
     issueBuild(journal, 'other-id');
@@ -909,6 +929,9 @@ describe('small fresh teach journal', () => {
 
     const revised = desiredFrom(journal.currentPlan());
     revised.chainEdges = revised.chainEdges.filter(({ id }) => id !== kindEdge.id);
+    const revisedConsumer = revised.tools.find(({ id }) => id === consumer.id);
+    if (!revisedConsumer) throw new Error('missing consumer fixture');
+    revisedConsumer.candidate.dependsOnTools = ['producer_a'];
     journal.revisePlan(revised, {
       expectedRevision: journal.currentPlan().revision,
       decision: decision(),
