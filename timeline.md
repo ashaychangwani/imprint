@@ -15949,3 +15949,25 @@ and keeps failed bindings from proving or publishing a tool. Agents still
 choose the cases and paths. The new focused end-to-end and schema regressions,
 full 2,073-test suite, lint, and type checking passed. Flights48 will start
 from a fresh home on this checkpoint.
+
+## September 25 — Flights48 found a verifier source-ID repair gap
+
+Flights48 ran fresh and unbounded for 275.2 minutes. It published five useful
+MVPs: location lookup, one-way, round-trip, and multi-city search, and the
+round-trip date grid. Recorded and live checks found and repaired missing
+round-trip emissions, a layover, and a connecting flight's arrival time. The
+one-way booking tool mechanically passed a fresh search-to-booking chain, but
+could not publish: the evidence agent requested a shortened live source ID,
+and the verifier ended that check instead of showing the exact available IDs
+for repair. The master correctly kept the booking artifact and declined to
+invent a parser or plan failure, but the same unresolved verification fact
+then stopped the teach. No external audit ran. The trace reports 57,368,235
+input tokens (52,624,640 cache reads), 463,570 output, zero reported cache
+writes, and a $49.295636 base API-equivalent lower bound; 12 analysis spans
+lack usage. Fourteen host cancellations resumed retained conversations. Disk
+and sleep did not interrupt the run.
+
+An unknown evidence source ID now returns the valid IDs to the same retained
+agent within the existing inspection budget. It does not map IDs silently or
+accept invalid proof. A focused regression reproduces the Flights48 typo and
+successful correction. Flights49 will start from a fresh home after checks.

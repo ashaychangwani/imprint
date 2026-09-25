@@ -322,11 +322,19 @@ export async function verifyRecordingEvidence(input: {
       if (decision.action === 'inspect') {
         if (turn === MAX_EVIDENCE_INSPECTIONS) break;
         const body = texts.get(decision.sourceId ?? '');
-        if (body === undefined)
-          return finish({
-            status: 'unverified',
-            reason: 'Verifier requested an unavailable evidence source.',
-          });
+        if (body === undefined) {
+          payload = {
+            phase,
+            sourceId: decision.sourceId,
+            inspectionError: 'Evidence source ID is unavailable. Retry with an exact source ID.',
+            availableSourceIds: [...texts.keys()],
+            remainingInspections: MAX_EVIDENCE_INSPECTIONS - 1 - turn,
+          };
+          inspections.push(payload);
+          if (input.agent.provider !== 'codex-cli')
+            payload = { initial: initialPayload, inspections };
+          continue;
+        }
         if (decision.project) {
           const fixture = input.fixtures.find(({ id }) => id === decision.sourceId);
           try {

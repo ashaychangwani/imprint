@@ -45,6 +45,50 @@ const expectations = [
   { sourceId: 'live', facts: [{ statement: 'Exactly new-a', quote: 'new-a' }] },
 ];
 describe('recording evidence verification', () => {
+  it('repairs an unavailable source ID in the retained review before revealing parser output', async () => {
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory: mkdtempSync(join(tmpdir(), 'imprint-evidence-source-id-')),
+      agent: { provider: 'codex-cli' },
+      requestStep: async (payload, schema) => {
+        calls++;
+        if (calls === 1)
+          return schema.parse({
+            action: 'inspect',
+            sourceId: 'live_live',
+            reason: 'Inspect the live response',
+          });
+        if (calls === 2) {
+          expect(payload).toMatchObject({
+            phase: 'expectations',
+            sourceId: 'live_live',
+            availableSourceIds: ['recorded', 'live'],
+            remainingInspections: 11,
+          });
+          expect(JSON.stringify(payload)).not.toContain('parser_output');
+          return schema.parse({
+            action: 'inspect',
+            sourceId: 'live',
+            reason: 'Use the exact source ID',
+          });
+        }
+        if (calls === 3)
+          return schema.parse({
+            action: 'finish',
+            reason: 'Raw facts established',
+            comparability,
+            expectations,
+          });
+        expect(payload).toHaveProperty('phase', 'evaluation');
+        return schema.parse({ action: 'finish', status: 'passed', reason: 'Parser matches' });
+      },
+    });
+    expect(result.status).toBe('passed');
+    expect(calls).toBe(4);
+  });
+
   it('allows a complex source review to finish after corrected bounded inspections', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-deep-inspection-'));
     let inspections = 0;
