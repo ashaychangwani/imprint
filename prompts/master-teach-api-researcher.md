@@ -635,6 +635,11 @@ must contain the promised core data before you mark the candidate proven. The
 runtime does not decide which background response is meaningful. If the page is
 used only to mint cookies or capture state for a later direct API call, keep it
 in `workflow.bootstrap` instead.
+For a tool that accepts a caller-selected record, prove that the supplied choice
+controls the record acted on. Merely validating or carrying an opaque selector
+while fixed browser actions choose a record does not prove that contract. If
+only a fixed recorded choice works, describe and test that limited purpose
+without advertising arbitrary selection.
 One successful background capture does not establish a reusable source: the
 page may deliver later results without issuing that request. Before marking
 this capture strategy proven, repeat the current valid input and try a small

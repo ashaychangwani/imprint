@@ -15871,3 +15871,23 @@ seven analysis spans lack usage. A fresh teach follows.
 The 14 focused recording-verification tests, lint, type checking, and a serial
 full 2,068-test run passed. An initial full run under concurrent checks had
 one process-cleanup stress-test miss; that test passed alone and on rerun.
+
+## September 24 — Flights44 repeated frames and selection ownership
+
+Flights44 ran fresh and unbounded for 168.2 minutes. It published location
+lookup, round-trip search, and round-trip date grid. Independent checks sent
+one-way grouping, multi-city over-inclusion, and booking seller URLs back to
+their retained compilers for repair. A later multi-city check incorrectly
+required fare 238 from the first recorded response frame, although two later
+frames for the same choice show 233. We stopped before that false expectation
+could drive another parser repair. Booking also only validated its opaque
+selector while fixed browser clicks chose the flight; that did not prove the
+advertised selected-itinerary contract. The evidence prompt now asks the agent
+to reconcile conflicting repeated frames, and the research prompt requires a
+caller-selected choice to control the action. See
+docs/teach-flights-44-unbounded-retrospective-2026-09-24.md. The trace reports
+39,895,441 input tokens (36,408,704 cache reads), 306,611 output, zero
+reported cache writes, and a $34.6426496 base API-equivalent lower bound;
+six analysis spans lack usage. A fresh teach follows after validation.
+The 48 focused tests, lint, type checking, and serial full 2,068-test suite
+passed for this prompt checkpoint.
