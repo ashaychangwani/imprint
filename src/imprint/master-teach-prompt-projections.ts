@@ -204,6 +204,7 @@ export const ExecutionReceiptSchema = strictObject({
   recordingSha256: PromptShaSchema,
   toolId: PromptToolIdSchema,
   check: PromptCheckSchema,
+  verificationCaseId: PromptIdSchema.optional(),
   chainEdgeId: PromptIdSchema.optional(),
   chainEdgeSha256: PromptShaSchema.optional(),
   status: PromptCheckStatusSchema,
@@ -212,6 +213,8 @@ export const ExecutionReceiptSchema = strictObject({
   dependencyBuilds: DependencyListSchema,
   facts: z.array(ReceiptFactSchema).min(1).max(256),
 }).superRefine((receipt, ctx) => {
+  if (receipt.verificationCaseId && receipt.check !== 'live')
+    issue(ctx, ['verificationCaseId'], 'only live receipts may name a verification case');
   if ((receipt.check === 'chain') !== Boolean(receipt.chainEdgeId))
     issue(ctx, ['chainEdgeId'], 'chain receipts alone require an edge id');
   if ((receipt.check === 'chain') !== Boolean(receipt.chainEdgeSha256))
@@ -243,7 +246,12 @@ export const ToolVerificationPayloadSchema = strictObject({
   const ids = new Set<string>();
   const refs = new Set<string>();
   tool.receipts.forEach((receipt, index) => {
-    const key = receipt.check === 'chain' ? `chain:${receipt.chainEdgeId}` : receipt.check;
+    const key =
+      receipt.check === 'chain'
+        ? `chain:${receipt.chainEdgeId}`
+        : receipt.check === 'live' && receipt.verificationCaseId
+          ? `live:${receipt.verificationCaseId}`
+          : receipt.check;
     if (keys.has(key)) issue(ctx, ['receipts', index, 'check'], 'duplicate current receipt');
     if (ids.has(receipt.id)) issue(ctx, ['receipts', index, 'id'], 'duplicate receipt id');
     if (refs.has(refKey(receipt.ref)))

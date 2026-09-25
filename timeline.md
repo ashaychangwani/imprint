@@ -15909,3 +15909,19 @@ reported cache writes, and a $61.5900584 base API-equivalent lower bound;
 seven analysis spans lack usage. Disk and power were not the blockers.
 The plan-consistency checkpoint passed all 2,069 tests, lint, and type
 checking. Flights46 will start from a fresh home on this code.
+
+## September 25 — Flights46 selects comparable chain cases
+
+Flights46 ran fresh for 267.7 minutes. Four tools reached the built-in MVP
+gate; location details, multi-city search, and date grid remained unfinished.
+The lookup-to-details chain kept using a New York producer result against an
+airport recording, so its successful HTTP call could not verify the recorded
+case. We stopped the old run cleanly to fix that general runtime gap. Chain
+edges can now name recorded/live producer and consumer cases; the host runs the
+chosen producer case freshly and keeps its proof separate from the default
+case. Agents still decide which calls are comparable. See
+docs/teach-flights-46-unbounded-retrospective-2026-09-25.md. The trace reports
+35,798,190 input tokens (32,796,672 cache reads), 283,663 output, zero
+reported cache writes, and a $30.7980008 lower bound with 15 missing usage
+spans. No independent audit ran. The full 2,071-test suite, lint, and type
+checking passed for the fix. Flights47 starts fresh on this checkpoint.

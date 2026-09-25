@@ -552,6 +552,10 @@ export const ChainEdgeSchema = z
     consumerInvocationId: canonicalText(1, 128).optional(),
     /** Omit to consume the producer's standalone live result. */
     producerChainEdgeId: canonicalText(1, 128).optional(),
+    /** Select a recorded/live producer case when the default is not comparable. */
+    producerLiveCaseId: canonicalText(1, 128).optional(),
+    /** Select the consumer's recorded/live comparison case for this invocation. */
+    consumerLiveCaseId: canonicalText(1, 128).optional(),
   })
   .strict();
 export type ChainEdge = z.infer<typeof ChainEdgeSchema>;
@@ -563,7 +567,11 @@ export function chainInvocationKey(edge: ChainEdge): string {
 export function chainProducerBindings(edges: readonly ChainEdge[]): ChainEdge[] {
   const bindings = new Map<string, ChainEdge>();
   for (const edge of edges) {
-    const key = canonicalTeachingPlanJson([edge.producerToolId, edge.producerChainEdgeId ?? null]);
+    const key = canonicalTeachingPlanJson([
+      edge.producerToolId,
+      edge.producerChainEdgeId ?? null,
+      edge.producerLiveCaseId ?? null,
+    ]);
     bindings.set(key, edge);
   }
   return [...bindings.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([, edge]) => edge);
@@ -920,6 +928,8 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
       edge.consumerParameter,
       edge.consumerInvocationId ?? null,
       edge.producerChainEdgeId ?? null,
+      edge.producerLiveCaseId ?? null,
+      edge.consumerLiveCaseId ?? null,
     ]);
     if (ids.has(edge.id) || tuples.has(tuple)) {
       throw new TeachingPlanValidationError(`duplicate chain edge "${edge.id}"`);
@@ -928,6 +938,11 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
     const consumer = tools.get(edge.consumerToolId);
     if (!producer || !consumer) {
       throw new TeachingPlanValidationError(`chain edge "${edge.id}" references unknown tool`);
+    }
+    if (edge.producerChainEdgeId && edge.producerLiveCaseId) {
+      throw new TeachingPlanValidationError(
+        `chain edge "${edge.id}" cannot select both a producer chain and live case`,
+      );
     }
     if (!consumer.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter)) {
       throw new TeachingPlanValidationError(
@@ -955,6 +970,13 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
     ids.add(edge.id);
     tuples.add(tuple);
   }
+  for (const invocation of chainInvocationsInOrder(plan.chainEdges)) {
+    if (new Set(invocation.edges.map((edge) => edge.consumerLiveCaseId ?? null)).size > 1) {
+      throw new TeachingPlanValidationError(
+        `chain invocation for "${invocation.edges[0]?.consumerToolId}" selects different consumer live cases`,
+      );
+    }
+  }
   for (const consumer of plan.tools) {
     if (!consumer.implementationPlan) continue;
     for (const producerName of consumer.candidate.dependsOnTools) {
@@ -970,7 +992,6 @@ function validateChainEdges(plan: DesiredTeachingPlan): void {
       }
     }
   }
-  chainInvocationsInOrder(plan.chainEdges);
 }
 
 function assertConcretePublicParameters(tool: EditableTeachingTool): void {

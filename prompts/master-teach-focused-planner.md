@@ -418,6 +418,16 @@ it for the original single call. Repeated calls use distinct IDs. An optional
 `producerChainEdgeId` names an edge of the earlier producer call whose output
 is required; without it the source is the standalone live result. Preserve
 those explicit references and leave the complete acyclic schedule to the master.
+If that default result cannot be compared with this tool's recorded call, set
+`producerLiveCaseId` to the producer's specific live verification case and
+`consumerLiveCaseId` to this tool's matching live case. Select these from the
+recording-backed cases when the producer case ID is available in the supplied
+plan or master guidance; otherwise name the needed comparison in `reason` for
+the master to select after the producer's focused proposal arrives. The host
+will execute the chosen producer case freshly.
+Do not set both `producerChainEdgeId` and `producerLiveCaseId`, and use the
+same consumer case on every edge of one invocation. Revise a rejected case
+selection instead of changing the parser to fit unrelated inputs.
 Every tool listed in `dependsOnTools` must supply at least one executable
 incoming edge before this implementation plan is accepted. If a sibling only
 informed research or build order and supplies no runtime value, remove that

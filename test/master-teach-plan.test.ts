@@ -677,6 +677,20 @@ describe('editable master teaching plan', () => {
     const grouped = chainInvocationForEdge(groupedEdges, groupedEdges[0] as ChainEdge);
     expect(grouped.edges.map(({ id }) => id)).toEqual(['id-edge', 'kind-edge']);
     expect(grouped.sha256).toBe(teachingPlanContentSha256(grouped.edges));
+    const selectedCases = structuredClone(plan);
+    for (const edge of selectedCases.chainEdges) edge.consumerLiveCaseId = 'recorded_live';
+    const firstSelected = selectedCases.chainEdges[0];
+    const secondSelected = selectedCases.chainEdges[1];
+    if (!firstSelected || !secondSelected) throw new Error('missing selected case edges');
+    firstSelected.producerLiveCaseId = 'producer_variant';
+    expect(create(selectedCases).chainEdges).toEqual(selectedCases.chainEdges);
+    secondSelected.consumerLiveCaseId = 'different_case';
+    expect(() => create(selectedCases)).toThrow('selects different consumer live cases');
+    secondSelected.consumerLiveCaseId = 'recorded_live';
+    firstSelected.producerChainEdgeId = 'earlier_chain';
+    expect(() => create(selectedCases)).toThrow(
+      'cannot select both a producer chain and live case',
+    );
     const duplicateParameter = structuredClone(plan);
     const duplicate = duplicateParameter.chainEdges.find(({ id }) => id === 'kind-edge');
     if (!duplicate) throw new Error('test plan has no grouped kind edge');

@@ -765,6 +765,81 @@ describe('small fresh teach journal', () => {
     expect(after.supersededReceiptRefs).toHaveLength(1);
   });
 
+  it('keeps a selected producer live case separate from the default proof', () => {
+    const edge: ChainEdge = {
+      id: 'selected-case-edge',
+      producerToolId: 'producer-id',
+      producerResultPath: 'items[0].id',
+      producerLiveCaseId: 'alternate_live',
+      consumerToolId: 'consumer-id',
+      consumerParameter: 'item_id',
+      consumerLiveCaseId: 'current_live',
+    };
+    const producer = tool('producer-id', 'producer', 1);
+    const consumer = tool('consumer-id', 'consumer', 2, ['producer']);
+    consumer.candidate.likelyParams = [
+      { name: 'item_id', type: 'string', description: 'A current producer item.' },
+    ];
+    const { journal } = fixture([producer, consumer], [edge]);
+    const current = journal.currentPlan();
+    const desired = desiredFrom(current);
+    for (const plannedTool of desired.tools) {
+      const payload = implementation(plannedTool);
+      if (plannedTool.id === producer.id) {
+        const live = payload.verificationCases.find(({ id }) => id === 'current_live');
+        if (!live) throw new Error('missing producer live case');
+        payload.verificationCases.push({ ...live, id: 'alternate_live' });
+      }
+      plannedTool.implementationPlan = journal.storeImplementationPlan(
+        payload,
+        teachingToolCompileInputsSha256(plannedTool, desired.chainEdges),
+      );
+    }
+    journal.revisePlan(desired, { expectedRevision: current.revision, decision: decision() });
+    issueBuild(journal, producer.id);
+    issueBuild(journal, consumer.id);
+    passRequiredChecks(journal, producer.id, [1]);
+    passRequiredChecks(journal, consumer.id, [2]);
+    expect(() =>
+      journal.issueReceipt({
+        toolId: consumer.id,
+        check: 'chain',
+        chainEdgeId: edge.id,
+        facts: [passedInvocation('chain')],
+      }),
+    ).toThrow('chain producer has no current build with a passed result');
+    const selected = journal.issueReceipt({
+      toolId: producer.id,
+      check: 'live',
+      verificationCaseId: 'alternate_live',
+      facts: [passedInvocation('live')],
+    });
+    const chained = journal.issueReceipt({
+      toolId: consumer.id,
+      check: 'chain',
+      chainEdgeId: edge.id,
+      facts: [passedInvocation('chain')],
+    });
+    expect(chained.dependencyBuilds[0]?.resultReceiptRef).toEqual(selected.ref);
+    journal.issueReceipt({
+      toolId: producer.id,
+      check: 'live',
+      facts: [passedInvocation('live')],
+    });
+    expect(
+      journal.readState().tools.find(({ toolId }) => toolId === consumer.id)?.currentReceiptRefs,
+    ).toContainEqual({ key: `chain:${edge.id}`, ref: chained.ref });
+    journal.issueReceipt({
+      toolId: producer.id,
+      check: 'live',
+      verificationCaseId: 'alternate_live',
+      facts: [passedInvocation('live')],
+    });
+    expect(
+      journal.readState().tools.find(({ toolId }) => toolId === consumer.id)?.currentReceiptRefs,
+    ).not.toContainEqual({ key: `chain:${edge.id}`, ref: chained.ref });
+  });
+
   it('invalidates only chain checks that consumed a replaced producer live result', () => {
     const edge: ChainEdge = {
       id: 'producer-to-consumer',

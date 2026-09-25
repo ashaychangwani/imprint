@@ -2098,18 +2098,6 @@ async function compileFocusedToolWithShippedAgent(input: {
   };
 }
 
-function liveVerificationParameters(
-  implementation: ImplementationPlanPayload,
-): Record<string, string | number | boolean> {
-  const verification = implementation.verificationCases.find(
-    (candidate) => candidate.check === 'live',
-  );
-  if (!verification) throw new Error('implementation plan has no live verification case');
-  return Object.fromEntries(
-    verification.parameterValues.map(({ parameterName, value }) => [parameterName, value]),
-  );
-}
-
 function verificationParameters(
   verification: ImplementationPlanPayload['verificationCases'][number],
 ): Record<string, string | number | boolean> {
@@ -3838,6 +3826,7 @@ interface CheckedBuilds {
   revisionSourceByToolId: Map<string, CompiledFocusedTool>;
   draftSourceByToolStrategy: Map<string, CompiledFocusedTool>;
   liveByToolId: Map<string, LiveCheckResult>;
+  liveByCaseKey: Map<string, LiveCheckResult>;
   chainByEdgeId: Map<string, LiveCheckResult>;
   verifiedToolIds: Set<string>;
   failures: BuildWaveFailure[];
@@ -4155,6 +4144,7 @@ async function compileAndCheckCurrentPlan(input: {
   priorRevisionSources?: Map<string, CompiledFocusedTool>;
   priorDraftSources?: Map<string, CompiledFocusedTool>;
   priorLive?: Map<string, LiveCheckResult>;
+  priorLiveCases?: Map<string, LiveCheckResult>;
   priorChain?: Map<string, LiveCheckResult>;
   revisionGuidanceByToolId?: ReadonlyMap<string, string>;
   revisionContextByToolId?: ReadonlyMap<string, FocusedPlannerRevisionContext>;
@@ -4233,6 +4223,23 @@ async function compileAndCheckCurrentPlan(input: {
       );
     }),
   );
+  const caseKey = (toolId: string, caseId: string): string => `${toolId}\u0000${caseId}`;
+  const liveByCaseKey = new Map(
+    [...(input.priorLiveCases ?? [])].filter(([key, live]) => {
+      const [toolId, caseId] = key.split('\u0000');
+      if (!toolId || !caseId || !currentToolIds.has(toolId)) return false;
+      const buildRef = initialBuildRefs.get(toolId);
+      const currentReceipt = initialToolStateById
+        .get(toolId)
+        ?.currentReceiptRefs.find(({ key: receiptKey }) => receiptKey === `live:${caseId}`)?.ref;
+      return (
+        currentReceipt?.path === live.resultReceiptRef.path &&
+        currentReceipt.sha256 === live.resultReceiptRef.sha256 &&
+        buildRef?.path === live.buildRef.path &&
+        buildRef.sha256 === live.buildRef.sha256
+      );
+    }),
+  );
   const chainByEdgeId = new Map(
     [...(input.priorChain ?? [])].filter(([edgeId, result]) => {
       const edge = plan.chainEdges.find(({ id }) => id === edgeId);
@@ -4252,6 +4259,8 @@ async function compileAndCheckCurrentPlan(input: {
   for (const toolId of needsCompile) {
     compiledByToolId.delete(toolId);
     liveByToolId.delete(toolId);
+    for (const key of liveByCaseKey.keys())
+      if (key.startsWith(`${toolId}\u0000`)) liveByCaseKey.delete(key);
   }
   for (const edge of plan.chainEdges) {
     if (needsCompile.has(edge.producerToolId) || needsCompile.has(edge.consumerToolId)) {
@@ -4527,6 +4536,7 @@ async function compileAndCheckCurrentPlan(input: {
     implementation: ImplementationPlanPayload,
     waveIndex: number,
     verification: ImplementationPlanPayload['verificationCases'][number],
+    primary = false,
   ): Promise<LiveCheckResult | undefined> => {
     const invocationIndex = implementation.verificationCases
       .filter(({ check }) => check === 'live')
@@ -4555,6 +4565,7 @@ async function compileAndCheckCurrentPlan(input: {
       const receipt = input.journal.issueReceipt({
         toolId: tool.id,
         check: 'live',
+        ...(primary ? {} : { verificationCaseId: verification.id }),
         facts: check.facts,
       });
       failures.push(
@@ -4563,7 +4574,8 @@ async function compileAndCheckCurrentPlan(input: {
           compilerSummary: focused.compilerSummary,
         }),
       );
-      liveByToolId.delete(tool.id);
+      liveByCaseKey.delete(caseKey(tool.id, verification.id));
+      if (primary) liveByToolId.delete(tool.id);
       return undefined;
     }
 
@@ -4581,6 +4593,7 @@ async function compileAndCheckCurrentPlan(input: {
     const receipt = input.journal.issueReceipt({
       toolId: tool.id,
       check: 'live',
+      ...(primary ? {} : { verificationCaseId: verification.id }),
       facts: check.facts,
     });
     if (!receiptPassed(check.facts)) {
@@ -4603,13 +4616,15 @@ async function compileAndCheckCurrentPlan(input: {
           },
         ),
       );
-      liveByToolId.delete(tool.id);
+      liveByCaseKey.delete(caseKey(tool.id, verification.id));
+      if (primary) liveByToolId.delete(tool.id);
       return undefined;
     }
     const buildRef = currentBuildRef(tool.id);
     if (!buildRef) throw new Error(`live check lost current build for "${tool.id}"`);
     const live = { ...observed, buildRef, resultReceiptRef: receipt.ref };
-    liveByToolId.set(tool.id, live);
+    if (primary) liveByToolId.set(tool.id, live);
+    else liveByCaseKey.set(caseKey(tool.id, verification.id), live);
     return live;
   };
 
@@ -4625,7 +4640,14 @@ async function compileAndCheckCurrentPlan(input: {
     // Preserve the primary result for declared producer bindings. Each other
     // required case is checked and reviewed first, without publishing a draft.
     for (const verification of [...cases.slice(1), primary]) {
-      const live = await runStandaloneCase(tool, focused, implementation, waveIndex, verification);
+      const live = await runStandaloneCase(
+        tool,
+        focused,
+        implementation,
+        waveIndex,
+        verification,
+        verification === primary,
+      );
       if (!live) return undefined;
       if (verification === primary) return live;
       const evidence = completionToolResultEvidenceFor(input.journal, tool, live);
@@ -4683,12 +4705,31 @@ async function compileAndCheckCurrentPlan(input: {
         }
       | { kind: 'artifact_error'; error: Error }
       | { kind: 'host_error'; error: unknown };
-    let parameters = liveVerificationParameters(implementation);
+    const selectedConsumerCase = firstEdge.consumerLiveCaseId
+      ? implementation.verificationCases.find(
+          ({ id, check }) => id === firstEdge.consumerLiveCaseId && check === 'live',
+        )
+      : implementation.verificationCases.find(({ check }) => check === 'live');
+    if (!selectedConsumerCase) {
+      failures.push(
+        checkFailure(
+          tool,
+          waveIndex,
+          'proof',
+          new Error(`chain "${firstEdge.id}" selects an unknown consumer live case`),
+          { chainEdgeId: firstEdge.id },
+        ),
+      );
+      return undefined;
+    }
+    let parameters = verificationParameters(selectedConsumerCase);
     let bindingFailure: { edge: ChainEdge; error: Error } | undefined;
     for (const edge of edges) {
       let producer = edge.producerChainEdgeId
         ? chainByEdgeId.get(edge.producerChainEdgeId)
-        : liveByToolId.get(edge.producerToolId);
+        : edge.producerLiveCaseId
+          ? liveByCaseKey.get(caseKey(edge.producerToolId, edge.producerLiveCaseId))
+          : liveByToolId.get(edge.producerToolId);
       const producerState = input.journal
         .readState()
         .tools.find(({ toolId }) => toolId === edge.producerToolId);
@@ -4700,7 +4741,6 @@ async function compileAndCheckCurrentPlan(input: {
         );
       const sourceRejected =
         producer &&
-        edge.producerChainEdgeId &&
         (rejectedChainInvocations.has(producer.chainInvocationSha256 ?? '') ||
           input.resultDisposition?.(edge.producerToolId, producer.resultReceiptRef)?.status ===
             'revision_required');
@@ -4720,6 +4760,45 @@ async function compileAndCheckCurrentPlan(input: {
           );
           if (source && (await reviewChainResult(sourceTool, sourceInvocation, source, waveIndex)))
             producer = chainByEdgeId.get(edge.producerChainEdgeId);
+        }
+      }
+      if (!producer && !sourceRejected && edge.producerLiveCaseId) {
+        const sourceTool = plan.tools.find(({ id }) => id === edge.producerToolId);
+        const sourceCompiled = compiledByToolId.get(edge.producerToolId);
+        const sourceImplementation = sourceTool?.implementationPlan
+          ? (input.journal.readJson(sourceTool.implementationPlan) as ImplementationPlanPayload)
+          : undefined;
+        const sourceCase = sourceImplementation?.verificationCases.find(
+          ({ id, check }) => id === edge.producerLiveCaseId && check === 'live',
+        );
+        if (sourceTool && sourceCompiled && sourceImplementation && sourceCase) {
+          const fresh = await runStandaloneCase(
+            sourceTool,
+            sourceCompiled,
+            sourceImplementation,
+            waveIndex,
+            sourceCase,
+          );
+          if (fresh) {
+            const evidence = completionToolResultEvidenceFor(input.journal, sourceTool, fresh);
+            const disposition = await input.approveMvp?.(
+              sourceTool,
+              evidence,
+              fresh,
+              sourceCompiled,
+            );
+            if (disposition?.status !== 'revision_required') producer = fresh;
+            else
+              failures.push(
+                checkFailure(
+                  sourceTool,
+                  waveIndex,
+                  'proof',
+                  rejectedResultError(disposition.reason, evidence),
+                  { receiptRef: fresh.resultReceiptRef },
+                ),
+              );
+          }
         }
       }
       if (!producer?.result.ok) {
@@ -4870,13 +4949,7 @@ async function compileAndCheckCurrentPlan(input: {
     if (outcome.kind !== 'returned') return undefined;
     const buildRef = currentBuildRef(tool.id);
     if (!buildRef) throw new Error(`chain check lost current build for "${tool.id}"`);
-    const liveVerification = verificationForResearchParameters(
-      implementation,
-      outcome.parameters,
-    ) ?? {
-      id: 'invocation_baseline',
-      expectedResult: tool.candidate.expectedOutput || tool.candidate.description,
-    };
+    const liveVerification = selectedConsumerCase;
     const shared = {
       result: outcome.result,
       rawResponses: outcome.rawResponses,
@@ -5249,6 +5322,7 @@ async function compileAndCheckCurrentPlan(input: {
     revisionSourceByToolId,
     draftSourceByToolStrategy,
     liveByToolId,
+    liveByCaseKey,
     chainByEdgeId,
     verifiedToolIds,
     failures,
@@ -6533,6 +6607,7 @@ async function runScheduledFreshTeach(
     let revisionSourceByToolId = new Map<string, CompiledFocusedTool>();
     let draftSourceByToolStrategy = new Map<string, CompiledFocusedTool>();
     let liveByToolId = new Map<string, LiveCheckResult>();
+    let liveByCaseKey = new Map<string, LiveCheckResult>();
     let chainByEdgeId = new Map<string, LiveCheckResult>();
     const apiResearchByToolId = planned.apiResearchResults;
     const revisionGuidanceByToolId = new Map<string, string>();
@@ -6643,6 +6718,7 @@ async function runScheduledFreshTeach(
           priorRevisionSources: revisionSourceByToolId,
           priorDraftSources: draftSourceByToolStrategy,
           priorLive: liveByToolId,
+          priorLiveCases: liveByCaseKey,
           priorChain: chainByEdgeId,
           revisionGuidanceByToolId,
           revisionContextByToolId: repairContextByToolId,
@@ -6867,6 +6943,7 @@ async function runScheduledFreshTeach(
       revisionSourceByToolId = checked.revisionSourceByToolId;
       draftSourceByToolStrategy = checked.draftSourceByToolStrategy;
       liveByToolId = checked.liveByToolId;
+      liveByCaseKey = checked.liveByCaseKey;
       chainByEdgeId = checked.chainByEdgeId;
       for (const toolId of checked.verifiedToolIds) {
         revisionGuidanceByToolId.delete(toolId);

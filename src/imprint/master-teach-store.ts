@@ -95,7 +95,7 @@ const StoredBuildRecordSchema = strict({
 );
 type StoredBuildRecord = z.infer<typeof StoredBuildRecordSchema>;
 const ReceiptPointerSchema = strict({
-  key: z.string().regex(/^(contract|replay|live|chain:[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$/),
+  key: z.string().regex(/^(contract|replay|live|(?:chain|live):[a-zA-Z0-9][a-zA-Z0-9._-]{0,127})$/),
   ref: ContentAddressedRefSchema,
 });
 const JournalToolStateSchema = strict({
@@ -251,8 +251,16 @@ const receiptStatus = (facts: readonly ReceiptFact[]): ExecutionReceipt['status'
   if (facts.some(({ status }) => status === 'passed')) return 'passed';
   return 'not_applicable';
 };
-const receiptKey = (check: ExecutionReceipt['check'], edge?: string) =>
-  check === 'chain' ? `chain:${edge}` : check;
+const receiptKey = (
+  check: ExecutionReceipt['check'],
+  edge?: string,
+  verificationCaseId?: string,
+) =>
+  check === 'chain'
+    ? `chain:${edge}`
+    : check === 'live' && verificationCaseId
+      ? `live:${verificationCaseId}`
+      : check;
 
 export class FreshTeachJournal {
   readonly root: string;
@@ -690,6 +698,7 @@ export class FreshTeachJournal {
   issueReceipt(input: {
     toolId: string;
     check: ExecutionReceipt['check'];
+    verificationCaseId?: string;
     chainEdgeId?: string;
     facts?: readonly ReceiptFact[];
     hostError?: unknown;
@@ -699,6 +708,21 @@ export class FreshTeachJournal {
     const plan = this.#plan(state);
     const toolState = state.tools.find(({ toolId }) => toolId === input.toolId);
     if (!toolState?.buildRef) throw journalFailure('tool_plan_missing');
+    if (input.verificationCaseId) {
+      const implementationRef = plan.tools.find(
+        ({ id }) => id === input.toolId,
+      )?.implementationPlan;
+      const implementation = implementationRef
+        ? ImplementationPlanPayloadSchema.parse(this.readJson(implementationRef))
+        : undefined;
+      if (
+        input.check !== 'live' ||
+        !implementation?.verificationCases.some(
+          ({ id, check }) => id === input.verificationCaseId && check === 'live',
+        )
+      )
+        throw journalFailure('receipt_invalid');
+    }
     const build = this.readBuild(toolState.buildRef);
     const chainDependencies: ExecutionReceipt['dependencyBuilds'] = [];
     let chainEdgeSha256: string | undefined;
@@ -715,7 +739,7 @@ export class FreshTeachJournal {
         const producerBuild = this.readBuild(producerState.buildRef);
         const sourceKey = binding.producerChainEdgeId
           ? `chain:${binding.producerChainEdgeId}`
-          : 'live';
+          : receiptKey('live', undefined, binding.producerLiveCaseId);
         const pointer = producerState.currentReceiptRefs.find(({ key }) => key === sourceKey);
         const producerResult = pointer ? this.readReceipt(pointer.ref) : undefined;
         if (
@@ -748,6 +772,7 @@ export class FreshTeachJournal {
       recordingSha256: state.run.recordingSha256,
       toolId: input.toolId,
       check: input.check,
+      ...(input.verificationCaseId ? { verificationCaseId: input.verificationCaseId } : {}),
       ...(input.check === 'chain' ? { chainEdgeId: input.chainEdgeId, chainEdgeSha256 } : {}),
       status: receiptStatus(facts),
       buildRef: toolState.buildRef,
@@ -763,7 +788,7 @@ export class FreshTeachJournal {
       if (error instanceof z.ZodError) throw journalFailure('receipt_invalid');
       throw error;
     }
-    const key = receiptKey(receipt.check, receipt.chainEdgeId);
+    const key = receiptKey(receipt.check, receipt.chainEdgeId, receipt.verificationCaseId);
     const previous = toolState.currentReceiptRefs.find((pointer) => pointer.key === key);
     const retained = toolState.currentReceiptRefs.filter((pointer) => pointer.key !== key);
     try {

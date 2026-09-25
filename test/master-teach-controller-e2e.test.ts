@@ -79,7 +79,10 @@ function baselineMvpReview(
 ) {
   const proof = input.snapshot.payload.tools.find(({ toolId }) => toolId === input.toolId);
   const liveReceipt = proof?.receipts.find(
-    ({ check, status }) => check === 'live' && status === 'passed',
+    ({ status, ref }) =>
+      status === 'passed' &&
+      ref.path === input.resultEvidence.payload.resultReceiptRef.path &&
+      ref.sha256 === input.resultEvidence.payload.resultReceiptRef.sha256,
   );
   if (!proof || !liveReceipt) throw new Error('fixture expected current live MVP proof');
   return BaselineMvpReviewOutputSchema.parse({
@@ -2869,7 +2872,7 @@ describe('fresh foreground master controller end to end', () => {
                 expect(input.resultEvidence.payload.invocationParameters).toEqual({
                   item_id: 'item-1',
                 });
-                expect(input.resultEvidence.payload.verificationCaseId).toBe('invocation_baseline');
+                expect(input.resultEvidence.payload.verificationCaseId).toBe(`live_${CONSUMER_ID}`);
                 const consumer = input.currentPlan.payload.tools.find(
                   ({ id }) => id === CONSUMER_ID,
                 );
@@ -2900,6 +2903,105 @@ describe('fresh foreground master controller end to end', () => {
       });
     },
   );
+
+  it('runs the agent-selected producer case without replacing default live proof', async () => {
+    await withTemporaryImprintHome(async (root) => {
+      const recordingPath = syntheticSessionPath(root);
+      const base = lifecycleFailureFixture({
+        runId: 'run-e2e-selected-chain-cases',
+        events: [],
+        promotionBatches: [],
+        requestBaselineMvpReview: credibleBaselineMvpReview,
+      });
+      const producerIds: string[] = [];
+      const consumerIds: string[] = [];
+      let reviewedChainCase: string | undefined;
+      const selectedEdge = {
+        ...chainEdge,
+        producerLiveCaseId: 'alternate_live',
+        consumerLiveCaseId: 'consumer_alternate_live',
+      };
+      const terminal = await runFreshMasterTeach(
+        {
+          site: SITE,
+          fromSession: recordingPath,
+          noInteractive: true,
+          provider: 'codex-cli',
+          maxDurationMs: 30_000,
+        },
+        {
+          ...base,
+          requestMasterDecision: async (decisionInput) => {
+            if (decisionInput.verificationFindings)
+              throw new ProviderUnavailableError(new Error('fixture stops after chain review'));
+            const desiredPlan =
+              decisionInput.phase === 'discovery'
+                ? initialDesiredPlan(decisionInput)
+                : decisionInput.plannerProposals.length > 0
+                  ? proposalDesiredPlan(decisionInput)
+                  : desiredFromCurrent(decisionInput);
+            desiredPlan.chainEdges = [selectedEdge];
+            const output = MasterDecisionOutputSchema.parse({
+              binding: decisionInput.current?.run ?? decisionInput.discovery.run,
+              outcome: 'accepted',
+              reason: 'The second recorded producer case supports this consumer call.',
+              recallToolNames: [],
+              desiredPlan,
+            });
+            return requestValidatedMasterDecision(decisionInput, {
+              analyzer: {
+                async analyze() {
+                  return { text: JSON.stringify(output) };
+                },
+              },
+            });
+          },
+          requestFocusedPlan: async (plannerInput) => {
+            const output = await base.requestFocusedPlan?.(plannerInput);
+            if (!output) throw new Error('fixture focused planner is missing');
+            const implementationPlan = structuredClone(output.implementationPlan);
+            const live = implementationPlan.verificationCases.find(({ check }) => check === 'live');
+            if (!live) throw new Error('fixture live case is missing');
+            implementationPlan.verificationCases.push({
+              ...live,
+              id:
+                plannerInput.tool.id === PRODUCER_ID ? 'alternate_live' : 'consumer_alternate_live',
+              parameterValues:
+                plannerInput.tool.id === CONSUMER_ID
+                  ? [{ parameterName: 'item_id', value: 'item-2' }]
+                  : live.parameterValues,
+              expectedResult: 'The selected recorded variant remains comparable.',
+            });
+            return FocusedPlannerOutputSchema.parse({ ...output, implementationPlan });
+          },
+          runApiTool: async ({ workflowPath, parameters }) => {
+            if (workflowPath.includes(`/${PRODUCER_ID}/`)) {
+              const id = producerIds.length === 0 ? 'item-2' : 'item-1';
+              producerIds.push(id);
+              return {
+                result: { ok: true as const, data: { items: [{ id }] } },
+                executionMechanism: 'fixture-api',
+              };
+            }
+            consumerIds.push(String(parameters.item_id));
+            return {
+              result: { ok: true as const, data: { id: parameters.item_id } },
+              executionMechanism: 'fixture-api',
+            };
+          },
+          requestBaselineMvpReview: async (input) => {
+            if (input.toolId === CONSUMER_ID && input.resultEvidence.payload.chainEdgeId)
+              reviewedChainCase = input.resultEvidence.payload.verificationCaseId;
+            return credibleBaselineMvpReview(input);
+          },
+        },
+      );
+      expect(terminal.status).toBe('failed');
+      expect(producerIds).toEqual(['item-2', 'item-1']);
+      expect(consumerIds).toEqual(['item-2', 'item-1', 'item-2']);
+      expect(reviewedChainCase).toBe('consumer_alternate_live');
+    });
+  });
 
   it('reuses only candidate selection while planning and compilation start fresh', async () => {
     await withTemporaryImprintHome(async (root) => {

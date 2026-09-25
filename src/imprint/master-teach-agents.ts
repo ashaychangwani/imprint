@@ -655,6 +655,8 @@ function validateFocusedPlannerEdges(
       edge.consumerParameter,
       edge.consumerInvocationId ?? null,
       edge.producerChainEdgeId ?? null,
+      edge.producerLiveCaseId ?? null,
+      edge.consumerLiveCaseId ?? null,
     ]);
     if (tuples.has(tuple)) issue(ctx, base, 'duplicate chain edge');
     const producer =
@@ -664,6 +666,8 @@ function validateFocusedPlannerEdges(
     if (!producer) issue(ctx, [...base, 'producerToolId'], 'unknown focused producer tool');
     if (edge.consumerToolId !== tool.id)
       issue(ctx, [...base, 'consumerToolId'], 'focused chain edge belongs to another consumer');
+    if (edge.producerChainEdgeId && edge.producerLiveCaseId)
+      issue(ctx, base, 'focused chain edge cannot select both a producer chain and live case');
     if (!tool.candidate.likelyParams.some(({ name }) => name === edge.consumerParameter))
       issue(ctx, [...base, 'consumerParameter'], 'unknown focused consumer parameter');
     if (
@@ -805,6 +809,19 @@ function focusedPlannerOutputSchema(input: FocusedPlannerInput) {
         );
     });
     validateFocusedPlannerEdges(output.tool, output.chainEdges, producers, ctx, ['chainEdges']);
+    output.chainEdges.forEach((edge, index) => {
+      if (
+        edge.consumerLiveCaseId &&
+        !output.implementationPlan.verificationCases.some(
+          ({ id, check }) => id === edge.consumerLiveCaseId && check === 'live',
+        )
+      )
+        issue(
+          ctx,
+          ['chainEdges', index, 'consumerLiveCaseId'],
+          'focused chain edge selects an unknown consumer live case',
+        );
+    });
     // New API plans need usable recording/live pairs before compilation starts.
     // Durable plan parsing remains compatible with older saved plans.
     if (output.implementationPlan.strategyKind === 'api') {
@@ -950,7 +967,7 @@ function expectedChainDependencies(
         receipt.status === 'passed' &&
         (binding.producerChainEdgeId
           ? receipt.check === 'chain' && receipt.chainEdgeId === binding.producerChainEdgeId
-          : receipt.check === 'live'),
+          : receipt.check === 'live' && receipt.verificationCaseId === binding.producerLiveCaseId),
     );
     if (!producer || !producerResult) return undefined;
     dependencies.push({
@@ -1539,6 +1556,8 @@ const MasterInputSchema = MasterDecisionInputSchema.superRefine((input, ctx) => 
         edge.consumerParameter,
         edge.consumerInvocationId ?? null,
         edge.producerChainEdgeId ?? null,
+        edge.producerLiveCaseId ?? null,
+        edge.consumerLiveCaseId ?? null,
       ]);
       if (edgeTuples.has(tuple)) issue(ctx, edgePath, 'duplicate proposal chain edge');
       const producer = authoredToolsById.get(edge.producerToolId);

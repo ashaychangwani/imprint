@@ -733,7 +733,15 @@ Edges with the same consumer tool and `consumerInvocationId` form one call; omit
 that optional ID for the original single call per consumer. Each parameter may
 be bound once within a call. Set `producerChainEdgeId` to an edge of an earlier
 call to consume that call's result; omit it to consume the producer's standalone
-live result. A tool may consume its own earlier result without adding itself
+live result. When that default live case is not comparable to the consumer's
+recorded call, set `producerLiveCaseId` to a specific live verification case in
+the producer's accepted plan and `consumerLiveCaseId` to a specific live case
+in the consumer's plan. The host runs the selected producer case afresh and
+binds its exact result; it does not choose a case for you. Do not set both
+`producerChainEdgeId` and `producerLiveCaseId`. All edges of one consumer
+invocation must select the same consumer case. Choose cases whose recorded
+requests and input relationships support the comparison, and revise the
+selection if evidence rejects it. A tool may consume its own earlier result without adding itself
 to `dependsOnTools`. Use distinct invocation IDs for repeated calls. Prior-call
 references must be acyclic and must name a call of the declared producer tool.
 Build waves still order distinct tools. The runtime executes these explicit
@@ -806,7 +814,8 @@ Exact output schema (all objects reject extra fields):
     buildWaves: Array<Array<tool ID>>,
     chainEdges: Array<{
       id, producerToolId, producerResultPath, consumerToolId, consumerParameter,
-      consumerInvocationId?: string, producerChainEdgeId?: string
+      consumerInvocationId?: string, producerChainEdgeId?: string,
+      producerLiveCaseId?: string, consumerLiveCaseId?: string
     }>
   }
 }
