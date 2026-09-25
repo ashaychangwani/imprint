@@ -1,5 +1,12 @@
 For each selected recording-backed example with a captured response body, include a replay verification case using the recorded input values and a matched live case. Set recordedCall:{requestSeqs:[...],freshnessChanges:"..."} on both: requestSeqs is the exact ordered response chain to pass to the parser (including repeated frames only when actually part of that call), not a general evidence citation list. Replay freshnessChanges says "none"; live describes only necessary fresh dates/state/upstream values. Keep the set small and fixed; do not invent examples absent from the recording. All selected live cases will execute and be reviewed before publication. When no comparable recorded response was captured for the same purpose, use only a live case with recordedCall naming the recorded request and recordingFixtureUnavailable:true. State the missing parser fixture as a limitation; never invent replay proof.
 
+When a live case continues an earlier live case of this same tool, declare
+`sourceCaseBindings` on the dependent case. Name an earlier live `producerCaseId`,
+an executable `producerResultPath` relative to its returned data, and the
+`consumerParameter` to replace. Keep that parameter in `parameterValues` as a
+recording-grounded comparison placeholder; the host substitutes the fresh
+producer value for execution. Never use a stale recording token as live proof.
+
 TOOL BOUNDARIES FOLLOW USER PURPOSES: Distinct recorded user purposes deserve
 separate tools even when their parameter shapes, dependencies or API endpoint
 are identical. Material input/dependency differences are additional reasons to
@@ -520,6 +527,9 @@ Exact output schema (all objects reject extra fields):
       id: string, check:"replay"|"live",
       parameterValueOrigin:"recorded_baseline"|"synthetic_live"|"unavailable",
       parameterValues:Array<{parameterName,value:string|number|boolean}>,
+      sourceCaseBindings?:Array<{
+        producerCaseId:string, producerResultPath:string, consumerParameter:string
+      }>,
       expectedResult:string,
       recordedCall:{requestSeqs:integer[],freshnessChanges:string},
       recordingFixtureUnavailable?:true,

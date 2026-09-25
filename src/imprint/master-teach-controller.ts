@@ -3947,9 +3947,10 @@ async function runLiveCheck(input: {
   maxDurationMs?: number;
   apiResearch?: ApiResearchResult;
   verification: ImplementationPlanPayload['verificationCases'][number];
+  parameters?: Record<string, string | number | boolean>;
 }): Promise<UnboundLiveCheckResult> {
   const verification = input.verification;
-  const parameters = verificationParameters(verification);
+  const parameters = input.parameters ?? verificationParameters(verification);
   if (!verification) throw new Error('implementation plan has no live verification case');
   const startedAt = Date.now();
   if (input.tool.strategy?.kind === 'playbook_fallback') {
@@ -4537,6 +4538,7 @@ async function compileAndCheckCurrentPlan(input: {
     waveIndex: number,
     verification: ImplementationPlanPayload['verificationCases'][number],
     primary = false,
+    parameters?: Record<string, string | number | boolean>,
   ): Promise<LiveCheckResult | undefined> => {
     const invocationIndex = implementation.verificationCases
       .filter(({ check }) => check === 'live')
@@ -4554,6 +4556,7 @@ async function compileAndCheckCurrentPlan(input: {
         maxDurationMs: input.maxDurationMs,
         apiResearch,
         verification,
+        parameters,
       });
     } catch (error) {
       const check = invocationOutcomeCheck({
@@ -4637,9 +4640,40 @@ async function compileAndCheckCurrentPlan(input: {
     const cases = implementation.verificationCases.filter(({ check }) => check === 'live');
     const primary = cases[0];
     if (!primary) throw new Error('implementation plan has no live verification case');
-    // Preserve the primary result for declared producer bindings. Each other
-    // required case is checked and reviewed first, without publishing a draft.
-    for (const verification of [...cases.slice(1), primary]) {
+    // Keep source cases in this tool fresh and exact. Independent secondary
+    // cases still run before the primary so a draft is not published early.
+    const completed = new Map<string, LiveCheckResult>();
+    const runCase = async (
+      verification: ImplementationPlanPayload['verificationCases'][number],
+    ): Promise<LiveCheckResult | undefined> => {
+      const earlier = completed.get(verification.id);
+      if (earlier) return earlier;
+      let parameters = verificationParameters(verification);
+      for (const binding of verification.sourceCaseBindings ?? []) {
+        const sourceCase = cases.find(({ id }) => id === binding.producerCaseId);
+        if (!sourceCase) throw new Error(`unknown source case ${binding.producerCaseId}`);
+        const source = await runCase(sourceCase);
+        if (!source?.result.ok) return undefined;
+        const bound = bindProducerResultToConsumer({
+          edge: binding,
+          producerResult: source.result.data,
+          consumerParameterDeclarations: concreteParameterDeclarations(tool),
+          consumerParameters: parameters,
+        });
+        if (!bound.ok) {
+          failures.push(
+            checkFailure(
+              tool,
+              waveIndex,
+              'proof',
+              new Error(chainBindingFailureMessage(binding, bound.reason)),
+              { receiptRef: source.resultReceiptRef },
+            ),
+          );
+          return undefined;
+        }
+        parameters = bound.parameters;
+      }
       const live = await runStandaloneCase(
         tool,
         focused,
@@ -4647,26 +4681,37 @@ async function compileAndCheckCurrentPlan(input: {
         waveIndex,
         verification,
         verification === primary,
+        parameters,
       );
       if (!live) return undefined;
-      if (verification === primary) return live;
-      const evidence = completionToolResultEvidenceFor(input.journal, tool, live);
-      const disposition = await input.approveMvp?.(tool, evidence, live, focused);
-      if (disposition?.status === 'revision_required') {
-        failures.push(
-          checkFailure(
-            tool,
-            waveIndex,
-            'proof',
-            rejectedResultError(disposition.reason, evidence),
-            { receiptRef: live.resultReceiptRef },
-          ),
-        );
+      completed.set(verification.id, live);
+      if (verification !== primary) {
+        const evidence = completionToolResultEvidenceFor(input.journal, tool, live);
+        const disposition = await input.approveMvp?.(tool, evidence, live, focused);
+        if (disposition?.status === 'revision_required') {
+          failures.push(
+            checkFailure(
+              tool,
+              waveIndex,
+              'proof',
+              rejectedResultError(disposition.reason, evidence),
+              { receiptRef: live.resultReceiptRef },
+            ),
+          );
+          liveByToolId.delete(tool.id);
+          return undefined;
+        }
+      }
+      return live;
+    };
+    for (const verification of [...cases.slice(1), primary]) {
+      if (!(await runCase(verification))) {
         liveByToolId.delete(tool.id);
+        for (const checked of completed.keys()) liveByCaseKey.delete(caseKey(tool.id, checked));
         return undefined;
       }
     }
-    return undefined;
+    return completed.get(primary.id);
   };
 
   const incomingChainInvocationsFor = (toolId: string): ChainInvocation[] =>

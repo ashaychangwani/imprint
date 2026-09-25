@@ -746,6 +746,10 @@ to `dependsOnTools`. Use distinct invocation IDs for repeated calls. Prior-call
 references must be acyclic and must name a call of the declared producer tool.
 Build waves still order distinct tools. The runtime executes these explicit
 bindings; it does not infer a continuation or choose a public tool boundary.
+For a live verification case that continues an earlier live case of the same
+tool, use `sourceCaseBindings` in that tool's implementation plan to bind the
+earlier case's fresh result to the dependent case's parameter. This is separate
+from `chainEdges`, which connect public tools or explicit chain invocations.
 If several producer paths are plausible,
 choose one rather than returning alternatives for the runtime to interpret.
 

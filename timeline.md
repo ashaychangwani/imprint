@@ -15925,3 +15925,27 @@ docs/teach-flights-46-unbounded-retrospective-2026-09-25.md. The trace reports
 reported cache writes, and a $30.7980008 lower bound with 15 missing usage
 spans. No independent audit ran. The full 2,071-test suite, lint, and type
 checking passed for the fix. Flights47 starts fresh on this checkpoint.
+
+## September 25 — Flights47 needs fresh values between cases of one tool
+
+Flights47 ran fresh and unbounded for 109.7 minutes. Location lookup and the
+round-trip date grid published usable MVPs. Round-trip search passed its live
+return-stage comparison, and research proved a fresh two-leg search-to-booking
+path, but the generated search tool did not finish verification, so booking
+could not publish. The master correctly selected the comparable producer case
+for the booking chain. A later parser repair made search return the site's
+actual opaque outbound selection. The runtime then kept testing its
+continuation case with an older, constructed value from the plan instead of
+the fresh initial-case result. Repeated compiler repairs could not change
+that host-supplied parameter. We stopped the old-code run cleanly and kept all
+evidence. No external audit ran. The trace reports 59,971,802 input tokens
+(55,808,384 cache reads), 409,657 output, zero reported cache writes, and a
+$47.1701656 base API-equivalent lower bound; one analysis span lacks usage.
+Disk and power did not interrupt the run.
+
+Live verification cases can now declare a source case, result path, and target
+parameter. The host runs the earlier case freshly, binds its exact scalar,
+and keeps failed bindings from proving or publishing a tool. Agents still
+choose the cases and paths. The new focused end-to-end and schema regressions,
+full 2,073-test suite, lint, and type checking passed. Flights48 will start
+from a fresh home on this checkpoint.

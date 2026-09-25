@@ -928,6 +928,56 @@ describe('editable master teaching plan', () => {
     ).toThrow('playbook implementation plans cannot declare replay verification cases');
   });
 
+  it('binds dependent live cases only to earlier live cases and declared parameters', () => {
+    const api = implementationPayload('api', [1]);
+    const source = api.verificationCases.find(({ check }) => check === 'live');
+    if (!source) throw new Error('missing live fixture');
+    const dependent = {
+      ...source,
+      id: 'dependent_live',
+      parameterValues: [{ parameterName: 'selection', value: 'recorded-placeholder' }],
+      sourceCaseBindings: [
+        {
+          producerCaseId: source.id,
+          producerResultPath: 'items[0].selection',
+          consumerParameter: 'selection',
+        },
+      ],
+    };
+    expect(
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: [...api.verificationCases, dependent],
+      }).verificationCases.at(-1)?.sourceCaseBindings,
+    ).toEqual(dependent.sourceCaseBindings);
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: [
+          ...api.verificationCases,
+          {
+            ...dependent,
+            sourceCaseBindings: [{ ...dependent.sourceCaseBindings[0], producerCaseId: 'missing' }],
+          },
+        ],
+      }),
+    ).toThrow('source case must be an earlier live case');
+    expect(() =>
+      ImplementationPlanPayloadSchema.parse({
+        ...api,
+        verificationCases: [
+          ...api.verificationCases,
+          {
+            ...dependent,
+            sourceCaseBindings: [
+              { ...dependent.sourceCaseBindings[0], consumerParameter: 'unknown' },
+            ],
+          },
+        ],
+      }),
+    ).toThrow('bound parameter must be declared');
+  });
+
   it('keeps navigation and selected-response recording provenance distinct', () => {
     const withResponseOrigin = structuredClone(implementationPayload('api', [1]));
     const requestProvenance = withResponseOrigin.requestProvenance[0];

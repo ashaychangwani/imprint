@@ -281,6 +281,18 @@ const ImplementationVerificationCaseSchema = z
           .strict(),
       )
       .max(64),
+    sourceCaseBindings: z
+      .array(
+        z
+          .object({
+            producerCaseId: z.string().regex(/^[a-z][a-z0-9_-]{0,127}$/),
+            producerResultPath: canonicalText(1, 512),
+            consumerParameter: canonicalText(1, 128),
+          })
+          .strict(),
+      )
+      .max(64)
+      .optional(),
     expectedResult: canonicalText(1, 2_000),
     recordedCall: z
       .object({
@@ -342,6 +354,31 @@ const ImplementationVerificationCaseSchema = z
         });
       }
       parameters.add(parameterName);
+    });
+    if (verificationCase.check !== 'live' && verificationCase.sourceCaseBindings?.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['sourceCaseBindings'],
+        message: 'only live cases may bind a fresh source case',
+      });
+    }
+    const boundParameters = new Set<string>();
+    verificationCase.sourceCaseBindings?.forEach(({ consumerParameter }, index) => {
+      if (!parameters.has(consumerParameter)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sourceCaseBindings', index, 'consumerParameter'],
+          message: 'bound parameter must be declared in the verification case',
+        });
+      }
+      if (boundParameters.has(consumerParameter)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sourceCaseBindings', index, 'consumerParameter'],
+          message: 'duplicate source-case parameter binding',
+        });
+      }
+      boundParameters.add(consumerParameter);
     });
     const refs = new Set<string>();
     verificationCase.provenance.evidenceRefs.forEach((ref, index) => {
@@ -485,6 +522,26 @@ export const ImplementationPlanPayloadSchema = z
         });
       }
       verificationCaseIds.add(verificationCase.id);
+      verificationCase.sourceCaseBindings?.forEach(({ producerCaseId }, bindingIndex) => {
+        const sourceIndex = plan.verificationCases.findIndex(({ id }) => id === producerCaseId);
+        if (
+          sourceIndex < 0 ||
+          sourceIndex >= index ||
+          plan.verificationCases[sourceIndex]?.check !== 'live'
+        ) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [
+              'verificationCases',
+              index,
+              'sourceCaseBindings',
+              bindingIndex,
+              'producerCaseId',
+            ],
+            message: 'source case must be an earlier live case in this tool',
+          });
+        }
+      });
       verificationChecks.add(verificationCase.check);
       if (verificationCase.check !== 'replay') return;
       replayCaseCount += 1;

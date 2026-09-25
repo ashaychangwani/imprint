@@ -7004,3 +7004,70 @@ it('does not publish a tool whose second selected live case fails', async () => 
     expect(promotionBatches.flat()).not.toContain(CONSUMER_ID);
   });
 });
+
+it('passes a fresh result from an earlier live case into a dependent case of the same tool', async () => {
+  await withTemporaryImprintHome(async (root) => {
+    const base = lifecycleFailureFixture({
+      runId: 'same-tool-live-case-binding',
+      events: [],
+      promotionBatches: [],
+      requestBaselineMvpReview: credibleBaselineMvpReview,
+    });
+    const consumerCalls: string[] = [];
+    await runFreshMasterTeach(
+      {
+        site: SITE,
+        fromSession: syntheticSessionPath(root),
+        noInteractive: true,
+        provider: 'codex-cli',
+        maxDurationMs: 30_000,
+      },
+      {
+        ...base,
+        requestFocusedPlan: async (input, agent) => {
+          if (!base.requestFocusedPlan) throw new Error('Missing fixture planner');
+          const plan = await base.requestFocusedPlan(input, agent);
+          if (input.tool.id === CONSUMER_ID) {
+            const source = plan.implementationPlan.verificationCases.find(
+              ({ check }) => check === 'live',
+            );
+            if (!source) throw new Error('Missing fixture live case');
+            plan.implementationPlan.verificationCases.push({
+              ...source,
+              id: 'dependent_live_case',
+              parameterValues: [{ parameterName: 'item_id', value: 'stale-recorded-id' }],
+              sourceCaseBindings: [
+                {
+                  producerCaseId: source.id,
+                  producerResultPath: 'id',
+                  consumerParameter: 'item_id',
+                },
+              ],
+            });
+          }
+          return plan;
+        },
+        runApiTool: async (input) => {
+          if (!base.runApiTool) throw new Error('Missing fixture runner');
+          if (!input.workflowPath.includes(`/${CONSUMER_ID}/`)) return base.runApiTool(input);
+          const itemId = String(input.parameters.item_id);
+          consumerCalls.push(itemId);
+          if (itemId === 'stale-recorded-id')
+            return {
+              result: { ok: false, error: 'BAD_RESPONSE', message: 'stale case value used' },
+              executionMechanism: 'fixture-api',
+            };
+          return {
+            result: {
+              ok: true,
+              data: { id: itemId === 'fresh-owned-id' ? itemId : 'fresh-owned-id' },
+            },
+            executionMechanism: 'fixture-api',
+          };
+        },
+      },
+    );
+    expect(consumerCalls).toContain('fresh-owned-id');
+    expect(consumerCalls).not.toContain('stale-recorded-id');
+  });
+});
