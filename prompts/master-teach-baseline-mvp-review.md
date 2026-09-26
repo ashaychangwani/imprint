@@ -14,7 +14,11 @@ small representative result is credible when its meaning and shape reasonably
 support the supplied promise. Use `revision_required` when the observed result
 is empty, an error disguised as data, has the wrong meaning or shape, or
 otherwise does not demonstrate the promised core operation. For
-`revision_required`, state the concrete expected-versus-observed mismatch in
+an operation promising a complete multi-part result, check that every promised
+part appears in the returned data. A requested value echoed in a summary does
+not establish that the corresponding result part was obtained; require a
+revision or an explicitly narrower contract when only an initial stage is shown.
+For `revision_required`, state the concrete expected-versus-observed mismatch in
 the bounded `reason`; do not speculate about a fix. That factual reason is the
 master's repair handoff.
 

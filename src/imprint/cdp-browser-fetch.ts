@@ -101,7 +101,8 @@ export function buildNavigationSelectorExpression(selector: string): string {
 
 export function buildNavigationClickTargetExpression(selector: string): string {
   return `(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
+    const matches = document.querySelectorAll(${JSON.stringify(selector)});
+    const target = matches[0];
     const describe = (element) => {
       if (!(element instanceof Element)) return null;
       const style = getComputedStyle(element);
@@ -118,7 +119,7 @@ export function buildNavigationClickTargetExpression(selector: string): string {
     const unavailable = (reason, rect = null, hit = null) => ({
       diagnostic: {
         reason,
-        matchedCount: document.querySelectorAll(${JSON.stringify(selector)}).length,
+        matchedCount: matches.length,
         target: describe(target),
         parent: describe(target?.parentElement),
         rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
@@ -126,6 +127,7 @@ export function buildNavigationClickTargetExpression(selector: string): string {
       },
     });
     if (!(target instanceof Element)) return unavailable('not_found');
+    if (matches.length > 1) return unavailable('ambiguous_selector');
     target.scrollIntoView({ block: 'center', inline: 'center' });
     const rect = target.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return unavailable('zero_area', rect);
@@ -2185,6 +2187,15 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           | null
           | undefined;
         targetDiagnostic = value?.diagnostic;
+        if (
+          targetDiagnostic &&
+          typeof targetDiagnostic === 'object' &&
+          (targetDiagnostic as { reason?: unknown }).reason === 'ambiguous_selector'
+        ) {
+          throw new Error(
+            `browser navigation click selector ${JSON.stringify(interaction.selector)} matched multiple elements; choose a unique target; target diagnostics: ${JSON.stringify(targetDiagnostic)}`,
+          );
+        }
         if (
           typeof value?.x === 'number' &&
           typeof value.y === 'number' &&

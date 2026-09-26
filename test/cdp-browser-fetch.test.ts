@@ -35,7 +35,7 @@ describe('buildNavigationClickTargetExpression', () => {
     const selector = '[data-location-id="S1"]\\path';
     const expression = buildNavigationClickTargetExpression(selector);
 
-    expect(expression).toContain(`document.querySelector(${JSON.stringify(selector)})`);
+    expect(expression).toContain(`document.querySelectorAll(${JSON.stringify(selector)})`);
     expect(expression).toContain("target.matches(':disabled')");
     expect(expression).toContain('document.elementFromPoint(x, y)');
     expect(expression).not.toContain('querySelector([data-location-id');
@@ -81,15 +81,14 @@ describe('navigation click target facts', () => {
         Element: FixtureElement,
         getComputedStyle: (node: FixtureElement) => node.style,
         document: {
-          querySelector: () => element,
-          querySelectorAll: () => (element ? [element, blocker] : []),
+          querySelectorAll: () => (element ? [element] : []),
           elementFromPoint: () => hit,
         },
       });
     target.style.pointerEvents = 'none';
     const covered = evaluate(target, blocker).diagnostic;
     expect(covered.reason).toBe('center_hit_other_element');
-    expect(covered.matchedCount).toBe(2);
+    expect(covered.matchedCount).toBe(1);
     expect(covered.target.pointerEvents).toBe('none');
     expect(covered.target.class.length).toBe(160);
     expect(covered.parent.role).toBe('group');
@@ -110,6 +109,16 @@ describe('navigation click target facts', () => {
     target.style.pointerEvents = 'auto';
     expect(evaluate(target)).toEqual({ x: 60, y: 40 });
     expect(target.focused).toBe(true);
+    target.focused = false;
+    const ambiguous = runInNewContext(buildNavigationClickTargetExpression('#fixture'), {
+      Element: FixtureElement,
+      getComputedStyle: (node: FixtureElement) => node.style,
+      document: {
+        querySelectorAll: () => [target, blocker],
+      },
+    }).diagnostic;
+    expect(ambiguous).toMatchObject({ reason: 'ambiguous_selector', matchedCount: 2 });
+    expect(target.focused).toBe(false);
   });
 });
 
@@ -1283,7 +1292,7 @@ describe('navigation network-response capture', () => {
           Runtime: {
             enable: async () => ({}),
             evaluate: async ({ expression }: { expression: string }) => {
-              if (expression.includes('const target = document.querySelector')) {
+              if (expression.includes('const matches = document.querySelectorAll')) {
                 targetAttempts++;
                 if (targetState === 'invalid') {
                   return { result: {}, exceptionDetails: { text: 'Invalid CSS selector' } };
@@ -1291,6 +1300,13 @@ describe('navigation network-response capture', () => {
                 if (targetState === 'diagnostic') {
                   return {
                     result: { value: { diagnostic: { reason: 'zero_area', matchedCount: 2 } } },
+                  };
+                }
+                if (targetState === 'ambiguous') {
+                  return {
+                    result: {
+                      value: { diagnostic: { reason: 'ambiguous_selector', matchedCount: 2 } },
+                    },
                   };
                 }
                 if (targetState === 'stable-diagnostic') {
@@ -1449,6 +1465,7 @@ describe('navigation network-response capture', () => {
       for (const [state, message] of [
         ['missing', 'within 120ms'],
         ['diagnostic', 'target diagnostics: {"reason":"zero_area","matchedCount":2}'],
+        ['ambiguous', 'matched multiple elements; choose a unique target'],
         ['invalid', 'Invalid CSS selector'],
         ['transport-error', 'CDP disconnected'],
         ['closed', 'browser closed'],

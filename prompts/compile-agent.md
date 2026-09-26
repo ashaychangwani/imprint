@@ -1227,6 +1227,9 @@ failure means no declared click has run; fix that condition before changing sele
 Navigation clicks poll the exact agent-selected selector until it is clickable,
 using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches
 once; an action-scoped response capture starts at dispatch, not during that wait.
+Choose a selector that identifies one intended control on the current page.
+If multiple controls match, refine it using observed attributes or structure;
+the browser rejects ambiguous click selectors rather than choosing the first.
 Invalid selector evaluations and CDP errors still fail. Failed clicks include
 bounded target diagnostics: match count, first-match bounds and computed styles,
 parent identity, and the actual center-hit element. Inspect these facts with the

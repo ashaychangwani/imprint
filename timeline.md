@@ -16002,3 +16002,32 @@ lower bound. Audit 2 reported no usage. Audit 3 reported 708,563 input tokens
 (600,960 cache reads), 4,661 output and a $0.764016 lower bound. Actual
 provider billing and missing usage remain unknown. Flights50 has started
 fresh on the same code to test repeatability.
+
+## September 26 — Flights50 audit exposes two published-tool defects
+
+Flights50 ran for 315.4 minutes on unchanged commit `2c4f8a8`. Six tools
+published and internal location, one-way search, booking, calendar, and
+round-trip checks passed. The master kept revising an optional multi-city
+search through 15 staged revisions; it remained unfinished. We stopped the
+run cleanly once its independent strict audit had already failed, preserving
+the run and audit evidence. The audit found 20 of 23 graded checks correct:
+the date-grid tool did not capture its calendar response, and the round-trip
+tool promised a complete itinerary but returned outbound choices only. The
+fresh one-way search-to-booking chain and location tools passed. No Hotels
+teach started.
+
+The calendar failure was reproduced against the exact audited inputs. Its
+navigation selector matched two clickable controls; the generated workflow
+could select the wrong one. A selector for the intended control captured the
+live calendar XHR under the original 30-second navigation limit. The runtime
+now reports ambiguous click selectors immediately, and the compiler guidance
+requires a unique observed target. The baseline reviewer now checks that all
+parts of an advertised multi-part result are actually present, so a request
+echo cannot prove a missing stage. These changes are general to navigation
+and result claims; a fresh teach is required to validate them.
+
+Flights50 reported 45,277,953 input tokens (41,328,768 cache reads),
+360,105 output tokens, zero reported cache writes, and a $39.5303472 base
+API-equivalent lower bound; 16 analysis spans lack usage. Its audit reported
+578,110 input tokens (514,944 cache reads), 4,239 output, zero reported cache
+writes, and a $0.5434216 lower bound. Actual provider billing is unknown.
