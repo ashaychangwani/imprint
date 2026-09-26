@@ -471,6 +471,36 @@ describe('normalizeCdpResponseHeaders', () => {
 });
 
 describe('navigation network-response capture', () => {
+  it('distinguishes a matching response whose request began outside the capture boundary', () => {
+    const capture = new CdpNetworkResponseCapture(
+      {
+        urlIncludes: '/api/results',
+        recordingResponseRequestSeq: 42,
+        method: 'POST',
+        resourceType: 'XHR',
+        actionIndex: 2,
+      },
+      { afterRequestSequence: 10, deferUntilNavigationScope: true },
+    );
+    capture.setNavigationScope({ loaderId: 'current' });
+    capture.observeResponse({
+      requestId: 'started-before-capture',
+      requestSequence: 11,
+      loaderId: 'current',
+      url: 'https://fixture.test/api/results',
+      method: 'POST',
+      resourceType: 'XHR',
+      status: 200,
+      headers: {},
+    });
+    const evidence = JSON.parse(
+      capture.timeoutMessage(100).split('observed network responses: ')[1] ?? '',
+    );
+    expect(evidence.matchingRequestCount).toBe(0);
+    expect(evidence.matchingResponsesWithoutEligibleRequest).toBe(1);
+    expect(evidence.captureBoundaryHint).toContain('actionIndex timing');
+  });
+
   it('identifies the failing matcher predicates without choosing a replacement', () => {
     const capture = new CdpNetworkResponseCapture({
       urlIncludes: '/api/results',

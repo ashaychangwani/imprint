@@ -16031,3 +16031,33 @@ Flights50 reported 45,277,953 input tokens (41,328,768 cache reads),
 API-equivalent lower bound; 16 analysis spans lack usage. Its audit reported
 578,110 input tokens (514,944 cache reads), 4,239 output, zero reported cache
 writes, and a $0.5434216 lower bound. Actual provider billing is unknown.
+
+## September 26 — Flights51 exposes capture feedback and repair drift
+
+Flights51 ran fresh for 231.1 minutes on commit `51eaeb3`. Location lookup
+published; the other seven planned tools did not, so no independent audit or
+Hotels teach started. The run was stopped cleanly before changing code, with
+its recording, journal, staging, and failed live checks preserved. Disk stayed
+near 4 GiB free and the process remained active until stopped.
+
+The agents proved one-way search and reached live checks for round-trip and
+multi-city search. Recording verification found concrete parser and proof
+errors: missing selection state for one connecting choice, omitted emissions,
+omitted or duplicate multi-city options, and an overbroad expectation for a
+supported direct-only continuation. The master retained verified tools and
+recalled only affected ones. The calendar tool repeatedly failed because its
+generated click selector matched two controls. Its first timeout had already
+observed a matching calendar response, but without an eligible request start
+under the selected action capture boundary. Subsequent focused repairs changed
+the selector and eventually regressed the top-level navigation to POST while
+the desired background response was POST.
+
+The browser timeout now reports when a matching response lacks an eligible
+request start. General compiler guidance says to inspect capture timing and
+preserve proven navigation fields during a focused repair. A regression for
+that diagnostic passes. The focused browser suite passed on rerun after one
+unrelated five-second form-test timeout; the full suite passed 2,075 tests,
+and lint and type checking passed. A fresh teach must validate this change.
+The Flights51 collector trace lacks token usage for its analysis spans, so
+input/output/cache totals and cost are still unknown; they must not be
+reported as zero. Provider-log recovery is pending.

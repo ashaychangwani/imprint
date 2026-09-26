@@ -790,6 +790,15 @@ export class CdpNetworkResponseCapture {
         (response.requestSequence !== undefined &&
           response.requestSequence > this.afterRequestSequence),
     );
+    const eligibleRequestIds = new Set(
+      this.matchingRequestOrder.map((request) => request.requestId),
+    );
+    const matchingResponsesWithoutEligibleRequest = responses.filter(
+      (response) =>
+        this.matchesMatcher(response) &&
+        this.matchesNavigationScope(response) &&
+        !eligibleRequestIds.has(response.requestId),
+    ).length;
     const facts = responses.map((response) => {
       let endpoint: string;
       let endpointTruncated = false;
@@ -839,6 +848,13 @@ export class CdpNetworkResponseCapture {
       count: responses.length,
       omitted: responses.length - recent.reduce((total, response) => total + response.count, 0),
       matchingRequestCount: this.matchingRequestOrder.length,
+      matchingResponsesWithoutEligibleRequest,
+      ...(matchingResponsesWithoutEligibleRequest > 0
+        ? {
+            captureBoundaryHint:
+              'A matching response was observed without an eligible request start. Check actionIndex timing and navigation scope before changing the endpoint or click selector.',
+          }
+        : {}),
       navigationScopeReady: this.navigationScopeReady,
       recent,
     });

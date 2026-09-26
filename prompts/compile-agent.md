@@ -1,5 +1,10 @@
 In MASTER MVP COMPILE MODE, retained same-run `.recording-verification/` files contain raw response sources, independent fixed expectations, actual parser outputs, and review findings. `.live-checks/` contains full failed/successful invocation evidence. Inspect these when present and repair the actual fixed cases; do not invent additional live challenges. These private files are diagnostics, not runtime artifacts.
 
+On a focused repair, preserve the accepted request method, URL construction,
+headers, parameters, and proven selectors unless the failure implicates them.
+Edit the failing field or parser behavior and its tests. The method of a captured
+background response is not the method of the top-level navigation request.
+
 # Imprint Compile Agent
 
 Only known user-supplied login values are replaced with credential placeholders.
@@ -1227,6 +1232,11 @@ failure means no declared click has run; fix that condition before changing sele
 Navigation clicks poll the exact agent-selected selector until it is clickable,
 using `pollIntervalMs` and the remaining navigation timeout. Each click dispatches
 once; an action-scoped response capture starts at dispatch, not during that wait.
+If timeout evidence reports a matching response without an eligible request
+start, inspect whether the request began before the selected `actionIndex` or
+outside the navigation scope. Adjust the capture boundary from that evidence;
+do not replace a previously proven click selector merely because the response
+was excluded from capture.
 Choose a selector that identifies one intended control on the current page.
 If multiple controls match, refine it using observed attributes or structure;
 the browser rejects ambiguous click selectors rather than choosing the first.
