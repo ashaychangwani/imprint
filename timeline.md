@@ -16080,5 +16080,9 @@ as different from the tested request. The master retried the same mismatch
 three times. Proof references now retain the tested backend choice; a new
 test can still choose another backend. A regression covers this case, and the
 full suite passed 2,076 tests with lint and type checking clean. Flights53
-will test this correction in a fresh isolated teach. Flights52 usage recovery
-and final accounting remain pending.
+will test this correction in a fresh isolated teach. Native session-log recovery
+found reported usage for all 38 Flights52 agent threads: 62,158,260 input
+tokens (56,921,728 cache reads), 432,329 output, and zero reported cache
+writes. Two threads lack a terminal event but retain usage snapshots. The
+$52.3613992 base API-equivalent cost is a lower bound, not provider billing;
+unreported usage and other fees remain unknown.
