@@ -16058,6 +16058,9 @@ preserve proven navigation fields during a focused repair. A regression for
 that diagnostic passes. The focused browser suite passed on rerun after one
 unrelated five-second form-test timeout; the full suite passed 2,075 tests,
 and lint and type checking passed. A fresh teach must validate this change.
-The Flights51 collector trace lacks token usage for its analysis spans, so
-input/output/cache totals and cost are still unknown; they must not be
-reported as zero. Provider-log recovery is pending.
+The Flights51 collector trace lacks token usage for its analysis spans. Native
+session-log recovery found reported usage for all 54 agent threads: 129,014,695
+input tokens (119,168,384 cache reads), 869,309 output, and zero reported
+cache writes. Three threads lacked a terminal event but retained usage
+snapshots. The $104.4387776 base API-equivalent cost is a lower bound, not
+provider billing; unreported usage and other fees remain unknown.
