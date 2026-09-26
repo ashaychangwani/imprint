@@ -15971,3 +15971,34 @@ An unknown evidence source ID now returns the valid IDs to the same retained
 agent within the existing inspection budget. It does not map IDs silently or
 accept invalid proof. A focused regression reproduces the Flights48 typo and
 successful correction. Flights49 will start from a fresh home after checks.
+
+## September 26 — Flights49 completes; repeatability is being checked
+
+Flights49 completed a fresh, unbounded teach in 178.7 minutes on commit
+`2c4f8a8`. It published six tools covering location lookup, one-way and
+multi-city search, booking options, and the date grid. Fresh one-way search
+to booking and multi-city continuation both passed inside the teach. The
+agents repaired real parser errors during the run; they excluded unproven
+round-trip search rather than claiming it worked. No runtime code changed.
+
+The first independent strict audit scored all 12 graded checks correct but
+was inconclusive after a date-grid browser call timed out. Two controlled
+transport probes then completed in 33 and 34 seconds. The second audit never
+reached a tool because its provider returned 401. After provider recovery,
+the third strict audit completed all nine recorded invocations and all 22
+graded checks correctly, including a fresh search-to-booking chain and a
+working 7×7 date grid. It remained formally inconclusive because the two
+date-grid route parameters could not be tested with distinct recorded cases:
+all four recorded calendar requests use the same origin and destination.
+The fixed-case behavior passed; changing those two parameters remains
+unverified. We will not invent out-of-recording calendar routes to manufacture
+a strict pass.
+
+The Flights49 trace reports 54,083,397 input tokens (50,837,504 cache reads),
+279,763 output, zero reported cache writes, and a $38.9138336 base
+API-equivalent lower bound; four analysis spans lack usage. Audit 1 reported
+4,062,642 input tokens (3,974,400 cache reads), 5,220 output and a $2.047128
+lower bound. Audit 2 reported no usage. Audit 3 reported 708,563 input tokens
+(600,960 cache reads), 4,661 output and a $0.764016 lower bound. Actual
+provider billing and missing usage remain unknown. Flights50 has started
+fresh on the same code to test repeatability.
