@@ -16064,3 +16064,21 @@ input tokens (119,168,384 cache reads), 869,309 output, and zero reported
 cache writes. Three threads lacked a terminal event but retained usage
 snapshots. The $104.4387776 base API-equivalent cost is a lower bound, not
 provider billing; unreported usage and other fees remain unknown.
+
+## September 26 — Flights52 exposes a candidate-reference backend mismatch
+
+Flights52 ran fresh for 91.4 minutes on commit `106b03f`. Location lookup and
+the date grid published; five planned tools remained unfinished. We stopped
+the run cleanly to correct a deterministic research handoff failure, preserving
+its recording, journal, candidate observations, and live checks. No independent
+audit or Hotels teach started. Disk remained about 3.6 GiB free.
+
+The round-trip researcher had tested a candidate with backend choice `auto`.
+The request actually executed via `fetch`. Its later proof reference named
+`fetch`, causing reference resolution to change the candidate and reject it
+as different from the tested request. The master retried the same mismatch
+three times. Proof references now retain the tested backend choice; a new
+test can still choose another backend. A regression covers this case, and the
+full suite passed 2,076 tests with lint and type checking clean. Flights53
+will test this correction in a fresh isolated teach. Flights52 usage recovery
+and final accounting remain pending.

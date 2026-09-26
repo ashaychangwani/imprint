@@ -613,7 +613,12 @@ async function researchApiMvpCallImpl(input: ApiResearchCallInput): Promise<ApiR
           const candidate: ApiResearchCandidate = {
             ...stored,
             parameterValues: reference.parameterValues,
-            ...(reference.testBackend === undefined ? {} : { testBackend: reference.testBackend }),
+            // A proof refers to the tested candidate, whose requested backend
+            // may differ from the backend that actually completed. Only a new
+            // test may select a different backend.
+            ...(decision.action === 'test' && reference.testBackend !== undefined
+              ? { testBackend: reference.testBackend }
+              : {}),
           };
           const changePath = retainedReferenceChangePath(input.toolDir, prior.id);
           const recordingReferenceChange =

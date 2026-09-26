@@ -1757,6 +1757,57 @@ describe('focused API research', () => {
     }
   });
 
+  it('keeps the tested backend choice when a proof reference names the executed backend', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-backend-ref-'));
+    const original = apiCandidate('retained', 'auto');
+    let turns = 0;
+    try {
+      const result = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        tool,
+        evidence,
+        session,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 10_000),
+        dependencies: {
+          requestStep: async (input) => {
+            turns++;
+            const prior = input.observations[0];
+            return parseApiResearchOutput(
+              JSON.stringify(
+                prior
+                  ? {
+                      binding,
+                      action: 'proven',
+                      candidateRef: {
+                        observationId: prior.id,
+                        parameterValues: original.parameterValues,
+                        testBackend: 'fetch',
+                      },
+                      basedOnObservationId: prior.id,
+                      reason: 'Fetch executed the exact auto-tested candidate.',
+                    }
+                  : { binding, action: 'test', candidate: original, reason: 'Recorded call.' },
+              ),
+              input,
+            );
+          },
+          runApiTool: async () => ({
+            result: { ok: true, data: { items: [{ id: 'alpha' }] } },
+            executionMechanism: 'fetch',
+          }),
+        },
+      });
+      expect(turns).toBe(2);
+      expect(result.candidate.testBackend).toBe('auto');
+      expect(result.observation.candidateSha256).toBe(apiResearchCandidateSha256(original));
+    } finally {
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('retains an accepted recording-reference change across exact candidate references', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-candidate-ref-provenance-'));
     const candidate = apiCandidate('alternate', 'fetch');
