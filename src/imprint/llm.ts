@@ -1192,7 +1192,7 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
       return new CodexCliProvider({
-        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.6-sol',
+        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-6-sol',
       });
     case 'cursor-cli':
       return new CursorCliProvider({ model: opts.model });
@@ -1275,7 +1275,7 @@ export function preferredAgentModel(provider: ProviderName): string {
     case 'claude-cli':
       return 'claude-opus-4-8';
     case 'codex-cli':
-      return 'gpt-5.6-sol';
+      return 'gpt-6-sol';
     case 'cursor-cli':
       return 'claude-opus-4-8'; // best-effort; cursor passes through
   }
@@ -1321,7 +1321,8 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
       ];
     case 'codex-cli':
       return [
-        { model: 'gpt-5.6-sol', isDefault: true },
+        { model: 'gpt-6-sol', isDefault: true },
+        { model: 'gpt-5.6-sol', isDefault: false },
         { model: 'gpt-5.6-terra', isDefault: false },
         { model: 'gpt-5.6-luna', isDefault: false },
         { model: 'gpt-5.5', isDefault: false },

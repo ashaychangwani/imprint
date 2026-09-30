@@ -165,6 +165,11 @@ needed:
 imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 12h
 ```
 
+With `--agent codex`, the default model is `gpt-6-sol`. Imprint's Codex SDK
+includes a compatible CLI for native teaching, while standalone compilation and
+audits use the `codex` command on your PATH. Update that command if it rejects
+the model despite it being available in the Codex app.
+
 The timeout applies to the foreground teach run and defaults to 12 hours so a
 large discovered tool set is not cut off by a single-tool-sized budget. Imprint may keep working on
 independent tools after one tool fails, but the command does not report success

@@ -409,6 +409,9 @@ bunx playwright install chromium
 | 4 | Cursor | `cursor` on PATH |
 
 Override with `--provider <name>` and `--model <name>`.
+Codex teaching defaults to `gpt-6-sol`. Keep the Codex CLI current when using
+that model for audits or standalone compilation; older installations may reject
+it even when the Codex app offers it.
 
 </details>
 

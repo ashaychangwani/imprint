@@ -347,6 +347,11 @@ A tool whose parameter is an opaque token/id minted by a *sibling* tool (e.g. `g
 
 ## The provider is unavailable or refuses a request
 
+If Codex reports that `gpt-6-sol` is unsupported with a ChatGPT account, check
+`codex --version` and update the CLI. The Codex app and an older CLI can have
+different model support. A model rejection is deterministic and should not be
+retried as a capacity failure.
+
 If Codex reports `No prompt provided via stdin` despite Imprint supplying a
 non-empty prompt, Imprint retries that exact prompt once on the same retained
 conversation, within the existing turn/run deadline. A repeated failure stays

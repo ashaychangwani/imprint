@@ -16086,3 +16086,22 @@ tokens (56,921,728 cache reads), 432,329 output, and zero reported cache
 writes. Two threads lack a terminal event but retain usage snapshots. The
 $52.3613992 base API-equivalent cost is a lower bound, not provider billing;
 unreported usage and other fees remain unknown.
+
+## September 30 — GPT-6 Sol provider update
+
+Flights54 attempted a fresh teach on the unchanged validation code with
+`--model gpt-6-sol`, but stopped before research or tool generation. The
+installed Codex CLI rejected that model for its ChatGPT login. Its isolated
+home, log, terminal record, and failed manifest are preserved under
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-54-gpt-6-sol`.
+The 28,053,884-byte original recording and 26 GiB of free disk were verified;
+neither caused the failure.
+
+The installed CLI was 0.153.2 and Imprint's Codex SDK was 0.152.0. The same
+login successfully ran `gpt-6-sol` on Codex CLI 0.159.2, and the updated SDK
+completed a separate live model call. Imprint now depends on SDK 0.159.2 and
+defaults Codex teaching to `gpt-6-sol`; the machine's CLI was updated to
+0.159.2 for standalone compilation and audits. Focused provider/native-turn
+tests passed 60/60; the full suite passed 2,076/2,076, and lint and type
+checking passed. A fresh full teach is still needed to validate the end-to-end
+path and tool reliability.
