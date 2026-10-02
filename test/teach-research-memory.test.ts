@@ -78,6 +78,30 @@ describe('run-local shared research', () => {
     expect(JSON.stringify(read)).toContain('Detail operations remain untested');
   });
 
+  it('surfaces a late correction to a new reader without replacing the early finding', () => {
+    const memory = memoryFixture();
+    const source = memory.remember({ raw: 'fixture response' });
+    const first = memory.exchange('researcher', {
+      runId: memory.runId,
+      publish: [finding(source, 'An ambiguous number is a price')],
+    }).published[0];
+    if (!first) throw new Error('Missing first finding');
+    for (let index = 0; index < 18; index++)
+      memory.exchange('researcher', {
+        runId: memory.runId,
+        publish: [finding(source, `Unrelated finding ${index}`)],
+      });
+    memory.exchange('researcher', {
+      runId: memory.runId,
+      publish: [{ ...finding(source, 'The number is unlabelled'), supersedes: [first] }],
+    });
+    const page = memory.delivery('new-reader', true);
+    expect(page.entries[0]?.summary).toBe('An ambiguous number is a price');
+    expect(page.recentCorrections?.[0]?.summary).toBe('The number is unlabelled');
+    expect(page.recentCorrections?.[0]?.supersedes).toEqual([first]);
+    expect(memory.delivery('new-reader', true).recentCorrections).toBeUndefined();
+  });
+
   it('bounds reads and index pages, and rejects foreign or unavailable references', () => {
     const memory = memoryFixture();
     const other = memoryFixture('another-run');

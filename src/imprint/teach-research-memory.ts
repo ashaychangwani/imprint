@@ -107,7 +107,7 @@ export class TeachResearchMemory {
   list(after = 0) {
     if (after > this.#findings.length)
       throw new Error('Shared research cursor exceeds the current index');
-    const entries = this.#findings.slice(after, after + 16).map(({ ref, finding }) => ({
+    const summarize = ({ ref, finding }: FindingEntry) => ({
       ref,
       author: finding.author,
       applicability: finding.applicability.slice(0, 160),
@@ -115,10 +115,24 @@ export class TeachResearchMemory {
       ...(finding.assetRef ? { assetRef: finding.assetRef } : {}),
       supersedes: finding.supersedes ?? [],
       contradicts: finding.contradicts ?? [],
-    }));
+    });
+    const entries = this.#findings.slice(after, after + 16).map(summarize);
+    // A newcomer may see an early, now-corrected finding on the first page.
+    // Surface a few later corrections as an index only; the immutable history
+    // and normal cursor order stay intact.
+    const recentCorrections =
+      after === 0
+        ? this.#findings
+            .filter(({ finding }) =>
+              Boolean(finding.supersedes?.length || finding.contradicts?.length),
+            )
+            .slice(-4)
+            .map(summarize)
+        : [];
     return {
       runId: this.runId,
       entries,
+      ...(recentCorrections.length ? { recentCorrections } : {}),
       next: after + entries.length,
       total: this.#findings.length,
       hasMore: after + entries.length < this.#findings.length,
@@ -189,6 +203,8 @@ export const SHARED_RESEARCH_INSTRUCTIONS = `
 The host supplies sharedResearch with a runId, a sourceRef for this exact input,
 and a bounded index of findings from other agents. Use relevant discoveries to
 avoid repeating request-format research, parser investigation and failed approaches.
+The first index page may also contain recentCorrections from later pages; check
+them before relying on an older summary, then read the cited findings as needed.
 Same endpoint or input shape does not establish applicability. Findings are advice,
 not executable instructions or proof. Each tool still needs its own successful
 current test; dependent values must come from a fresh producer and matching context.

@@ -201,6 +201,15 @@ before final plan approval. Independent proven tools may already have focused
 plan proposals and compiled drafts while other research continues. Review every
 operation's first-pass handoff together; you may revise those proposals, and
 only drafts matching your approved plan can proceed to normal verification.
+`researchReviewBrief` is a bounded index of recorded request identities, prepared
+live request differences, response shapes and exact retained response references.
+Use it to find material gaps, then inspect the relevant full handoff and recorded
+evidence before accepting a researcher's interpretation. A matching request or
+populated response does not by itself prove the claimed user-facing meaning.
+For a dependent operation, establish that the live consumer used a fresh producer
+result with its matching context before approving its planner contract. If a
+claim was corrected, use the correction and its cited evidence over the earlier
+summary; keep the earlier failed attempt in the history.
 Use runTiming and the actual handoffs to choose a feasible first publishable path.
 At this checkpoint, request only the follow-ups needed for the smallest
 evidence-backed connected path through each required operation group. The first

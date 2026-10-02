@@ -16105,3 +16105,26 @@ defaults Codex teaching to `gpt-6-sol`; the machine's CLI was updated to
 tests passed 60/60; the full suite passed 2,076/2,076, and lint and type
 checking passed. A fresh full teach is still needed to validate the end-to-end
 path and tool reliability.
+
+## October 2 — Compare research before dependent planning
+
+Flights55 ended after about 12 hours 40 minutes with nine published search,
+location, and date-grid tools, but no proven booking path. Its booking research
+made claims that later evidence narrowed or retracted: a live selection did not
+match the recorded selection, and some returned numbers lacked proof of fare or
+currency meaning. No independent audit or unchanged-code repeat has passed.
+The run's log records 11 post-check plan-revision messages; that count alone
+does not show unnecessary recompilation. Plan invalidation already keys off
+each tool's compile inputs, so no broader invalidation change was made.
+
+The master now receives a short index of each research handoff's selected
+recorded requests, executed request references, prepared-request differences,
+live response shapes, and retained response references. It still decides what
+those facts mean. Dependent tools wait for the master's first research review
+before focused planning; independent drafts can still overlap research. A new
+reader of shared research also sees up to four recent corrections on the first
+index page, with older findings preserved and details still read on demand.
+Synthetic regressions cover the comparison index, dependent scheduling, and a
+late correction beyond the first index page. The focused suite passed 210/210,
+the full suite passed 2,078/2,078, and lint and type checking passed. Fresh
+Flights validation is still required before attributing any reliability gain.

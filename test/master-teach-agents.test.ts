@@ -43,6 +43,7 @@ import {
   requestMasterDecision,
   requestParameterSelectionAdvice,
   requestToolSelectionAdvice,
+  researchReviewBrief,
 } from '../src/imprint/master-teach-agents.ts';
 import { extractJsonResultPath } from '../src/imprint/master-teach-checks.ts';
 import {
@@ -1841,6 +1842,9 @@ describe('prompts and pre-plan discovery', () => {
     await requestMasterDecision(input, agent);
     await requestMasterDecision(structuredClone(input), { ...agent });
     expect(seen[0]?.input.apiResearch).toEqual([blocked]);
+    expect(seen[0]?.input.researchReviewBrief).toEqual([
+      expect.objectContaining({ toolName: tool.candidate.toolName, status: 'blocked' }),
+    ]);
     expect(seen[1]?.input.apiResearch).toBeUndefined();
     expect(seen[1]?.input.current).toBeDefined();
     const changed = structuredClone(input);
@@ -1872,6 +1876,76 @@ describe('prompts and pre-plan discovery', () => {
     expect(seen.at(-1)?.input.apiResearch).toEqual(undelivered.apiResearch);
     expect(new Set(keys)).toEqual(new Set(['master']));
     expect(input.apiResearch).toEqual([blocked]);
+  });
+
+  it('surfaces bounded recorded/live facts before the master approves research', () => {
+    const base = revisionMasterInput();
+    const tool = at(base.current.plan.payload.tools, 0);
+    const candidate: ApiResearchCandidate = {
+      workflow: {
+        site: runIdentity.site,
+        toolName: tool.candidate.toolName,
+        intent: { description: tool.candidate.description },
+        parameters: [],
+        requests: [
+          {
+            recordingRequestSeq: 12,
+            method: 'GET',
+            url: 'https://fixture.invalid/search',
+            headers: {},
+          },
+        ],
+      },
+      parameterValues: {},
+    };
+    const handoff = ApiResearchHandoffSchema.parse({
+      toolName: tool.candidate.toolName,
+      researchInputsSha256: apiResearchInputsSha256(tool),
+      status: 'proven',
+      summary: 'The fixture response has records.',
+      candidate,
+      observation: {
+        id: 'fixture-live-observation',
+        candidateSha256: apiResearchCandidateSha256(candidate),
+        executionMechanism: 'fetch',
+        backendAttempts: [],
+        requestComparisons: [
+          {
+            backend: 'fetch',
+            requestIndex: 0,
+            recordingRequestSeq: 12,
+            status: 'checked',
+            originPathEqual: false,
+          },
+        ],
+        responseObservations: [
+          {
+            backend: 'fetch',
+            requestIndex: 0,
+            status: 200,
+            bodyByteLength: 30,
+            valueType: 'object',
+            topLevelKeys: ['records'],
+          },
+        ],
+        result: { ok: true, preview: 'x'.repeat(2_000) },
+      },
+    });
+    const brief = researchReviewBrief({
+      ...base,
+      decisionPurpose: 'research_review',
+      apiResearch: [handoff],
+    });
+    expect(brief).toEqual([
+      expect.objectContaining({
+        toolName: tool.candidate.toolName,
+        executionRecordingSeqs: [12],
+        livePreview: 'x'.repeat(800),
+        truncated: true,
+        requestComparisons: [expect.objectContaining({ originPathEqual: false })],
+        responseShapes: [expect.objectContaining({ topLevelKeys: ['records'] })],
+      }),
+    ]);
   });
 
   it('rejects a second agent-facing tool ID namespace', () => {

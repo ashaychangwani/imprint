@@ -1380,7 +1380,81 @@ const MASTER_DECISION_INPUT_CHARACTER_BUDGET = 900_000;
 function masterDecisionPromptInput(input: MasterDecisionInput) {
   if (JSON.stringify(input).length > MASTER_DECISION_INPUT_CHARACTER_BUDGET)
     throw new Error('master decision core input exceeds the provider-safe character budget');
-  return input;
+  return input.decisionPurpose === 'research_review'
+    ? { ...input, researchReviewBrief: researchReviewBrief(input) }
+    : input;
+}
+
+/** Put the recorded/live comparison facts at the research checkpoint, before
+ * the master decides whether dependent planning is ready. The full immutable
+ * observations remain in apiResearch; this is only a bounded reading guide. */
+export function researchReviewBrief(input: MasterDecisionInput) {
+  if (input.decisionPurpose !== 'research_review') return undefined;
+  return (input.apiResearch ?? []).map((handoff) => {
+    const tool = input.current?.plan.payload.tools.find(
+      ({ candidate }) => candidate.toolName === handoff.toolName,
+    );
+    const observation = handoff.observation ?? handoff.observations?.at(-1);
+    return {
+      toolName: handoff.toolName,
+      status: handoff.status,
+      selectedRecordingSeqs: tool?.candidate.representativeSeqs.slice(0, 8) ?? [],
+      executionRecordingSeqs:
+        handoff.candidate?.workflow.requests
+          .slice(0, 8)
+          .flatMap(({ recordingRequestSeq }) =>
+            recordingRequestSeq === undefined ? [] : [recordingRequestSeq],
+          ) ?? [],
+      ...(observation
+        ? {
+            observationId: observation.id,
+            liveResultOk: observation.result.ok,
+            livePreview: observation.result.preview.slice(0, 800),
+            requestComparisons: (observation.requestComparisons ?? [])
+              .slice(0, 4)
+              .map((comparison) => ({
+                requestIndex: comparison.requestIndex,
+                recordingRequestSeq: comparison.recordingRequestSeq,
+                status: comparison.status,
+                methodEqual: comparison.methodEqual,
+                originPathEqual: comparison.originPathEqual,
+                recordedOnlyQueryKeys: comparison.recordedOnlyQueryKeys?.slice(0, 8),
+                preparedOnlyQueryKeys: comparison.preparedOnlyQueryKeys?.slice(0, 8),
+                recordedBodyBytes: comparison.recordedBodyBytes,
+                preparedBodyBytes: comparison.preparedBodyBytes,
+                bodyFirstMismatchByte: comparison.bodyFirstMismatchByte,
+              })),
+            responseShapes: (observation.responseObservations ?? [])
+              .slice(0, 4)
+              .map((response) => ({
+                requestIndex: response.requestIndex,
+                status: response.status,
+                valueType: response.valueType,
+                ...(response.topLevelKeys
+                  ? { topLevelKeys: response.topLevelKeys.slice(0, 8) }
+                  : {}),
+                ...(response.arrayLength === undefined
+                  ? {}
+                  : { arrayLength: response.arrayLength }),
+              })),
+            retainedResponseRefs: (observation.responseEvidence ?? [])
+              .slice(0, 4)
+              .map(({ evidenceRef, recordingRequestSeq, requestIndex }) => ({
+                evidenceRef,
+                requestIndex,
+                ...(recordingRequestSeq === undefined ? {} : { recordingRequestSeq }),
+              })),
+          }
+        : {}),
+      truncated:
+        (observation?.result.preview.length ?? 0) > 800 ||
+        (observation?.requestComparisons?.length ?? 0) > 4 ||
+        (observation?.responseObservations?.length ?? 0) > 4 ||
+        (observation?.responseEvidence?.length ?? 0) > 4 ||
+        (tool?.candidate.representativeSeqs.length ?? 0) > 8 ||
+        (handoff.candidate?.workflow.requests.length ?? 0) > 8,
+    };
+  });
 }
 
 /** The Codex master is one retained conversation. The first turn establishes
@@ -1428,6 +1502,9 @@ function masterDecisionConversationInput(
     ...(input.plannerProposals.length ? { plannerProposals: input.plannerProposals } : {}),
     ...(input.plannerFailures?.length ? { plannerFailures: input.plannerFailures } : {}),
     ...(changedResearch?.length ? { apiResearch: changedResearch } : {}),
+    ...(input.decisionPurpose === 'research_review'
+      ? { researchReviewBrief: researchReviewBrief(input) }
+      : {}),
     ...(input.researchNoProgress?.length ? { researchNoProgress: input.researchNoProgress } : {}),
     ...(input.verificationFindings ? { verificationFindings: input.verificationFindings } : {}),
   };

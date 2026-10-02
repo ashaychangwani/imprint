@@ -3555,22 +3555,16 @@ async function discoverAndPlan(input: {
   const prepareEarlyDraft: NonNullable<
     Parameters<typeof researchSelectedOperations>[0]['onProven']
   > = async (tool, result, _handoff, evidence, canDraft, currentPlan, knownHandoffs) => {
-    const speculativePlanningHasTime =
-      Boolean(currentNativeTeachAgents()) &&
-      input.runDeadline.deadlineMs - Date.now() >= SPECULATIVE_PLANNING_MIN_REMAINING_MS;
     const hasDependencies =
       tool.candidate.dependsOnTools.length > 0 ||
       currentPlan.chainEdges.some((edge) => edge.consumerToolId === tool.id);
-    const provenNames = new Set(
-      knownHandoffs.filter(({ status }) => status === 'proven').map(({ toolName }) => toolName),
-    );
-    // Draft a consumer only after its researchers have proven the producers.
-    // Final execution still follows the accepted build waves and chain checks.
+    // A consumer's first-pass proof may need a correction after the master
+    // compares its recorded and live evidence. Plan it after that review, when
+    // the producer contract is settled, rather than speculating on a stale one.
     if (
       !canDraft() ||
       (tool.strategy !== undefined && tool.strategy.kind !== 'api') ||
-      (hasDependencies && !speculativePlanningHasTime) ||
-      tool.candidate.dependsOnTools.some((name) => !provenNames.has(name))
+      hasDependencies
     )
       return;
     try {
@@ -3599,9 +3593,6 @@ async function discoverAndPlan(input: {
           evidenceRefs: [],
         }),
       });
-      // Dependent proposals overlap review; their compilers still wait for
-      // accepted producer-first build waves.
-      if (hasDependencies) return;
       if (!canDraft()) return;
       input.report?.(
         `${tool.candidate.toolName}: compiling a draft while other research continues`,

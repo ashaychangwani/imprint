@@ -1500,7 +1500,7 @@ describe('fresh foreground master controller end to end', () => {
     });
   }
 
-  it('plans a proven dependent during native master review without compiling it early', async () => {
+  it('plans a proven dependent only after native master research review', async () => {
     await withTemporaryImprintHome(async (root) => {
       const base = lifecycleFailureFixture({
         runId: 'native-dependent-plan-overlap',
@@ -1519,12 +1519,8 @@ describe('fresh foreground master controller end to end', () => {
       const producerReady = new Promise<void>((resolve) => {
         producerProven = resolve;
       });
-      let dependentPlannerStarted!: () => void;
-      const dependentPlan = new Promise<void>((resolve) => {
-        dependentPlannerStarted = resolve;
-      });
       let reviewed = false;
-      let plannedBeforeReview = false;
+      let plannedAfterReview = false;
       let compiledBeforeReview = false;
       await family.run(() =>
         runFreshMasterTeach(
@@ -1548,20 +1544,13 @@ describe('fresh foreground master controller end to end', () => {
             requestFocusedPlan: async (input) => {
               if (!base.requestFocusedPlan) throw new Error('Missing planner');
               if (input.tool.id === CONSUMER_ID) {
-                plannedBeforeReview ||= !reviewed;
-                dependentPlannerStarted();
+                plannedAfterReview = reviewed;
               }
               return await base.requestFocusedPlan(input);
             },
             requestMasterDecision: async (input, options) => {
               if (!base.requestMasterDecision) throw new Error('Missing master');
-              if (input.decisionPurpose === 'research_review') {
-                await Promise.race([
-                  dependentPlan,
-                  new Promise<void>((resolve) => setTimeout(resolve, 300)),
-                ]);
-                reviewed = true;
-              }
+              if (input.decisionPurpose === 'research_review') reviewed = true;
               return await base.requestMasterDecision(input, options);
             },
             compileFocusedTool: async (input) => {
@@ -1572,7 +1561,7 @@ describe('fresh foreground master controller end to end', () => {
           },
         ),
       );
-      expect(plannedBeforeReview).toBeTrue();
+      expect(plannedAfterReview).toBeTrue();
       expect(compiledBeforeReview).toBeFalse();
     });
   });
