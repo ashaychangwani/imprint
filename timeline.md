@@ -16128,3 +16128,10 @@ Synthetic regressions cover the comparison index, dependent scheduling, and a
 late correction beyond the first index page. The focused suite passed 210/210,
 the full suite passed 2,078/2,078, and lint and type checking passed. Fresh
 Flights validation is still required before attributing any reliability gain.
+
+Flights56 started fresh at 14:50:49 UTC with the exact combined recording
+(`b5542eb7…`), GPT-6 Sol, the Flights55 operation-group guidance, and
+`--unbounded`. Its isolated home and manifest are under
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-56-evidence-review`.
+The teach process began on implementation `a78f631`; about 13 GiB was free.
+This run is evidence collection, not yet a pass or independent audit.
