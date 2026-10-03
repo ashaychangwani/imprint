@@ -16135,3 +16135,41 @@ Flights56 started fresh at 14:50:49 UTC with the exact combined recording
 `~/.imprint/experiments/reteach-systemic-2026-09-21/flights-56-evidence-review`.
 The teach process began on implementation `a78f631`; about 13 GiB was free.
 This run is evidence collection, not yet a pass or independent audit.
+
+## October 3 — Flights56 partial teach and independent audit
+
+Flights56 ended after 10 hours 10 minutes with seven reviewed, published tools:
+location lookup/detail, one-way and round-trip outbound search, round-trip return
+choices and booking options, and the date grid. Fresh search → return → booking
+checks passed with current WN496/WN3461 selections and four booking options.
+The completion review explicitly left multi-city search and one-way/multi-city
+booking unresolved. Direct multi-city POST attempts returned RPC error 13, and
+the browser-produced alternative lacked a proven recorded outer request. The
+run is **partial**, not a complete Flights pass. Its original journal, failed
+attempts, and generated tools remain in the isolated home.
+
+The first independent seven-tool audit scored 10/11 graded calls (90.91%), with
+one broken call, no infrastructure or bad-parameter calls, and 11 parameters
+untestable from the fixed recording cases. Its round-trip search returned 19
+offers but set four departure times to null. The recorded response encodes
+those times as hour-only arrays, including `[8]` for WN496; the one-way parser
+correctly reads this as 08:00. The round-trip parser required two array entries.
+The teach's semantic reviewer saw null values in its bounded result preview but
+accepted the tool. The audit and reviewer evidence are preserved under
+`flights-56-evidence-review/audit-01` and the run journal.
+
+The reviewer prompt now explicitly checks null or empty meaningful fields on
+each visible record shape and asks for revision when the source does not support
+their absence. This is a general review correction; it adds no site-specific
+runtime parsing rule. The focused reviewer tests passed 141/141, lint and type
+checking passed, and the full suite passed 2,078/2,078 with test concurrency
+limited to four. Two default-concurrency full-suite attempts each had a
+different process-lifecycle test race; both affected tests passed alone. The
+prompt correction has not yet been validated by a fresh teach.
+
+The 99 native Codex family rollouts report 353,158,621 input tokens, including
+339,752,576 cache reads, 1,350,186 output tokens, and zero reported cache
+writes. The audit separately reports 1,250,863 input tokens, including
+1,179,520 cache reads, 5,675 output tokens, and zero cache writes. Neither
+reported a dollar cost, so cost remains unmeasured; these totals do not double
+count parent and child rollouts.

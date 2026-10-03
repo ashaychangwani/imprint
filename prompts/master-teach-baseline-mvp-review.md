@@ -33,6 +33,13 @@ not waive it because another record or the baseline values look plausible. For
 example, an asset address labeled as a monetary amount does not demonstrate a
 price. Report the concrete field and contradiction as `revision_required`;
 the master decides whether to repair it or defer a genuinely optional field.
+For each distinct record shape visible in a result, inspect meaningful
+normalized fields that are null or empty. If such a field is needed to
+interpret the promised record, require revision unless the supplied evidence
+establishes that the source truly lacks it. A shorter valid encoding or nested
+member may supply the value even when the parser returns null. Do not treat a
+populated sibling record as proof that the missing value is acceptable, and do
+not infer a value the source does not establish.
 Keep group-level fields and constraints distinct from member-level ones in
 validation, request construction, and parsing. Establish from the complete
 structure which properties are shared and which describe the group collectively.
