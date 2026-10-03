@@ -16180,3 +16180,37 @@ using the same verified recording, GPT-6 Sol, operation-group guidance, and
 `~/.imprint/experiments/reteach-systemic-2026-09-21/flights-57-null-review`.
 About 12 GiB was free at launch. Flights56 artifacts were not used as teaching
 input. The existing quiet heartbeat now monitors Flights57.
+
+Flights57 ended **partial** at 15:24:49 UTC after 13 hours 47 minutes. Five
+reviewed tools were promoted: location lookup/detail, one-way search and booking,
+and initial round-trip outbound search. The fresh one-way search-to-booking
+chain passed for the recorded WN367 choice. The completion review left the
+required GetCalendarGrid operation unresolved. Round-trip return continuation,
+round-trip booking, multi-city search/booking, and filtered searches were also
+not claimed as covered. No independent audit or unchanged-code repeat passed.
+The run, journal, response bodies, and failed attempts remain in its isolated
+home. Disk had about 10 GiB free at completion; no disk-full or provider-capacity
+failure was logged.
+
+The calendar researcher obtained populated 8,905-byte live responses, then
+received 131-byte semantic-null responses from the same candidate and inputs.
+The retained candidate showed the same URL, body, and parameter values in a
+successful fetch and a later failed fetch; the response journal preserved both.
+This is a repeatability failure in the live request, not a demonstrated loss of
+response evidence or a reproducible runtime defect. HTTP 200 alone did not
+establish calendar success. Other repairs corrected a one-way/round-trip mode
+mismatch, an ambiguous booking row selection, omitted flight rows, collapsed
+booking links, and unsupported output fields. The proof reviews caught these
+errors but caused repeated research, compilation, and review cycles. The run
+reached 64 plan revisions and 44 superseded test receipts.
+
+The native agent family has 102 rollouts with reported usage in each: 467,510,696
+input tokens including 450,225,408 cache-read tokens, 1,839,762 output tokens,
+and zero reported cache-write tokens. One rollout has no terminal task-complete
+event, so interrupted work beyond its last usage snapshot is unmeasured. The
+provider did not report a dollar cost, and zero reported writes do not prove
+that no provider cache write occurred. The backend log records 33 CDP network
+failures totaling about 21 minutes of request time; API research and repeated
+agent decisions, not those network waits, dominated the elapsed run. No general
+code change is justified by this evidence alone. The next validation must use
+a fresh isolated teach on the unchanged implementation.
