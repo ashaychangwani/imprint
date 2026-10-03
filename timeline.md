@@ -16173,3 +16173,10 @@ writes. The audit separately reports 1,250,863 input tokens, including
 1,179,520 cache reads, 5,675 output tokens, and zero cache writes. Neither
 reported a dollar cost, so cost remains unmeasured; these totals do not double
 count parent and child rollouts.
+
+Flights57 started fresh at 01:37:38 UTC on the reviewer correction `77fd990`,
+using the same verified recording, GPT-6 Sol, operation-group guidance, and
+`--unbounded` setting. Its new isolated home and manifest are under
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-57-null-review`.
+About 12 GiB was free at launch. Flights56 artifacts were not used as teaching
+input. The existing quiet heartbeat now monitors Flights57.
