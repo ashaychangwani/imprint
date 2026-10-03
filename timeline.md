@@ -16214,3 +16214,11 @@ failures totaling about 21 minutes of request time; API research and repeated
 agent decisions, not those network waits, dominated the elapsed run. No general
 code change is justified by this evidence alone. The next validation must use
 a fresh isolated teach on the unchanged implementation.
+
+Flights58 started fresh at 15:33:40 UTC in
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-58-repeatability`.
+It uses the same recording hash, GPT-6 Sol, exact operation-group guidance,
+and `--unbounded` setting as Flights57. The implementation is unchanged from
+`77fd990`; the run commit `9fd2b86` adds only this timeline's Flights57
+retrospective. No previous generated tools were teaching input. About 10 GiB
+was free at launch, and the existing quiet heartbeat now monitors this run.
