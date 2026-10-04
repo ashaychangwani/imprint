@@ -16260,3 +16260,10 @@ cost is unmeasured. These are provider-reported usage snapshots, not a sum
 of aggregate and child trace totals. About 6.9 GiB was free after the audit.
 The next required step is a fresh Flights teach and independent audit on the
 same functional implementation before Hotels validation can begin.
+
+Flights59 started at 15:59:39 UTC in the new isolated home
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-59-repeatability`.
+It uses the same recording hash, exact operation-group guidance, GPT-6 Sol,
+and `--unbounded` setting as Flights58. Commit `06c173a` adds only the
+Flights58 timeline entry; functional code remains at `77fd990`. No Flights58
+generated artifacts were teaching input. About 6.9 GiB was free at launch.
