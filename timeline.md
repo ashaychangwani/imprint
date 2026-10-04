@@ -16222,3 +16222,41 @@ and `--unbounded` setting as Flights57. The implementation is unchanged from
 `77fd990`; the run commit `9fd2b86` adds only this timeline's Flights57
 retrospective. No previous generated tools were teaching input. About 10 GiB
 was free at launch, and the existing quiet heartbeat now monitors this run.
+
+## October 4 — Flights58 teach and first independent audit pass
+
+Flights58 completed at 15:21:27 UTC after 23 hours 48 minutes with all 14
+planned tools promoted. The isolated journal and terminal record 68 superseded
+plans and 49 current receipts. The published set covers location lookup,
+one-way/round-trip/multi-city search, the fare date grid, one-way and
+round-trip booking, return and multi-city next-leg continuation, and the
+recorded bag, alliance, airline, and first-leg time filters. The completion
+review found passing fresh search → one-way booking and round-trip search →
+return → booking chains. Multi-city booking is **not** published or proved;
+second-leg time controls remain outside the time-filter tool's verified
+contract. The 14/14 teach result alone was not treated as an audit pass.
+
+The independent fixed-case audit ran from 15:28:41 UTC for about 18 minutes
+in this experiment's `audit-01`, with its own headless Codex session. It
+audited all 14 tools and passed 30/30 graded invocations (100%; threshold
+95%), with zero broken or bad-parameter calls, eight working parameters,
+zero no-op or broken parameters, and 21 parameters untestable from these fixed
+cases. Two initial browser-capture failures were classified as infrastructure:
+the same one-way search and 7×7 date-grid cases succeeded on fresh retries.
+There are no missing tools or cases in the emitted report. The auditor used
+fresh SJC–SAN search output to select WN2974 for four matching one-way booking
+offers, and fresh AS1307 outbound output to fetch 12 returns and then 18
+booking groups selecting both AS1307 and AS2498. Multi-city search → next-leg
+selection also passed; multi-city booking remains unverified. The report and
+transcript are retained under `flights-58-repeatability/audit-01`.
+
+The 289 native rollouts report 955,045,264 input tokens, including 920,622,848
+cache-read tokens, 3,524,866 output tokens, and zero reported cache-write
+tokens. Two rollouts lack terminal events, so their reported usage snapshots
+may omit interrupted work. The audit separately reports 2,728,804 input
+tokens, including 2,654,208 cache reads, 13,774 output tokens, and zero
+reported cache writes. Neither provider report includes a dollar charge;
+cost is unmeasured. These are provider-reported usage snapshots, not a sum
+of aggregate and child trace totals. About 6.9 GiB was free after the audit.
+The next required step is a fresh Flights teach and independent audit on the
+same functional implementation before Hotels validation can begin.
