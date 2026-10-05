@@ -16267,3 +16267,52 @@ It uses the same recording hash, exact operation-group guidance, GPT-6 Sol,
 and `--unbounded` setting as Flights58. Commit `06c173a` adds only the
 Flights58 timeline entry; functional code remains at `77fd990`. No Flights58
 generated artifacts were teaching input. About 6.9 GiB was free at launch.
+
+## October 5 — Flights59 partial repeat and independent audit of published tools
+
+Flights59 stopped at 21:42:07 UTC after 29 hours 42 minutes. Its terminal and
+journal mark the teach **failed/partial**: 12 usable MVP tools were published
+from the final 13-tool plan. Location lookup, one-way/round-trip/multi-city
+search, the 7×7 date grid, one-way and round-trip booking, carry-on, alliance,
+airline, and time filters were published. The checked-bag filter was not.
+The journal retains 59 superseded plans and 140 superseded receipts; the final
+plan retained 39 current receipts. No Flights58 generated tools were teaching
+input, and no functional code changed from `77fd990`.
+
+The checked-bag candidate reached a compiled build with passing contract and
+live receipts, and one baseline MVP review called a zero-bag live result
+credible. Earlier independent recorded-result verification had identified
+missing row-local selection context and incomplete hour-only departure values;
+a later verification passed after repair. Despite that later evidence, the
+checked-bag build was not promoted. The master repeatedly revisited the same
+unresolved state, and the guard stopped it when the same plan, artifacts, check
+facts, and failure recurred. The last accepted plan said the one-bag invocation
+passed mechanically but its inspection budget was exhausted. This is evidence
+of incomplete publication and verification, not a reproduced deterministic
+general runtime defect. The teach failure remains visible even though its
+published tools can be audited. Multi-city booking and second-leg time
+filtering remain unproven.
+
+An independent headless audit of the 12 published tools ran from 21:45:30 to
+21:58:18 UTC in `flights-59-repeatability/audit-01`. It passed 31/31 graded
+units (100%, 95% threshold): all 21 fixed live invocations and ten testable
+parameter checks were correct, with zero broken, infrastructure, bad-parameter,
+no-op, or broken-parameter results. Seventeen parameters were untestable from
+the fixed cases. The grid case passed. Fresh one-way search output selected
+WN367 and produced four matching booking offers; fresh AS1307 outbound output
+selected an AS2498 return and produced 17 seller offers for those two flights
+in order. Multi-city search selected a fresh AS1307 first leg and returned 19
+second-leg offers, but no multi-city booking tool was published. No audit case
+or tool was missing among the 12 served tools. This partial audit does **not**
+count as the required second complete Flights teach-and-audit pass.
+
+The teach's 243 native rollouts report 980,729,096 input tokens, including
+941,406,208 cache-read tokens, 3,252,440 output tokens, and zero reported
+cache-write tokens. Seven rollouts lack terminal events, so snapshots may omit
+interrupted usage. The audit separately reports 2,325,041 input tokens,
+including 2,254,464 cache reads, 11,553 output tokens, and zero reported cache
+writes. Neither provider report includes a dollar charge; cost is unmeasured.
+These are provider-reported usage snapshots, not aggregate-plus-child trace
+sums. Disk fell as low as about 2.0 GiB free during the teach and recovered
+to about 2.4 GiB after the audit. All run, review, and audit evidence remains
+in the isolated Flights59 experiment.
