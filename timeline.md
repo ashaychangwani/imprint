@@ -16327,3 +16327,58 @@ exact prior operation-group guidance, GPT-6 Sol, and `--unbounded`. No previous
 generated tools were teaching input. Launch commit `4cae5c7` changed only this
 timeline; functional code remains `77fd990`. The run manifest records its
 command and process, and the quiet heartbeat monitors progress and disk.
+
+## October 6 — Flights60 partial repeat and independent audit of published tools
+
+Flights60 ended at 21:46:05 UTC, after about 7 hours 16 minutes. Its terminal
+and journal mark the teach **failed/partial**: 10 tools were published from the
+final 13-tool plan. The published set covers location lookup, one-way,
+round-trip, and multi-city search, multi-city airline/bag/time filters, the
+date grid, one-way booking, and round-trip return choices. Multi-city next-leg
+had passing contract, live, and chain receipts but was not promoted;
+round-trip booking and multi-city booking were not built. The final plan was
+revision 28, with 27 superseded plans and 66 superseded receipts. The repeated
+executable focused-plan guard stopped the run after the same plan and review
+state recurred. No prior generated tool was teaching input. Functional code
+remained at `77fd990`; the failed teach and all evidence remain in
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-60-repeatability`.
+
+An independent fixed-case audit of all 10 published tools ran from 21:59:28
+to 22:09:33 UTC in that experiment's `audit-01`. Its threshold verdict is
+`pass` at **19/20 graded units (95%)**, but one fixed invocation was broken:
+15 of 16 invocations were correct, with four working parameter checks, zero
+infrastructure or bad-parameter calls, and 18 parameters untestable from the
+fixed cases. The report flags the broken one-way booking case as unsatisfied
+in `missingCases`; the case was invoked. The grid returned 49 date pairs;
+fresh AS1307 round-trip search → return returned 12 choices. Changing checked
+bags from zero to one changed matching Alaska flights from $607 to $672.
+Second-leg time filtering and multi-city booking remain unverified, and no
+round-trip booking tool was published. This partial audit cannot count as the
+required second complete Flights pass, regardless of its threshold verdict.
+
+The broken `live_one_way_booking_218` case passed a fresh two-segment F9
+SJC → LAS → SAN selection from the published search tool to the published
+one-way booking tool. Booking returned `selectedFlight:null`,
+`matchesSelection:null`, and no offers. The generated request transform reads
+the selection's first flight and endpoints but ignores its `segments` array;
+an offline reproduction using the actual transform shows that its request
+contains F9 1590 and omits F9 1469 and the LAS connection. The reproduction is
+saved as `one-way-booking-218-reproduction.json` beside the audit. This is a
+deterministic defect in the generated consumer artifact and an untested
+producer → consumer shape. It does not reproduce a deterministic general
+runtime defect: current planner and audit guidance already call for checking
+multi-member selections. No functional correction or site-specific rule was
+made on this evidence. A new, isolated unchanged-code teach is required to
+test repeatability, using no generated tool from this run as input.
+
+The teach's 152 native rollouts report 456,553,616 input tokens, including
+439,200,768 cache-read tokens, 1,887,137 output tokens, and zero reported
+cache-write tokens. Two rollouts lack terminal events, so reported snapshots
+may omit interrupted work. The audit separately reports 1,412,684 input
+tokens, including 1,370,240 cache reads, 8,847 output tokens, and zero
+reported cache writes. Neither provider report includes a dollar charge;
+cost is unmeasured. These are provider-reported usage snapshots, not sums of
+aggregate and child trace totals. Free disk fell from 5.3 GiB at launch to
+about 1.6 GiB after audit. Preserve all evidence and wait for roughly 5 GiB
+free before the next large teach. Hotels validation remains gated on two
+independent complete Flights audits on unchanged functional code.
