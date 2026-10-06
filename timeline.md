@@ -16316,3 +16316,14 @@ These are provider-reported usage snapshots, not aggregate-plus-child trace
 sums. Disk fell as low as about 2.0 GiB free during the teach and recovered
 to about 2.4 GiB after the audit. All run, review, and audit evidence remains
 in the isolated Flights59 experiment.
+
+## October 6 — Flights60 fresh repeat launched
+
+After free disk recovered to 5.3 GiB, Flights60 started at 14:29:32 UTC in
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-60-repeatability`.
+It uses a fresh isolated `IMPRINT_HOME`, the same recording (SHA256
+`b5542eb78a4b4df53d914fb2a9d46bd64a2813ccad8d3b61de02e66755245bb1`),
+exact prior operation-group guidance, GPT-6 Sol, and `--unbounded`. No previous
+generated tools were teaching input. Launch commit `4cae5c7` changed only this
+timeline; functional code remains `77fd990`. The run manifest records its
+command and process, and the quiet heartbeat monitors progress and disk.
