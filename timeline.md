@@ -16382,3 +16382,13 @@ aggregate and child trace totals. Free disk fell from 5.3 GiB at launch to
 about 1.6 GiB after audit. Preserve all evidence and wait for roughly 5 GiB
 free before the next large teach. Hotels validation remains gated on two
 independent complete Flights audits on unchanged functional code.
+
+## October 13 — Flights61 fresh repeat launched
+
+After free disk recovered to 6.49 GiB, Flights61 started in the new isolated
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-61-repeatability`
+home. Its manifest records the process, the same recording (SHA256
+`b5542eb78a4b4df53d914fb2a9d46bd64a2813ccad8d3b61de02e66755245bb1`),
+the exact Flights60 operation-group guidance, GPT-6 Sol, and `--unbounded`.
+No prior generated tools were teaching input. The functional code remains
+`77fd990`; Flights61's full teach and independent audit are pending.
