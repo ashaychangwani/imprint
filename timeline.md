@@ -16427,4 +16427,23 @@ same recording (SHA256
 `b5542eb78a4b4df53d914fb2a9d46bd64a2813ccad8d3b61de02e66755245bb1`),
 the exact Flights60 operation-group guidance, GPT-6 Sol, and `--unbounded`.
 No previous generated tools were teaching input. Free disk was 9.77 GiB at
-launch. The full teach and independent audit remain pending.
+launch.
+
+Flights62 ended **failed/partial** at about 15:44:28 UTC after 9h51m: the
+terminal report says 11 ready, 1 not ready. The repeated focused-plan guard
+stopped the teach after the same unresolved plan, artifacts, check facts, and
+failure recurred. Eleven MVP tools remain published in its isolated home. The
+current journal's twelfth build, `get_multi_city_next_leg_flights`, had passed
+contract, live, and fresh first-leg-to-next-leg chain checks (12 next-leg
+results), but it was not published. The final selected plan omitted
+`get_round_trip_booking_options` despite staged fixed and fresh return-to-
+booking checks each returning 17 offers; API research was later marked
+partial. This is a planning/publication failure in this run, not yet a
+reproduced deterministic general runtime defect. No functional code changed.
+
+The experiment's `retrospective.md`, terminal result, journal, log, staging,
+native events, and generated tools are preserved. No full independent audit
+was run because this teach was incomplete. Free disk had fallen to about
+1.58 GiB at termination, below the approximately 5 GiB threshold for a new
+large teach. Flights58 remains the sole complete audited Flights pass; Hotels
+remains gated on two independent complete Flights audits on unchanged code.
