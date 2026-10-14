@@ -2,6 +2,27 @@
 
 All notable changes to Imprint. Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) (Added / Changed / Deprecated / Removed / Fixed / Security).
 
+## [0.7.0] — 2026-10-14
+
+### Added
+- Master-led teaching with editable operation plans, focused agent passes, and dependency-aware tool compilation.
+- Independent verification receipts and retained evidence for generated tool and producer-to-consumer checks.
+
+### Changed
+- Partial teaches keep ready tools but exit nonzero when planned work remains unresolved.
+- `imprint teach` emits the MCP server; `imprint install` connects it to an AI platform.
+- CI runs the network-isolated verifier suite on macOS and static checks on Linux.
+
+### Fixed
+- Cancelled teaching work no longer starts a late tool invocation.
+- Completed native assignments release their prompt and response data from the active queue.
+- `.redacted.json` is atomically replaced with private file permissions.
+
+### Validation
+- The Flights58 run completed with 14/14 tools and passed 30/30 independently graded cases, including fresh booking chains. Flights59–62 ended partial, so repeatability and Hotels destination/date validation remain outstanding. See [the validation timeline](timeline.md).
+
+---
+
 ## [0.2.0] — 2026-05-14
 
 v0.2 overhauls the teach-to-tool pipeline, adds full observability tracing, and introduces state-aware API replay. 12 new features, 7 bug fixes across 24 commits.
