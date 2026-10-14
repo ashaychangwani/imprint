@@ -17,6 +17,7 @@ All notable changes to Imprint. Format follows [Keep a Changelog](https://keepac
 - Cancelled teaching work no longer starts a late tool invocation.
 - Completed native assignments release their prompt and response data from the active queue.
 - `.redacted.json` is atomically replaced with private file permissions.
+- A whole-playbook deadline governs a hanging step even when its step timeout is nearby.
 
 ### Validation
 - The Flights58 run completed with 14/14 tools and passed 30/30 independently graded cases, including fresh booking chains. Flights59–62 ended partial, so repeatability and Hotels destination/date validation remain outstanding. See [the validation timeline](timeline.md).

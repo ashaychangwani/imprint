@@ -329,7 +329,7 @@ export async function runPlaybook(opts: RunPlaybookOptions): Promise<ToolResult>
       log(`step ${i + 1}/${playbook.steps.length}: ${step.action}`);
       await withTimeout(
         executeStep(page, step, params, credValues, budgetMs),
-        budgetMs,
+        stepTimeoutMs,
         `Playbook step ${lastStep}/${playbook.steps.length} (${step.action})`,
         lifecycle.signal,
       );
