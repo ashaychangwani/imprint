@@ -18,6 +18,12 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Install network-isolated test runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y bubblewrap
+          bwrap --ro-bind / / --dev /dev --proc /proc --unshare-net -- true
+
       # `bun run check` = typecheck + lint + tests + knip + madge.
       # Same command CONTRIBUTING.md tells contributors to run before
       # pushing, so a green local run guarantees a green CI run.

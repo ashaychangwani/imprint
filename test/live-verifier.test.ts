@@ -972,15 +972,15 @@ describe('live verifier backend preparation and suite receipts', () => {
     it(`lets ${fatalSignal} supersede in-flight SIGINT cleanup for a spawned owned process`, async () => {
       const modulePath = pathJoin(process.cwd(), 'src', 'imprint', 'compiler-process.ts');
       const childProgram =
-        'process.on("SIGINT", () => {}); process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); setInterval(() => {}, 1000)';
+        'process.on("SIGINT", () => {}); process.on("SIGTERM", () => {}); process.on("SIGHUP", () => {}); process.stdout.write("ready\\n"); setInterval(() => {}, 1000)';
       const helperProgram = `
         import { registerCompilerProcessCleanup, spawnOwnedProcess } from ${JSON.stringify(modulePath)};
         process.once('SIGINT', () => process.stdout.write('delegated\\n'));
         const child = spawnOwnedProcess(process.execPath, ['-e', ${JSON.stringify(childProgram)}], {
-          stdio: 'ignore',
+          stdio: ['ignore', 'pipe', 'ignore'],
         });
         registerCompilerProcessCleanup(child, 150);
-        process.stdout.write(String(child.pid) + '\\n');
+        child.stdout.once('data', () => process.stdout.write(String(child.pid) + '\\n'));
         setInterval(() => {}, 1000);
       `;
       const helper = spawn(process.execPath, ['-e', helperProgram], {
