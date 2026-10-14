@@ -161,6 +161,30 @@ describe('recording evidence verification', () => {
       attempt: 1,
     });
   });
+  it('ends an unbounded evidence review after repeated phase deadlines', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'imprint-evidence-deadline-limit-'));
+    let calls = 0;
+    const result = await verifyRecordingEvidence({
+      operation,
+      fixtures: fixtures(),
+      directory,
+      agent: { provider: 'codex-cli' },
+      requestStep: async (_payload, _schema, agent) => {
+        calls++;
+        throw new ProviderDeadlineError(agent.deadlineMs ?? 0, undefined, 'phase');
+      },
+    });
+    expect(result.status).toBe('unverified');
+    expect(result.reason).toContain('exceeded 3 phase deadlines');
+    expect(calls).toBe(3);
+    const retryFile = readdirSync(directory).find((name) => name.endsWith('.retries.jsonl'));
+    expect(retryFile).toBeDefined();
+    expect(
+      readFileSync(join(directory, retryFile ?? ''), 'utf8')
+        .trim()
+        .split('\n'),
+    ).toHaveLength(3);
+  });
   it('reviews live parser fidelity without claiming an unavailable recorded response', async () => {
     const live = fixtures()[1];
     live.recordedRequests = [

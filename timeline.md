@@ -16392,3 +16392,28 @@ home. Its manifest records the process, the same recording (SHA256
 the exact Flights60 operation-group guidance, GPT-6 Sol, and `--unbounded`.
 No prior generated tools were teaching input. The functional code remains
 `77fd990`; Flights61's full teach and independent audit are pending.
+
+## October 14 — Flights61 partial repeat and bounded evidence-review retry
+
+Flights61 did not complete. Ten tools were published, but after checking the
+round-trip outbound → return chain, the progress log stopped advancing. The
+retained recording-verification retry log for `get_return_flight_options`
+shows **23 provider phase deadlines** for one expectations review between
+October 13 17:53 UTC and October 14 02:55 UTC. The native agent stream
+created the same expectations assignment 32 times, repeatedly cancelling it.
+The still-running teach was stopped with SIGTERM after more than 15 hours;
+its generated tools, journal, staging data, logs, and agent events remain in
+the isolated `flights-61-repeatability` experiment. This is **failed/partial**,
+not the second complete Flights pass. No full independent audit was run.
+
+The general control-flow defect is that recording evidence review renewed its
+five-minute provider phase deadline without limit when the teach used
+`--unbounded`. A focused correction caps each review at three phase deadlines
+and returns an explicit `unverified` result. A regression test exercises the
+unbounded case; the existing successful single-retry case still passes.
+Focused recording-verification tests, project lint, and typecheck pass. The
+website-specific generated tools were not used as teaching input or patched.
+The experiment's `retrospective.md` records the evidence paths and limits of
+this conclusion. A fresh isolated Flights teach is required on the corrected
+functional code; Hotels remains gated on two independent complete Flights
+audits on unchanged code.

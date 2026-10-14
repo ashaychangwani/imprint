@@ -66,6 +66,7 @@ const StepSchema = z
   })
   .strict();
 const MAX_EVIDENCE_INSPECTIONS = 12;
+const MAX_EVIDENCE_PHASE_DEADLINES = 3;
 const hash = (value: unknown): string =>
   createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown): string =>
@@ -308,6 +309,11 @@ export async function verifyRecordingEvidence(input: {
               reason: control.message,
             })}\n`,
           );
+          if (deadlineRetries >= MAX_EVIDENCE_PHASE_DEADLINES)
+            return finish({
+              status: 'unverified',
+              reason: `Independent evidence ${phase} review exceeded ${MAX_EVIDENCE_PHASE_DEADLINES} phase deadlines.`,
+            });
           await abortableDelay(
             Math.min(30_000, 1_000 * 2 ** Math.min(deadlineRetries - 1, 5)),
             input.agent.signal,
