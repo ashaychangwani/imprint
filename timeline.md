@@ -16417,3 +16417,14 @@ The experiment's `retrospective.md` records the evidence paths and limits of
 this conclusion. A fresh isolated Flights teach is required on the corrected
 functional code; Hotels remains gated on two independent complete Flights
 audits on unchanged code.
+
+## October 14 — Flights62 fresh repeat launched after retry fix
+
+Flights62 started at 05:53:01 UTC in a new isolated
+`~/.imprint/experiments/reteach-systemic-2026-09-21/flights-62-repeatability`
+home after the focused correction in `eedc9c3`. The manifest records the
+same recording (SHA256
+`b5542eb78a4b4df53d914fb2a9d46bd64a2813ccad8d3b61de02e66755245bb1`),
+the exact Flights60 operation-group guidance, GPT-6 Sol, and `--unbounded`.
+No previous generated tools were teaching input. Free disk was 9.77 GiB at
+launch. The full teach and independent audit remain pending.
