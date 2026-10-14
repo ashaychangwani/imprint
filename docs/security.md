@@ -18,6 +18,7 @@ generic scanner.
 
 The historical command `imprint redact <session.json>` now performs only this
 credential substitution. Its `.redacted.json` output is **not safe to share**.
+The command replaces that file atomically with private (`0600`) permissions.
 The old `--keep-header` flag is accepted for compatibility but has no effect:
 headers are retained. `IMPRINT_REDACT_SENSITIVE_HEADERS` no longer enables a
 second masking policy.

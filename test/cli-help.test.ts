@@ -12,6 +12,7 @@ import {
   VERB_HELP,
   closestVerb,
   formatFreshTeachSummary,
+  freshTeachExitCode,
   inferPlaybookSiteForSmokeCommand,
   tryParseParamKV,
 } from '../src/cli.ts';
@@ -58,6 +59,13 @@ describe('CLI verb / VERB_HELP drift', () => {
 });
 
 describe('teach help', () => {
+  it('reports incomplete teaching as a command failure', () => {
+    expect(freshTeachExitCode('completed')).toBe(0);
+    expect(freshTeachExitCode('partial')).toBe(1);
+    expect(freshTeachExitCode('failed')).toBe(1);
+    expect(freshTeachExitCode('cancelled')).toBe(130);
+  });
+
   it('documents the single foreground all-tools flow', () => {
     const teach = VERB_HELP.teach;
     const flags = teach?.flags ?? [];

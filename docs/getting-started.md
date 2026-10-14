@@ -92,11 +92,13 @@ imprint teach google-flights --url https://flights.google.com
 #   → Chromium opens. Drive the workflow end-to-end. Narrate what
 #     you're doing in the terminal. Press /done (or Ctrl+C) when finished.
 #   → The command stays open through planning, compilation, repair, and checks.
-#   → Its final line reports completed, blocked, failed, cancelled, or
-#     provider unavailable, together with the fresh run directory.
+#   → Its final line reports completed, partial, blocked, failed, cancelled,
+#     or provider unavailable, together with the fresh run directory.
 ```
 
 The master must account for every credible operation found in the recording.
+A partial result keeps any ready tools but exits nonzero because the complete
+planned toolset was not verified.
 A tool-boundary advisor may suggest merging or splitting operations, but the
 master owns the editable final plan. It also chooses explicit build waves:
 producers come before their consumers, while independent tools may compile

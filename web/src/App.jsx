@@ -404,7 +404,7 @@ export default function App() {
                 <span className="kicker">One command pipeline</span>
                 <h2 id="workflow-title">From browser session to callable tool.</h2>
               </div>
-              <p><code>bun run imprint teach</code> runs one fresh foreground path: record, discover every credible tool, plan dependency-aware build waves, compile and verify each tool, then emit and wire the MCP server into the AI platform you choose. <code>imprint install</code> adds the same emitted server to another platform later, using absolute CLI paths for desktop config clients; <code>imprint uninstall</code> removes it.</p>
+              <p><code>bun run imprint teach</code> runs one fresh foreground path: record, discover every credible tool, plan dependency-aware build waves, compile and verify each tool, then emit the MCP server. Run <code>imprint install</code> to connect that server to the AI platform you choose, using absolute CLI paths for desktop config clients; <code>imprint uninstall</code> removes it.</p>
             </div>
             <div className="pipeline">
               {pipeline.map((item) => <PipelineCard key={item.step} item={item} />)}

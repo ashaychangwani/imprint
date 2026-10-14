@@ -16,7 +16,7 @@ import type { ProviderName } from './llm.ts';
 import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
 import { SessionSchema, type Workflow, WorkflowSchema } from './types.ts';
 
-export interface RefineOptions {
+interface RefineOptions {
   site: string;
   tool: string;
   issue: string;
@@ -26,7 +26,7 @@ export interface RefineOptions {
   timeoutMs?: number;
   json?: boolean;
 }
-export interface RefinementVerificationPlan {
+interface RefinementVerificationPlan {
   recordingPath?: string;
   cases?: Array<{ id: string; [key: string]: unknown }>;
   dependencies?: unknown[];

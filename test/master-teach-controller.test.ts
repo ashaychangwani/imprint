@@ -647,6 +647,23 @@ describe('API research boundary reuse', () => {
 });
 
 describe('master-owned focused build waves', () => {
+  it('does not start a tool invocation after parent cancellation', async () => {
+    const parent = new AbortController();
+    parent.abort();
+    let invoked = false;
+
+    await expect(
+      runToolInvocationWithDeadline(
+        { timeoutMs: 100, label: 'cancelled fixture check', signal: parent.signal },
+        async () => {
+          invoked = true;
+          return 'unexpected';
+        },
+      ),
+    ).rejects.toBeInstanceOf(Error);
+    expect(invoked).toBe(false);
+  });
+
   it('bounds an injected playbook invocation that ignores cancellation', async () => {
     let childSignal: AbortSignal | undefined;
     const startedAt = Date.now();

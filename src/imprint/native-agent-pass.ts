@@ -2,8 +2,26 @@ import { appendFileSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { z } from 'zod';
 import { abortSignalError } from './concurrency.ts';
-import type { MasterTeachAnalyzer } from './master-teach-agents.ts';
 import { type NativeTeachAgents, nativeAssignmentPage } from './native-teach-agents.ts';
+import type { ProviderRetryEvent, RunDeadlineRef } from './provider-retry.ts';
+
+export interface MasterTeachAnalyzer {
+  analyze(
+    prompt: string,
+    payload: unknown,
+    options?: {
+      timeoutMs?: number;
+      deadlineMs?: number;
+      runDeadline?: RunDeadlineRef;
+      timeoutLabel?: string;
+      signal?: AbortSignal;
+      onProviderRetry?: (event: ProviderRetryEvent) => void;
+      onEvent?: (event: { type: string; timestamp: string; [key: string]: unknown }) => void;
+      onDeadlineReached?: () => Promise<number | null | undefined>;
+      conversationKey?: string;
+    },
+  ): Promise<{ text: string }>;
+}
 
 const instructions = `This assignment is one complete focused agent pass. Use its assignment tools throughout the pass. Call respond with the current step and the exact JSON role response as text; the host validates it, executes accepted actions, and returns the next input directly. Do not submit to the native family between actions. Read every page of a returned input using read_context before responding. Repair feedback, observations, and shared-research replies all continue in this same assignment. When respond returns complete=true, submit a short acknowledgement to the native family and stop. That acknowledgement is not proof; only the host's validated handoff determines the outcome. Native helpers may assist with bounded questions; you remain responsible for this assignment's actions and evidence.`;
 const ACKNOWLEDGMENT_GRACE_MS = 10_000;

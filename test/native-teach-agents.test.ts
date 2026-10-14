@@ -247,6 +247,12 @@ describe('native teach family bridge', () => {
       ).rejects.toThrow('Unknown');
       await family.handle('submit', { id: offered[0]?.id, text: 'done' });
       await first;
+      expect(await family.handle('submit', { id: offered[0]?.id, text: 'done' })).toEqual({
+        accepted: true,
+      });
+      await expect(
+        family.handle('read_assignment', { id: offered[0]?.id, agentId: 'native-a' }),
+      ).rejects.toThrow('completed');
       await expect(
         family.handle('call_assignment_tool', { id: offered[0]?.id, name: 'test', args: {} }),
       ).rejects.toThrow('completed');

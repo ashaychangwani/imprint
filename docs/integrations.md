@@ -4,7 +4,7 @@ How to connect Imprint MCP tools to your AI platform.
 
 ## Overview
 
-`imprint teach` handles this automatically — it runs the full pipeline (record, redact, generate, compile-playbook, emit) and then asks which platform you use. After a tool has been emitted, run `imprint install <site>` any time to add the same MCP server to another platform. Remove platform registrations with `imprint uninstall <site>`.
+`imprint teach` records a session, discovers and verifies tools, and emits a local MCP server. Run `imprint install <site>` to connect that server to an AI platform; run it again to add the same server to another platform. Remove platform registrations with `imprint uninstall <site>`.
 
 This document is for the install/uninstall commands, manual setup, and advanced configuration.
 

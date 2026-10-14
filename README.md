@@ -94,6 +94,9 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 > Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Only known user-supplied login credentials are replaced before teaching; cookies, API tokens, responses, and personal data remain visible to the agents.
 
 Recordings and logs, including files named `.redacted.json`, are not safe to share publicly. Automatic PII and token redaction is disabled; review any file before sharing it.
+Imprint writes `.redacted.json` with private file permissions. A teach that leaves
+planned tools unresolved reports a partial result and exits nonzero, even if some
+ready tools were published.
 
 For every teach, a master agent accounts for the complete discovered operation
 set. Focused advisors review tool boundaries and parameters, focused planners

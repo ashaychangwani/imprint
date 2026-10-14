@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { homedir } from 'node:os';
@@ -18,7 +18,7 @@ import { recordLlmUsageSpan } from './tracing.ts';
 
 const context = new AsyncLocalStorage<NativeTeachAgents>();
 export const currentNativeTeachAgents = () => context.getStore();
-export const NATIVE_TEACH_AGENT_LIMIT = 10;
+const NATIVE_TEACH_AGENT_LIMIT = 10;
 
 export function nativeAssignmentPage(prompt: string, offset: number) {
   if (offset > prompt.length) throw new Error('Assignment offset exceeds retained prompt');
@@ -35,13 +35,14 @@ interface Assignment {
   id: string;
   conversation: string;
   prompt: string;
-  result?: string;
   agentId?: string;
   call?: (name: string, args: Record<string, unknown>) => Promise<unknown>;
   beforeSubmit?: () => void;
   resolve: (result: { text: string; agentId?: string }) => void;
   reject: (error: unknown) => void;
 }
+const COMPLETED_ASSIGNMENT_LIMIT = 1024;
+const responseDigest = (text: string): string => createHash('sha256').update(text).digest('hex');
 interface NativeTeachOptions {
   root: string;
   model: string;
@@ -61,6 +62,7 @@ export class NativeTeachAgents {
   sharedResearch?: TeachResearchMemory;
   readonly #started = Date.now();
   readonly #assignments = new Map<string, Assignment>();
+  readonly #completedAssignments = new Map<string, string>();
   readonly #abort = new AbortController();
   readonly #conversations = new Map<string, string>();
   readonly #wake = new Set<() => void>();
@@ -155,8 +157,7 @@ export class NativeTeachAgents {
       (error) => {
         if (this.#stopped) return;
         this.#failure = error;
-        for (const task of this.#assignments.values())
-          if (task.result === undefined) task.reject(error);
+        for (const task of this.#assignments.values()) task.reject(error);
         try {
           this.#event('family.failed', { error: String(error) });
         } catch {
@@ -170,10 +171,7 @@ export class NativeTeachAgents {
   /** Exposed separately for deterministic protocol tests. No evidence is accepted here. */
   async handle(name: string, raw: unknown): Promise<unknown> {
     if (name === 'assignments') {
-      if (
-        !this.#stopped &&
-        ![...this.#assignments.values()].some((task) => task.result === undefined && !task.agentId)
-      ) {
+      if (!this.#stopped && ![...this.#assignments.values()].some((task) => !task.agentId)) {
         await new Promise<void>((resolve) => {
           const wake = () => {
             clearTimeout(timer);
@@ -186,19 +184,29 @@ export class NativeTeachAgents {
       }
       return {
         stopped: this.#stopped,
-        tasks: [...this.#assignments.values()]
-          .filter((task) => task.result === undefined)
-          .map(({ id, conversation, agentId }) => ({
-            id,
-            conversation,
-            agentId,
-            retainedAgentId: this.#conversations.get(conversation),
-          })),
+        tasks: [...this.#assignments.values()].map(({ id, conversation, agentId }) => ({
+          id,
+          conversation,
+          agentId,
+          retainedAgentId: this.#conversations.get(conversation),
+        })),
       };
     }
     const input = z.object({ id: z.string() }).passthrough().parse(raw);
     const task = this.#assignments.get(input.id);
-    if (!task) throw new Error('Unknown or cancelled assignment in this teach');
+    if (!task) {
+      const digest = this.#completedAssignments.get(input.id);
+      if (digest !== undefined) {
+        if (name === 'submit') {
+          const { text } = z.object({ text: z.string().min(1) }).parse(raw);
+          if (responseDigest(text) !== digest)
+            throw new Error('Cannot replace a submitted response');
+          return { accepted: true };
+        }
+        throw new Error('Assignment completed; wait for its follow-up');
+      }
+      throw new Error('Unknown or cancelled assignment in this teach');
+    }
     if (name === 'read_assignment') {
       const { agentId } = z.object({ agentId: z.string().min(1) }).parse(raw);
       if (task.agentId && task.agentId !== agentId)
@@ -229,22 +237,22 @@ export class NativeTeachAgents {
       if (!task.agentId)
         throw new Error('Read this assignment with your native agent path before submission');
       task.beforeSubmit?.();
-      if (task.result !== undefined && task.result !== text)
-        throw new Error('Cannot replace a submitted response');
-      if (task.result === undefined) {
-        try {
-          this.#event('assignment.completed', { id: task.id, agentId: task.agentId, text });
-        } catch (error) {
-          this.#assignments.delete(task.id);
-          task.reject(error);
-          throw error;
-        }
-        task.result = text;
-        task.resolve({ text, agentId: task.agentId });
+      try {
+        this.#event('assignment.completed', { id: task.id, agentId: task.agentId, text });
+      } catch (error) {
+        this.#assignments.delete(task.id);
+        task.reject(error);
+        throw error;
       }
+      this.#assignments.delete(task.id);
+      this.#completedAssignments.set(task.id, responseDigest(text));
+      if (this.#completedAssignments.size > COMPLETED_ASSIGNMENT_LIMIT) {
+        const oldest = this.#completedAssignments.keys().next().value;
+        if (oldest) this.#completedAssignments.delete(oldest);
+      }
+      task.resolve({ text, agentId: task.agentId });
       return { accepted: true };
     }
-    if (task.result !== undefined) throw new Error('Assignment completed; wait for its follow-up');
     if (!task.call)
       throw new Error(
         'This assignment uses role_response: submit the role JSON action (including test or inspect) for host execution; its observation arrives in your next retained assignment. No direct execution tools is expected.',
@@ -427,8 +435,7 @@ export class NativeTeachAgents {
     for (const wake of this.#wake) wake();
     this.#abort.abort(new Error('Teach finished; close owned native family'));
     await this.#runner;
-    for (const task of this.#assignments.values())
-      if (task.result === undefined) task.reject(new Error('Teach family closed'));
+    for (const task of this.#assignments.values()) task.reject(new Error('Teach family closed'));
     await this.#closeServer?.();
     if (this.#rootThreadId) {
       try {

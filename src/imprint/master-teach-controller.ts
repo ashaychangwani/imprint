@@ -4002,6 +4002,7 @@ export async function runToolInvocationWithDeadline<T>(
   },
   invoke: (signal: AbortSignal) => Promise<T>,
 ): Promise<T> {
+  if (input.signal?.aborted) throw abortSignalError(input.signal);
   const timeoutMs = Math.max(1, Math.floor(input.timeoutMs));
   const cleanupGraceMs = Math.max(
     1,
@@ -4030,7 +4031,10 @@ export async function runToolInvocationWithDeadline<T>(
   controller.signal.addEventListener('abort', settleAfterAbort, { once: true });
   if (controller.signal.aborted) settleAfterAbort();
   const deadlineTimer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
-  const invocation = Promise.resolve().then(async () => await invoke(controller.signal));
+  const invocation = Promise.resolve().then(async () => {
+    if (controller.signal.aborted) throw abortSignalError(controller.signal);
+    return await invoke(controller.signal);
+  });
   const completedBeforeAbort = new Promise<T>((resolve, reject) => {
     invocation.then(
       (value) => {

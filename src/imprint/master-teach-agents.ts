@@ -60,7 +60,7 @@ import type {
   ReceiptFact,
   RecordingIndex,
 } from './master-teach-prompt-projections.ts';
-import { runNativeAgentPass } from './native-agent-pass.ts';
+import { type MasterTeachAnalyzer, runNativeAgentPass } from './native-agent-pass.ts';
 import { currentNativeTeachAgents } from './native-teach-agents.ts';
 import {
   ProviderDeadlineError,
@@ -77,6 +77,7 @@ import {
 } from './teach-research-memory.ts';
 export * from './master-teach-agent-contracts.ts';
 export * from './master-teach-prompt-projections.ts';
+export type { MasterTeachAnalyzer } from './native-agent-pass.ts';
 const PROMPTS = join(import.meta.dir, '..', '..', 'prompts');
 const same = (left: unknown, right: unknown) => digest(left) === digest(right);
 export const apiResearchCandidateSha256 = (candidate: ApiResearchCandidate): string =>
@@ -2172,23 +2173,6 @@ function completionOutputSchema(input: CompletionReviewInput) {
         `${input.terminalIntent} intent requires every blocker claim to be supported`,
       );
   });
-}
-export interface MasterTeachAnalyzer {
-  analyze(
-    prompt: string,
-    payload: unknown,
-    options?: {
-      timeoutMs?: number;
-      deadlineMs?: number;
-      runDeadline?: RunDeadlineRef;
-      timeoutLabel?: string;
-      signal?: AbortSignal;
-      onProviderRetry?: (event: ProviderRetryEvent) => void;
-      onEvent?: (event: { type: string; timestamp: string; [key: string]: unknown }) => void;
-      onDeadlineReached?: () => Promise<number | null | undefined>;
-      conversationKey?: string;
-    },
-  ): Promise<{ text: string }>;
 }
 type Role =
   | 'tool advisor'

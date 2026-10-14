@@ -57,6 +57,12 @@ export function formatFreshTeachSummary(
   return `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.nonReadyTools} ${nonReadyLabel} — ${result.runRoot}`;
 }
 
+export function freshTeachExitCode(status: FreshTeachTerminalResult['status']): number {
+  if (status === 'completed') return 0;
+  if (status === 'cancelled') return 130;
+  return 1;
+}
+
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
 
 USAGE
@@ -736,9 +742,9 @@ async function main(argv: string[]): Promise<number> {
         options: { 'keep-header': { type: 'string', multiple: true } },
         allowPositionals: false,
       });
-      const { writeFileSync } = await import('node:fs');
       const { SessionSchema } = await import('./imprint/types.ts');
       const { redactSession } = await import('./imprint/redact.ts');
+      const { writePrivateFile } = await import('./imprint/private-file.ts');
       const { loadJsonFile } = await import('./imprint/load-json.ts');
       let session: ReturnType<typeof SessionSchema.parse>;
       try {
@@ -759,7 +765,7 @@ async function main(argv: string[]): Promise<number> {
       // --keep-header remains accepted for CLI compatibility; all headers are kept.
       const { session: scrubbed, stats } = redactSession(session);
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
-      writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+      writePrivateFile(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`);
       console.log(`[imprint] redacted → ${outPath}`);
       const freeformNote =
         stats.freeformRedactions > 0
@@ -1602,9 +1608,7 @@ async function main(argv: string[]): Promise<number> {
           console.error(summary);
           console.error(`[imprint] ${result.message}`);
         }
-        if (result.status === 'completed' || result.status === 'partial') return 0;
-        if (result.status === 'cancelled') return 130;
-        return 1;
+        return freshTeachExitCode(result.status);
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
