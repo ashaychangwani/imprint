@@ -251,11 +251,11 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
-const WorkflowRequestSchema = z.object({
+const WorkflowRequestBaseSchema = z.object({
   method: z.string(),
-  /** Sequence number of the captured request that grounds this workflow request.
-   *  Auth login uses this to resolve persisted captures only against their
-   *  producing recorded response. */
+  /** Sequence number of the captured request that grounds this outgoing
+   *  workflow request. A navigation-selected background response records its
+   *  distinct capture provenance in navigation.networkResponse. */
   recordingRequestSeq: z.number().int().nonnegative().optional(),
   /** Template; ${param.X} substitutes a parameter, ${response[N].path} an
    *  earlier extracted value. */
@@ -304,6 +304,32 @@ const WorkflowRequestSchema = z.object({
       /** After navigation actions run, wait for this rendered selector before
        * snapshotting the final document. */
       resultSelector: z.string().min(1).optional(),
+      /** Return one page-generated network response instead of the rendered
+       * document. This is an explicit, agent-selected browser operation for a
+       * request that the page must construct itself. Matching is mechanical and
+       * site-neutral; the runtime does not infer which response is meaningful. */
+      networkResponse: z
+        .object({
+          /** Required URL substring observed in the target response. */
+          urlIncludes: z.string().min(1),
+          /** Exact recorded request whose response body/status/headers represent
+           * the page-generated result returned by this workflow request. */
+          recordingResponseRequestSeq: z.number().int().nonnegative(),
+          /** Optional exact HTTP method (matched case-insensitively). */
+          method: z.string().min(1).optional(),
+          /** Optional exact CDP resource type, such as XHR or Fetch (matched
+           * case-insensitively). */
+          resourceType: z.string().min(1).optional(),
+          /** Select the Nth matching response, ordered by its request start
+           * within this navigation scope. Starts that never receive a response
+           * do not consume an occurrence. */
+          occurrence: z.number().int().positive().optional(),
+          /** Begin matching immediately before this zero-based navigation action
+           * is dispatched. Requests started earlier cannot satisfy the capture. */
+          actionIndex: z.number().int().nonnegative().optional(),
+        })
+        .strict()
+        .optional(),
       cookie: z
         .object({
           name: z.string().min(1),
@@ -325,7 +351,19 @@ const WorkflowRequestSchema = z.object({
    *  a telemetry beacon. The flow continues to the next (terminal) request. */
   optional: z.boolean().optional(),
 });
+const WorkflowRequestSchema = WorkflowRequestBaseSchema.superRefine((request, ctx) => {
+  if (request.navigation?.networkResponse && request.mode !== 'navigate') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['mode'],
+      message: 'navigation.networkResponse requires mode "navigate"',
+    });
+  }
+});
 export type WorkflowRequest = z.infer<typeof WorkflowRequestSchema>;
+export type NavigationNetworkResponseMatcher = NonNullable<
+  NonNullable<WorkflowRequest['navigation']>['networkResponse']
+>;
 
 const AuthConfigSchema = z
   .object({
@@ -495,6 +533,22 @@ export interface StateMissingItem {
   message: string;
 }
 
+/** Value-free execution facts retained only to explain where a generated
+ * request failed. They intentionally omit URLs, headers, bodies, parameter
+ * values, and response content. */
+export interface RequestStageFact {
+  requestIndex: number;
+  stage: 'preparation' | 'transform' | 'send';
+  outcome: 'passed' | 'failed' | 'skipped' | 'unavailable';
+  /** Final body metadata at this stage. No body bytes are retained. */
+  bodyPresent?: boolean;
+  bodyByteLength?: number;
+  /** Whether a request transform replaced the prepared body. */
+  bodyChanged?: boolean;
+  /** HTTP status proves transport completed without exposing response content. */
+  httpStatus?: number;
+}
+
 /** Discriminated union returned by every generated tool. */
 export type ToolResult<T = unknown> =
   | { ok: true; data: T }
@@ -518,6 +572,16 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
+      /** Most recently inspected page after a failed CDP call, possibly before
+       * a later fallback. Not an API response or success proof. Cookies omitted. */
+      pageDiagnostic?: {
+        url: string;
+        title: string;
+        bodyText: string;
+        truncated: boolean;
+      };
+      /** Value-free stage receipts for requests attempted before this failure. */
+      requestStageFacts?: RequestStageFact[];
       /** Recording-derived state and generic action progress. Echo this object
        *  unchanged on the next auth call. */
       continuation?: Record<string, unknown>;

@@ -16,18 +16,10 @@ type Log = (msg: string) => void;
 const isQuiet = (): boolean => process.env.IMPRINT_QUIET === '1';
 export const isDebug = (): boolean => process.env.IMPRINT_DEBUG === '1';
 
-let muted = false;
-export function muteLog(): void {
-  muted = true;
-}
-export function unmuteLog(): void {
-  muted = false;
-}
-
 export function createLog(area: string): Log {
   const prefix = `[imprint ${area}]`;
   return (msg: string): void => {
-    if (isQuiet() || muted) return;
+    if (isQuiet()) return;
     process.stderr.write(`${prefix} ${msg}\n`);
   };
 }

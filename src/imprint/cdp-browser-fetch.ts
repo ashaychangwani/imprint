@@ -38,6 +38,7 @@ import {
   proxyUrl,
 } from './chromium.ts';
 import { createLog } from './log.ts';
+import type { NavigationNetworkResponseMatcher } from './types.ts';
 
 const log = createLog('cdp-browser');
 
@@ -100,19 +101,66 @@ export function buildNavigationSelectorExpression(selector: string): string {
 
 export function buildNavigationClickTargetExpression(selector: string): string {
   return `(() => {
-    const target = document.querySelector(${JSON.stringify(selector)});
-    if (!(target instanceof Element)) return null;
+    const matches = document.querySelectorAll(${JSON.stringify(selector)});
+    const target = matches[0];
+    const describe = (element) => {
+      if (!(element instanceof Element)) return null;
+      const style = getComputedStyle(element);
+      return {
+        tag: element.tagName.toLowerCase().slice(0, 80),
+        id: (element.getAttribute('id') || '').slice(0, 120),
+        class: (element.getAttribute('class') || '').slice(0, 160),
+        role: (element.getAttribute('role') || '').slice(0, 80),
+        display: style.display,
+        visibility: style.visibility,
+        pointerEvents: style.pointerEvents,
+      };
+    };
+    const unavailable = (reason, rect = null, hit = null) => ({
+      diagnostic: {
+        reason,
+        matchedCount: matches.length,
+        target: describe(target),
+        parent: describe(target?.parentElement),
+        rect: rect && { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        hit: describe(hit),
+      },
+    });
+    if (!(target instanceof Element)) return unavailable('not_found');
+    if (matches.length > 1) return unavailable('ambiguous_selector');
     target.scrollIntoView({ block: 'center', inline: 'center' });
     const rect = target.getBoundingClientRect();
-    if (rect.width <= 0 || rect.height <= 0) return null;
-    if (target.matches(':disabled')) return null;
+    if (rect.width <= 0 || rect.height <= 0) return unavailable('zero_area', rect);
+    if (target.matches(':disabled')) return unavailable('disabled', rect);
     const x = rect.left + rect.width / 2;
     const y = rect.top + rect.height / 2;
     const hit = document.elementFromPoint(x, y);
-    if (hit !== target && !target.contains(hit) && !hit?.contains(target)) return null;
+    if (hit !== target && !target.contains(hit) && !hit?.contains(target)) {
+      return unavailable('center_hit_other_element', rect, hit);
+    }
     target.focus();
     return { x, y };
   })()`;
+}
+
+function nonClickableTargetKey(diagnostic: unknown): string | undefined {
+  if (!diagnostic || typeof diagnostic !== 'object') return undefined;
+  const value = diagnostic as Record<string, unknown>;
+  if (!['zero_area', 'disabled', 'center_hit_other_element'].includes(String(value.reason))) {
+    return undefined;
+  }
+  const target = value.target;
+  if (!target || typeof target !== 'object') return undefined;
+  const element = target as Record<string, unknown>;
+  return JSON.stringify({
+    reason: value.reason,
+    matchedCount: value.matchedCount,
+    tag: element.tag,
+    id: element.id,
+    class: element.class,
+    role: element.role,
+    pointerEvents: element.pointerEvents,
+  });
 }
 
 export interface CdpBrowserFetch {
@@ -133,6 +181,7 @@ export interface CdpBrowserFetch {
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationNetworkResponseMatcher;
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -159,6 +208,7 @@ export interface CdpPageSnapshot {
   bodyText: string;
   cookies: Array<{
     name: string;
+    value?: string;
     domain: string;
     path: string;
     expires?: number;
@@ -414,6 +464,9 @@ export interface CdpBrowserFetchOptions {
   /** Per-CDP-command timeout (ms). Default 20000. Prevents a wedged browser
    *  or CDP socket from hanging an MCP tool call forever. */
   cdpCommandTimeoutMs?: number;
+  /** Return a stable, non-clickable navigation target to the researcher before
+   *  the full page-navigation deadline. Missing targets still get that deadline. */
+  stableNonClickableWaitMs?: number;
   /** Launch a visible window instead of headless. Default false (headless). Only
    *  needed as a fallback on a GPU-less host where headless WebGL falls back to
    *  SwiftShader and the site fingerprints it — pair with `display`/Xvfb. */
@@ -507,6 +560,372 @@ export function normalizeCdpResponseHeaders(
     }
   }
   return headers;
+}
+
+interface ObservedCdpNetworkResponse {
+  requestId: string;
+  url: string;
+  method?: string;
+  resourceType?: string;
+  /** Monotonic requestWillBeSent order within this browser session. */
+  requestSequence?: number;
+  loaderId?: string;
+  frameId?: string;
+  status: number;
+  headers: Record<string, string>;
+}
+
+type ObservedCdpNetworkRequest = Omit<ObservedCdpNetworkResponse, 'status' | 'headers'>;
+
+interface CapturedCdpNetworkResponse extends ObservedCdpNetworkResponse {
+  body: string | Uint8Array;
+}
+
+type CdpNetworkResponseCaptureOutcome =
+  | { ok: true; response: CapturedCdpNetworkResponse }
+  | { ok: false; message: string };
+
+interface CdpNetworkResponseCaptureBoundary {
+  /** Ignore requests that started before this navigation acquired the page. */
+  afterRequestSequence?: number;
+  /** Buffer matching events until the new navigation's loader/frame is known. */
+  deferUntilNavigationScope?: boolean;
+  /** Expected method of the top-level document that establishes the scope. */
+  navigationMethod?: string;
+}
+
+interface CdpNavigationScope {
+  loaderId?: string;
+  frameId?: string;
+}
+
+/** A one-navigation response selector. The caller feeds it factual CDP events;
+ * it deliberately performs no semantic classification of URLs or bodies. */
+export class CdpNetworkResponseCapture {
+  readonly outcome: Promise<CdpNetworkResponseCaptureOutcome>;
+
+  private readonly occurrence: number;
+  private readonly afterRequestSequence: number | undefined;
+  private readonly navigationMethod: string | undefined;
+  private navigationScopeReady: boolean;
+  private navigationScope: CdpNavigationScope = {};
+  private pendingRequests: ObservedCdpNetworkRequest[] = [];
+  private readonly matchingRequestOrder: ObservedCdpNetworkRequest[] = [];
+  private readonly responses = new Map<string, ObservedCdpNetworkResponse>();
+  private readonly failedRequestIds = new Set<string>();
+  private selectedRequestId: string | undefined;
+  private selected: ObservedCdpNetworkResponse | undefined;
+  private readingBody = false;
+  private bodyReadTask: Promise<void> | undefined;
+  private deadlineMs = Number.POSITIVE_INFINITY;
+  private settled = false;
+  private resolveOutcome!: (outcome: CdpNetworkResponseCaptureOutcome) => void;
+  private resolveStop!: () => void;
+  private readonly stop: Promise<void>;
+
+  constructor(
+    readonly matcher: NavigationNetworkResponseMatcher,
+    boundary: CdpNetworkResponseCaptureBoundary = {},
+  ) {
+    this.occurrence = matcher.occurrence ?? 1;
+    this.afterRequestSequence = boundary.afterRequestSequence;
+    this.navigationMethod = boundary.navigationMethod?.toLowerCase();
+    this.navigationScopeReady = boundary.deferUntilNavigationScope !== true;
+    this.outcome = new Promise((resolve) => {
+      this.resolveOutcome = resolve;
+    });
+    this.stop = new Promise((resolve) => {
+      this.resolveStop = resolve;
+    });
+  }
+
+  setDeadline(deadlineMs: number): void {
+    this.deadlineMs = deadlineMs;
+  }
+
+  /** Bind buffered responses to the loader/frame created by this navigation. */
+  setNavigationScope(scope: CdpNavigationScope): string | undefined {
+    if (this.navigationScopeReady) return this.selectedRequestId;
+    this.navigationScope = scope;
+    this.navigationScopeReady = true;
+    const pending = this.pendingRequests.sort(
+      (left, right) => (left.requestSequence ?? 0) - (right.requestSequence ?? 0),
+    );
+    this.pendingRequests = [];
+    for (const request of pending) {
+      if (this.considerRequest(request)) break;
+    }
+    return this.selectedRequestId;
+  }
+
+  /** Bind a form navigation only from a new main-document request. GET uses
+   * Page.navigate's returned loader instead, which is more precise. */
+  setNavigationScopeFromDocument(response: ObservedCdpNetworkResponse): string | undefined {
+    if (
+      (this.afterRequestSequence !== undefined &&
+        (response.requestSequence === undefined ||
+          response.requestSequence <= this.afterRequestSequence)) ||
+      (this.navigationMethod && response.method?.toLowerCase() !== this.navigationMethod)
+    ) {
+      return undefined;
+    }
+    return this.setNavigationScope({
+      ...(response.loaderId ? { loaderId: response.loaderId } : {}),
+      ...(response.frameId ? { frameId: response.frameId } : {}),
+    });
+  }
+
+  observeRequest(request: ObservedCdpNetworkRequest): boolean {
+    if (this.selectedRequestId || this.settled || !this.matchesMatcher(request)) return false;
+    if (
+      this.afterRequestSequence !== undefined &&
+      (request.requestSequence === undefined ||
+        request.requestSequence <= this.afterRequestSequence)
+    ) {
+      return false;
+    }
+    if (!this.navigationScopeReady) {
+      this.pendingRequests.push(request);
+      return false;
+    }
+    return this.considerRequest(request);
+  }
+
+  private considerRequest(request: ObservedCdpNetworkRequest): boolean {
+    if (!this.matchesNavigationScope(request)) return false;
+    this.matchingRequestOrder.push(request);
+    return this.selectEligibleResponse();
+  }
+
+  observeResponse(response: ObservedCdpNetworkResponse): boolean {
+    if (this.settled) return false;
+    this.responses.set(response.requestId, response);
+    return this.selectEligibleResponse();
+  }
+
+  selectedRequestIs(requestId: string): boolean {
+    return !this.settled && this.selectedRequestId === requestId;
+  }
+
+  async finish(
+    requestId: string,
+    readBody: (timeoutMs: number) => Promise<{ body: string; base64Encoded?: boolean }>,
+  ): Promise<void> {
+    const selected = this.selected;
+    if (!selected || !this.selectedRequestIs(requestId) || this.readingBody) return;
+    this.readingBody = true;
+    const task = this.readCompletedBody(selected, readBody);
+    this.bodyReadTask = task;
+    await task;
+  }
+
+  private async readCompletedBody(
+    selected: ObservedCdpNetworkResponse,
+    readBody: (timeoutMs: number) => Promise<{ body: string; base64Encoded?: boolean }>,
+  ): Promise<void> {
+    let lastError: unknown;
+    for (const delayMs of [0, 25, 75]) {
+      const remainingBeforeDelay = this.deadlineMs - Date.now();
+      if (remainingBeforeDelay <= 0) break;
+      if (delayMs > 0) {
+        await Promise.race([sleep(Math.min(delayMs, remainingBeforeDelay)), this.stop]);
+      }
+      if (this.settled) return;
+      try {
+        const remainingMs = Math.max(1, this.deadlineMs - Date.now());
+        const result = await Promise.race([readBody(remainingMs), this.stop.then(() => undefined)]);
+        if (!result || this.settled) return;
+        const body = result.base64Encoded
+          ? Uint8Array.from(Buffer.from(result.body, 'base64'))
+          : result.body;
+        this.settle({ ok: true, response: { ...selected, body } });
+        return;
+      } catch (error) {
+        lastError = error;
+        // A rejected early body read can be a CDP event-order race, so retry it.
+        // A timed-out CDP command is still running underneath the timeout and
+        // must not be duplicated; the navigation wrapper will close the page.
+        if (error instanceof Error && /timed out after \d+ms/.test(error.message)) break;
+      }
+    }
+    this.settle({
+      ok: false,
+      message: `matched network response ${JSON.stringify(selected.url)} but could not read its completed body before the navigation deadline${lastError === undefined ? '' : `: ${lastError instanceof Error ? lastError.message : String(lastError)}`}`,
+    });
+  }
+
+  async waitForBodyRead(): Promise<void> {
+    await this.bodyReadTask;
+  }
+
+  cancel(message = 'browser navigation response capture was cancelled'): void {
+    this.settle({ ok: false, message });
+  }
+
+  fail(requestId: string, errorText?: string): boolean {
+    if (this.selectedRequestIs(requestId)) {
+      this.settle({
+        ok: false,
+        message: `matched network response ${JSON.stringify(this.selected?.url)} failed before its body completed${errorText ? `: ${errorText}` : ''}`,
+      });
+      return false;
+    }
+    this.failedRequestIds.add(requestId);
+    return this.selectEligibleResponse();
+  }
+
+  timeoutMessage(timeoutMs: number): string {
+    const evidence = this.responseSummary();
+    if (this.selected) {
+      return `browser navigation timed out after ${timeoutMs}ms after receiving ${JSON.stringify(this.selected.url)} but before its response body completed; observed network responses: ${evidence}`;
+    }
+    return `browser navigation timed out after ${timeoutMs}ms waiting for ${describeNetworkResponseMatcher(this.matcher)}; observed network responses: ${evidence}`;
+  }
+
+  /** Factual failure evidence only: never relax or replace the chosen matcher. */
+  private responseSummary(): string {
+    const responses = [...this.responses.values()].filter(
+      (response) =>
+        this.afterRequestSequence === undefined ||
+        (response.requestSequence !== undefined &&
+          response.requestSequence > this.afterRequestSequence),
+    );
+    const eligibleRequestIds = new Set(
+      this.matchingRequestOrder.map((request) => request.requestId),
+    );
+    const matchingResponsesWithoutEligibleRequest = responses.filter(
+      (response) =>
+        this.matchesMatcher(response) &&
+        this.matchesNavigationScope(response) &&
+        !eligibleRequestIds.has(response.requestId),
+    ).length;
+    const facts = responses.map((response) => {
+      let endpoint: string;
+      let endpointTruncated = false;
+      try {
+        const url = new URL(response.url);
+        // Query values, userinfo, fragments, headers and bodies are not needed
+        // to compare endpoint/method/type facts. Ordinary redaction still applies.
+        const path =
+          url.protocol === 'https:' || url.protocol === 'http:'
+            ? `${url.origin}${url.pathname}`
+            : '[non-HTTP URL]';
+        endpoint = path.slice(0, 240);
+        endpointTruncated = path.length > endpoint.length;
+      } catch {
+        endpoint = '[unparseable URL]';
+      }
+      return {
+        endpoint,
+        ...(endpointTruncated ? { endpointTruncated: true } : {}),
+        method: response.method?.slice(0, 16) ?? null,
+        resourceType: response.resourceType?.slice(0, 32) ?? null,
+        status: response.status,
+        matcherChecks: {
+          urlIncludes: response.url.includes(this.matcher.urlIncludes),
+          method: this.matcher.method
+            ? response.method?.toLowerCase() === this.matcher.method.toLowerCase()
+            : null,
+          resourceType: this.matcher.resourceType
+            ? response.resourceType?.toLowerCase() === this.matcher.resourceType.toLowerCase()
+            : null,
+        },
+        inNavigationScope: this.navigationScopeReady ? this.matchesNavigationScope(response) : null,
+      };
+    });
+    // Repeated telemetry must not push distinct endpoint facts out of the
+    // bounded diagnostic. Group only identical displayed facts, preserving
+    // matcher/scope differences and ordering by each group's latest response.
+    const distinct = new Map<string, (typeof facts)[number] & { count: number }>();
+    for (const fact of facts) {
+      const key = JSON.stringify(fact);
+      const count = (distinct.get(key)?.count ?? 0) + 1;
+      distinct.delete(key);
+      distinct.set(key, { ...fact, count });
+    }
+    const recent = [...distinct.values()].slice(-12);
+    return JSON.stringify({
+      count: responses.length,
+      omitted: responses.length - recent.reduce((total, response) => total + response.count, 0),
+      matchingRequestCount: this.matchingRequestOrder.length,
+      matchingResponsesWithoutEligibleRequest,
+      ...(matchingResponsesWithoutEligibleRequest > 0
+        ? {
+            captureBoundaryHint:
+              'A matching response was observed without an eligible request start. Check actionIndex timing and navigation scope before changing the endpoint or click selector.',
+          }
+        : {}),
+      navigationScopeReady: this.navigationScopeReady,
+      recent,
+    });
+  }
+
+  private matchesMatcher(response: ObservedCdpNetworkRequest): boolean {
+    if (!response.url.includes(this.matcher.urlIncludes)) return false;
+    if (
+      this.matcher.method &&
+      response.method?.toLowerCase() !== this.matcher.method.toLowerCase()
+    ) {
+      return false;
+    }
+    if (
+      this.matcher.resourceType &&
+      response.resourceType?.toLowerCase() !== this.matcher.resourceType.toLowerCase()
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  private matchesNavigationScope(response: ObservedCdpNetworkRequest): boolean {
+    if (this.navigationScope.loaderId) {
+      return response.loaderId === this.navigationScope.loaderId;
+    }
+    if (this.navigationScope.frameId) {
+      return response.frameId === this.navigationScope.frameId;
+    }
+    return true;
+  }
+
+  /** Select the Nth matching request that actually produced a response. Keep
+   * request-start order among those responses so this matches recorded request
+   * provenance, while failed/cancelled starts do not consume an occurrence. */
+  private selectEligibleResponse(): boolean {
+    if (this.selectedRequestId || this.settled) return false;
+    let responseOccurrence = 0;
+    const ordered = [...this.matchingRequestOrder].sort(
+      (left, right) => (left.requestSequence ?? 0) - (right.requestSequence ?? 0),
+    );
+    for (const request of ordered) {
+      const response = this.responses.get(request.requestId);
+      if (response) {
+        responseOccurrence++;
+        if (responseOccurrence !== this.occurrence) continue;
+        this.selectedRequestId = request.requestId;
+        this.selected = response;
+        return true;
+      }
+      // A still-pending earlier match may yet become an earlier recorded
+      // response, so do not choose a later response until it resolves.
+      if (!this.failedRequestIds.has(request.requestId)) return false;
+    }
+    return false;
+  }
+
+  private settle(outcome: CdpNetworkResponseCaptureOutcome): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.resolveStop();
+    this.resolveOutcome(outcome);
+  }
+}
+
+function describeNetworkResponseMatcher(matcher: NavigationNetworkResponseMatcher): string {
+  const criteria = [`network response with URL containing ${JSON.stringify(matcher.urlIncludes)}`];
+  if (matcher.method) criteria.push(`method ${matcher.method.toUpperCase()}`);
+  if (matcher.resourceType) criteria.push(`resource type ${matcher.resourceType}`);
+  if ((matcher.occurrence ?? 1) > 1) criteria.push(`occurrence ${matcher.occurrence}`);
+  return criteria.join(', ');
 }
 
 /** The registrable domain (eTLD+1) of a host. Private suffixes are enabled so
@@ -711,6 +1130,17 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     status: number;
     headers: Record<string, string>;
   } | null = null;
+  let activeNetworkResponseCapture: CdpNetworkResponseCapture | null = null;
+  let documentScopedNetworkCapture: CdpNetworkResponseCapture | null = null;
+  let requestSequence = 0;
+  const requestFacts = new Map<
+    string,
+    { method: string; requestSequence: number; loaderId?: string; frameId?: string }
+  >();
+  const completedRequestIds = new Set<string>();
+  const activeNetworkBodyReads = new Set<Promise<void>>();
+  let finishActiveNetworkResponse: ((requestId: string) => void) | undefined;
+  let navigationInProgress = false;
 
   async function close(): Promise<void> {
     const c = client;
@@ -724,6 +1154,13 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     currentPageUrl = navUrl;
     mainFrameId = undefined;
     lastDocumentResponse = null;
+    activeNetworkResponseCapture = null;
+    documentScopedNetworkCapture = null;
+    requestSequence = 0;
+    requestFacts.clear();
+    completedRequestIds.clear();
+    activeNetworkBodyReads.clear();
+    finishActiveNetworkResponse = undefined;
     try {
       await withTimeout(Promise.resolve(c?.close()), 'CDP client close', 2_000);
     } catch {
@@ -736,6 +1173,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     } catch {
       /* ignore — PID stays registered; exit handler will kill it */
     }
+    navigationInProgress = false;
   }
 
   async function ensure(): Promise<CdpClient> {
@@ -781,17 +1219,108 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
       bootstrapResponseHeaders = {};
       let navDocumentResponseUrl = '';
+      finishActiveNetworkResponse = (requestId: string): void => {
+        const capture = activeNetworkResponseCapture;
+        if (!capture?.selectedRequestIs(requestId)) return;
+        void capture.finish(requestId, async (remainingMs) => {
+          const rawRead = Network.getResponseBody({ requestId });
+          const trackedRead = rawRead.then(
+            () => undefined,
+            () => undefined,
+          );
+          activeNetworkBodyReads.add(trackedRead);
+          void trackedRead.finally(() => {
+            activeNetworkBodyReads.delete(trackedRead);
+          });
+          return await withTimeout(
+            rawRead,
+            'CDP Network.getResponseBody(navigation response)',
+            Math.max(1, Math.min(cdpCommandTimeoutMs, remainingMs)),
+          );
+        });
+      };
+      Network.requestWillBeSent(
+        (event: {
+          requestId?: string;
+          loaderId?: string;
+          frameId?: string;
+          type?: string;
+          request?: { method?: string; url?: string };
+        }) => {
+          if (!event.requestId) return;
+          requestSequence++;
+          requestFacts.set(event.requestId, {
+            method: event.request?.method ?? '',
+            requestSequence,
+            ...(event.loaderId ? { loaderId: event.loaderId } : {}),
+            ...(event.frameId ? { frameId: event.frameId } : {}),
+          });
+          if (event.request?.url) {
+            activeNetworkResponseCapture?.observeRequest({
+              requestId: event.requestId,
+              url: event.request.url,
+              method: event.request.method,
+              resourceType: event.type,
+              requestSequence,
+              loaderId: event.loaderId,
+              frameId: event.frameId,
+            });
+          }
+        },
+      );
       const onResponseReceived = (event: {
+        requestId?: string;
+        loaderId?: string;
         type?: string;
         frameId?: string;
-        response?: { url?: string; status?: number; headers?: Record<string, unknown> };
+        response?: {
+          url?: string;
+          status?: number;
+          headers?: Record<string, unknown>;
+        };
       }) => {
-        if (event.type !== 'Document') return;
-        if (mainFrameId && event.frameId && event.frameId !== mainFrameId) return;
         const url = event.response?.url;
         if (!url) return;
-        currentPageUrl = url;
         const headers = normalizeCdpResponseHeaders(event.response?.headers ?? {});
+        if (event.requestId) {
+          const facts = requestFacts.get(event.requestId);
+          const observed = {
+            requestId: event.requestId,
+            url,
+            method: facts?.method,
+            resourceType: event.type,
+            requestSequence: facts?.requestSequence,
+            loaderId: facts?.loaderId ?? event.loaderId,
+            frameId: facts?.frameId ?? event.frameId,
+            status: Number(event.response?.status ?? 200),
+            headers,
+          };
+          if (
+            event.type === 'Document' &&
+            (!mainFrameId || !event.frameId || event.frameId === mainFrameId)
+          ) {
+            const selectedRequestId =
+              documentScopedNetworkCapture?.setNavigationScopeFromDocument(observed);
+            if (selectedRequestId && completedRequestIds.has(selectedRequestId)) {
+              finishActiveNetworkResponse?.(selectedRequestId);
+            }
+          }
+          const selected = activeNetworkResponseCapture?.observeResponse({
+            ...observed,
+          });
+          if (selected) {
+            for (const completedRequestId of completedRequestIds) {
+              if (activeNetworkResponseCapture?.selectedRequestIs(completedRequestId)) {
+                finishActiveNetworkResponse?.(completedRequestId);
+                break;
+              }
+            }
+          }
+          requestFacts.delete(event.requestId);
+        }
+        if (event.type !== 'Document') return;
+        if (mainFrameId && event.frameId && event.frameId !== mainFrameId) return;
+        currentPageUrl = url;
         lastDocumentResponse = {
           url,
           status: Number(event.response?.status ?? 200),
@@ -808,6 +1337,24 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         bootstrapResponseHeaders = headers;
       };
       Network.responseReceived(onResponseReceived);
+      Network.loadingFinished((event: { requestId?: string }) => {
+        if (!event.requestId) return;
+        if (activeNetworkResponseCapture) completedRequestIds.add(event.requestId);
+        finishActiveNetworkResponse?.(event.requestId);
+      });
+      Network.loadingFailed((event: { requestId?: string; errorText?: string }) => {
+        if (!event.requestId) return;
+        const selected = activeNetworkResponseCapture?.fail(event.requestId, event.errorText);
+        if (selected) {
+          for (const completedRequestId of completedRequestIds) {
+            if (activeNetworkResponseCapture?.selectedRequestIs(completedRequestId)) {
+              finishActiveNetworkResponse?.(completedRequestId);
+              break;
+            }
+          }
+        }
+        requestFacts.delete(event.requestId);
+      });
       // Plant the high-trust seed cookies (the recording's validated Akamai jar)
       // BEFORE navigating, so the first request to the protected origin carries the
       // trusted session. A synthetic mint can reach `_abck~0~` yet still get its
@@ -1320,7 +1867,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     );
   };
 
-  const navigate = async (
+  const navigateOnce = async (
+    c: CdpClient,
     rawUrl: string,
     options: {
       method?: string;
@@ -1333,10 +1881,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationNetworkResponseMatcher;
       cookie?: { name: string; domain?: string; path?: string };
-    } = {},
+    },
+    networkCapture: CdpNetworkResponseCapture | null,
   ): Promise<Response> => {
-    const c = await ensure();
     const startUrl = await readCurrentPageUrl(c);
     const targetUrl = new URL(rawUrl, startUrl).toString();
     const method = (options.method ?? 'GET').toUpperCase();
@@ -1348,6 +1897,17 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     }
     const timeoutMs = options.timeoutMs ?? 60_000;
     const pollIntervalMs = options.pollIntervalMs ?? 250;
+    const deadline = Date.now() + timeoutMs;
+    networkCapture?.setDeadline(deadline);
+    const captureDefinesCompletion = Boolean(
+      networkCapture &&
+        options.waitUntil === undefined &&
+        options.urlIncludes === undefined &&
+        options.selector === undefined &&
+        options.cookie === undefined &&
+        (options.actions?.length ?? 0) === 0 &&
+        options.resultSelector === undefined,
+    );
     const lifecyclePromise = (
       options.waitUntil === 'domcontentloaded'
         ? c.Page.domContentEventFired()
@@ -1359,12 +1919,21 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
     lastDocumentResponse = null;
     if (method === 'GET') {
-      await withTimeout(
+      const navigation = await withTimeout(
         c.Page.navigate({ url: targetUrl }),
         `CDP Page.navigate(${new URL(targetUrl).origin})`,
         Math.min(timeoutMs, cdpCommandTimeoutMs),
       );
+      const selectedRequestId = networkCapture?.setNavigationScope({
+        ...(navigation.loaderId ? { loaderId: navigation.loaderId } : {}),
+        ...(navigation.frameId ? { frameId: navigation.frameId } : {}),
+      });
+      if (selectedRequestId && completedRequestIds.has(selectedRequestId)) {
+        // The response can complete before Page.navigate returns its loader.
+        finishActiveNetworkResponse?.(selectedRequestId);
+      }
     } else {
+      documentScopedNetworkCapture = networkCapture;
       const evaluation = await withTimeout(
         c.Runtime.evaluate({
           expression: buildFormPostNavigationExpr(targetUrl, options.body ?? ''),
@@ -1537,10 +2106,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       return evaluated.result.value === true;
     };
     const hasPredicate = Boolean(options.urlIncludes || options.selector || options.cookie);
-    const deadline = Date.now() + timeoutMs;
-    if (!hasPredicate) {
+    if (!captureDefinesCompletion && !hasPredicate) {
       await withTimeout(lifecyclePromise, `CDP Page.${options.waitUntil ?? 'load'}`, timeoutMs);
-    } else {
+    } else if (!captureDefinesCompletion) {
       let lastUrl = targetUrl;
       while (Date.now() < deadline) {
         lastUrl = await readCurrentPageUrl(c);
@@ -1602,26 +2170,78 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           .filter(Boolean)
           .join(' and ');
         throw new Error(
-          `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}`,
+          `browser navigation timed out after ${timeoutMs}ms waiting for ${criteria}; final URL was ${finalUrl}${options.actions?.length ? `; pre-action readiness failed; navigation.actions not started (${options.actions.length} pending)` : ''}`,
         );
       }
     }
 
-    for (const interaction of options.actions ?? []) {
+    for (const [actionIndex, interaction] of (options.actions ?? []).entries()) {
       if (interaction.action !== 'click') continue;
-      const target = await withTimeout(
-        c.Runtime.evaluate({
-          expression: buildNavigationClickTargetExpression(interaction.selector),
-          returnByValue: true,
-        }),
-        `CDP Runtime.evaluate(navigation click target ${JSON.stringify(interaction.selector)})`,
-        Math.max(1, deadline - Date.now()),
-      ).catch(() => null);
-      const point = target?.result.value as { x?: unknown; y?: unknown } | null | undefined;
-      if (typeof point?.x !== 'number' || typeof point.y !== 'number') {
-        throw new Error(
-          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)}`,
+      let point: { x: number; y: number } | undefined;
+      let targetDiagnostic: unknown;
+      let nonClickableKey: string | undefined;
+      let nonClickableSince = 0;
+      let stableNonClickable = false;
+      while (Date.now() < deadline) {
+        if (client !== c)
+          throw new Error('browser closed while waiting for navigation click target');
+        const target = await withTimeout(
+          c.Runtime.evaluate({
+            expression: buildNavigationClickTargetExpression(interaction.selector),
+            returnByValue: true,
+          }),
+          `CDP Runtime.evaluate(navigation click target ${JSON.stringify(interaction.selector)})`,
+          Math.max(1, deadline - Date.now()),
         );
+        if (target.exceptionDetails) {
+          const detail =
+            target.exceptionDetails.exception?.description ?? target.exceptionDetails.text;
+          throw new Error(`browser navigation click target evaluation failed: ${detail}`);
+        }
+        const value = target.result.value as
+          | { x?: unknown; y?: unknown; diagnostic?: unknown }
+          | null
+          | undefined;
+        targetDiagnostic = value?.diagnostic;
+        if (
+          targetDiagnostic &&
+          typeof targetDiagnostic === 'object' &&
+          (targetDiagnostic as { reason?: unknown }).reason === 'ambiguous_selector'
+        ) {
+          throw new Error(
+            `browser navigation click selector ${JSON.stringify(interaction.selector)} matched multiple elements; choose a unique target; target diagnostics: ${JSON.stringify(targetDiagnostic)}`,
+          );
+        }
+        if (
+          typeof value?.x === 'number' &&
+          typeof value.y === 'number' &&
+          Number.isFinite(value.x) &&
+          Number.isFinite(value.y)
+        ) {
+          point = { x: value.x, y: value.y };
+          break;
+        }
+        const nextKey = nonClickableTargetKey(targetDiagnostic);
+        if (nextKey !== nonClickableKey) {
+          nonClickableKey = nextKey;
+          nonClickableSince = Date.now();
+        } else if (
+          nextKey &&
+          Date.now() - nonClickableSince >= (opts.stableNonClickableWaitMs ?? 30_000)
+        ) {
+          stableNonClickable = true;
+          break;
+        }
+        await sleep(Math.min(pollIntervalMs, Math.max(1, deadline - Date.now())));
+      }
+      if (client !== c) throw new Error('browser closed while waiting for navigation click target');
+      if (!point || Date.now() >= deadline) {
+        throw new Error(
+          `browser navigation action could not find a visible click target for ${JSON.stringify(interaction.selector)} ${stableNonClickable ? 'after a stable non-clickable target' : `within ${timeoutMs}ms`}${targetDiagnostic ? `; target diagnostics: ${JSON.stringify(targetDiagnostic)}` : ''}`,
+        );
+      }
+      if (networkCapture?.matcher.actionIndex === actionIndex) {
+        activeNetworkResponseCapture = networkCapture;
       }
       await dispatchTrustedClick(
         c,
@@ -1646,6 +2266,39 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         );
       }
       await sleep(Math.min(500, Math.max(1, deadline - Date.now())));
+    }
+
+    if (networkCapture) {
+      let captured: CdpNetworkResponseCaptureOutcome;
+      try {
+        captured = await withTimeout(
+          networkCapture.outcome,
+          describeNetworkResponseMatcher(networkCapture.matcher),
+          Math.max(1, deadline - Date.now()),
+        );
+      } catch {
+        throw new Error(networkCapture.timeoutMessage(timeoutMs));
+      }
+      if (!captured.ok) throw new Error(captured.message);
+
+      const response = captured.response;
+      if (!captureDefinesCompletion) currentPageUrl = await readCurrentPageUrl(c);
+      const headers = new Headers(response.headers);
+      // CDP returns the decoded body, so wire-encoding/length headers would be
+      // inaccurate on the synthetic Response consumed by the workflow.
+      headers.delete('content-encoding');
+      headers.delete('content-length');
+      headers.delete('transfer-encoding');
+      headers.set('x-imprint-final-url', currentPageUrl);
+      headers.set('x-imprint-network-response-url', response.url);
+      headers.set('x-imprint-response-source', 'page-network');
+      if (response.method) headers.set('x-imprint-network-request-method', response.method);
+      if (response.resourceType) {
+        headers.set('x-imprint-network-resource-type', response.resourceType);
+      }
+      const status = response.status >= 200 && response.status <= 599 ? response.status : 200;
+      const responseBody = [204, 205, 304].includes(status) ? null : response.body;
+      return new Response(responseBody, { status, headers });
     }
 
     currentPageUrl = await readCurrentPageUrl(c);
@@ -1678,6 +2331,57 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     });
   };
 
+  const navigate: NonNullable<CdpBrowserFetch['navigate']> = async (rawUrl, options = {}) => {
+    const actionIndex = options.networkResponse?.actionIndex;
+    if (
+      actionIndex !== undefined &&
+      (!Number.isInteger(actionIndex) ||
+        actionIndex < 0 ||
+        actionIndex >= (options.actions?.length ?? 0))
+    ) {
+      throw new Error('networkResponse.actionIndex must identify an existing navigation action');
+    }
+    if (navigationInProgress) {
+      throw new Error('another browser navigation is already active in this workflow session');
+    }
+    navigationInProgress = true;
+    let networkCapture: CdpNetworkResponseCapture | null = null;
+    try {
+      const c = await ensure();
+      networkCapture = options.networkResponse
+        ? new CdpNetworkResponseCapture(options.networkResponse, {
+            afterRequestSequence: requestSequence,
+            deferUntilNavigationScope: true,
+            navigationMethod: options.method ?? 'GET',
+          })
+        : null;
+      if (networkCapture) {
+        completedRequestIds.clear();
+        if (actionIndex === undefined) activeNetworkResponseCapture = networkCapture;
+      }
+      return await navigateOnce(c, rawUrl, options, networkCapture);
+    } finally {
+      networkCapture?.cancel();
+      await networkCapture?.waitForBodyRead();
+      // Let a just-completed raw CDP read remove itself from the tracked set.
+      await Promise.resolve();
+      const hasDetachedBodyRead = activeNetworkBodyReads.size > 0;
+      if (activeNetworkResponseCapture === networkCapture) {
+        activeNetworkResponseCapture = null;
+        completedRequestIds.clear();
+      }
+      if (documentScopedNetworkCapture === networkCapture) {
+        documentScopedNetworkCapture = null;
+      }
+      // CDP body reads cannot be cancelled individually. If one ignored the
+      // navigation deadline, close this browser so it cannot overlap a later
+      // navigation from the pool; the same transport object can bootstrap a
+      // fresh browser on its next call.
+      if (hasDetachedBodyRead) await close();
+      else navigationInProgress = false;
+    }
+  };
+
   return {
     fetchImpl,
     navigate,
@@ -1698,6 +2402,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         ...page,
         cookies: cookies.map((cookie) => ({
           name: cookie.name,
+          value: cookie.value,
           domain: cookie.domain,
           path: cookie.path,
           expires: cookie.expires,

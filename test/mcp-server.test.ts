@@ -3,6 +3,7 @@ import {
   AuthContinuationStore,
   buildJsonSchema,
   buildToolDescription,
+  formatToolError,
   runSerializedBySite,
   selectMcpTools,
 } from '../src/imprint/mcp-server.ts';
@@ -234,5 +235,58 @@ describe('runSerializedBySite', () => {
     await expect(second).resolves.toBe('second');
     expect(events).toEqual(['first:start', 'second:start']);
     expect(queues.has('google-flights')).toBe(false);
+  });
+});
+
+describe('MCP failure evidence', () => {
+  it('exposes bounded page facts without replacing the failure or serializing extra page fields', () => {
+    const page = {
+      url: 'https://fixture.invalid/results',
+      title: 'Available records',
+      bodyText: 'result '.repeat(1_000),
+      truncated: false,
+      cookies: ['fixture-cookie-secret'],
+    };
+    const text = formatToolError({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Expected response never arrived.',
+      pageDiagnostic: page,
+    });
+    expect(text).toStartWith('[NETWORK] Expected response never arrived.');
+    expect(text).toContain('possibly before fallback; not the requested API response');
+    const facts = JSON.parse(text.slice(text.indexOf('{')));
+    expect(facts.title).toBe('Available records');
+    expect(facts.bodyText.length).toBe(3_000);
+    expect(facts.truncated).toBe(true);
+    expect(facts).not.toHaveProperty('cookies');
+    expect(text).not.toContain('fixture-cookie-secret');
+  });
+
+  it('keeps an earlier navigation timeout when the final fallback cannot navigate', () => {
+    const text = formatToolError(
+      { ok: false, error: 'BAD_RESPONSE', message: 'This transport cannot navigate.' },
+      undefined,
+      [
+        {
+          backend: 'cdp-replay',
+          outcome: 'escalate',
+          durationMs: 60000,
+          detail: 'NETWORK: timed out waiting for the selected response',
+        },
+        {
+          backend: 'stealth-fetch',
+          outcome: 'escalate',
+          durationMs: 12,
+          detail: 'BAD_RESPONSE: This transport cannot navigate.',
+        },
+        { backend: 'playbook', outcome: 'unavailable', durationMs: 0, detail: 'no playbook.yaml' },
+      ],
+    );
+    expect(text).toContain('[BAD_RESPONSE] This transport cannot navigate.');
+    expect(text).toContain('cdp-replay: escalate in 60000ms — NETWORK: timed out');
+    expect(text).toContain('stealth-fetch: escalate in 12ms');
+    expect(text).toContain('playbook: unavailable in 0ms — no playbook.yaml');
+    expect(text.indexOf('cdp-replay:')).toBeLessThan(text.indexOf('stealth-fetch:'));
   });
 });

@@ -27,7 +27,7 @@ bun install -g imprint-mcp
 imprint teach southwest --url https://www.southwest.com
 ```
 
-A browser opens. You drive the workflow and narrate what you're doing. Imprint records every request and interaction, then compiles a deterministic **MCP tool** your agent can call forever.
+A browser opens. You drive the workflows and narrate what you're doing. Imprint records every request and interaction, then compiles the complete discovered set of deterministic **MCP tools** your agent can call later.
 
 Want to try a finished MCP before recording anything?
 
@@ -81,7 +81,7 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </td>
 <td align="center" width="33%">
 <h3>2. Compile</h3>
-<p>Generates two replay artifacts:<br><br><code>workflow.json</code> — API-level replay<br><code>playbook.yaml</code> — DOM-level fallback<br><br>Credentials are redacted automatically.</p>
+<p>Builds an API workflow when the recording supports one. A DOM playbook is the final fallback, used only when the agent finds the faster replay paths incompatible.<br><br>Known login credentials are replaced with credential placeholders; other recorded data remains available to the agents.</p>
 </td>
 <td align="center" width="34%">
 <h3>3. Use</h3>
@@ -91,12 +91,258 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 </table>
 
 > [!TIP]
-> All three steps happen in a single `imprint teach` command. Credentials and PII are redacted automatically before anything reaches the LLM.
+> Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Only known user-supplied login credentials are replaced before teaching; cookies, API tokens, responses, and personal data remain visible to the agents.
 
-When one recording yields multiple tools, all candidates are selected by default.
-Imprint automatically includes upstream lookup/producer tools required by any
-selected downstream tool. Use `--primary-tool` to compile only the primary tool
-and its prerequisites; `--all-tools` makes the default full-set selection explicit.
+Recordings and logs, including files named `.redacted.json`, are not safe to share publicly. Automatic PII and token redaction is disabled; review any file before sharing it.
+Imprint writes `.redacted.json` with private file permissions. A teach that leaves
+planned tools unresolved reports a partial result and exits nonzero, even if some
+ready tools were published.
+
+For every teach, a master agent accounts for the complete discovered operation
+set. Focused advisors review tool boundaries and parameters, focused planners
+map one tool at a time, and focused compilers build one tool at a time. The
+master chooses the build waves: independent tools can run together, while a
+producer runs before its consumers. Failed checks return factual evidence to
+the master, which can revise the affected tool and its dependants without
+rebuilding unrelated tools. Recorded response availability is supplied before
+MVP selection. The boundary advisor and master receive the same human scope.
+Agents choose separate tools for distinct recorded purposes before narrowing each
+tool's inputs; unsupported purposes remain explicit coverage limits. Invalid focused-planner reports return exact diagnostics to the
+master for repair while preserving successful sibling proposals; they never
+become accepted execution plans. The retained master receives changed research
+handoffs without repeatedly resending unchanged history; host validation still
+uses the full evidence. Codex teaches use one native agent family, with up to ten
+concurrent children. Agents can delegate further and continue the same conversations
+through repairs. Each research pass stays in one native assignment: test and
+inspection results return directly to that researcher, with the same host validation.
+Master, planner and reviewer repairs and shared-memory queries use that same channel,
+without routing every intermediate response through the parent.
+Inspected alternative requests carry their nearest recorded action, and agents
+explain how any substituted request compares with the selected purpose. Shared
+research delivers a short index; detailed methods and failed approaches are
+stored as immutable assets that agents read only when relevant.
+Independent research calls keep separate browser state and reserve paced start times
+without holding a shared site lock through slow responses.
+Master-directed follow-ups resume the same child. Codex owns child lifecycle and concurrency; Imprint retains
+provider retries, deadlines, execution tools and strict evidence checks. Other
+providers retain their existing execution paths with four focused workers.
+Independent research repairs share the master’s parallel waves; dependent repairs,
+compilation and execution follow the accepted producer ordering. Compiler conversations
+survive revision-directory changes, and finished tools enter verification immediately
+while independent siblings continue compiling. Consumers still wait for verified producers.
+Capture timeouts group repeated endpoint facts so telemetry does not crowd out
+distinct responses, while keeping matching and readiness rules unchanged.
+Research request diagnostics also show bounded decoded body differences, helping
+agents distinguish changed inputs from accidental nesting or encoding changes.
+Agents judge those differences; they are not an automatic pass/fail rule.
+
+Before that tool's planning, one retained researcher conversation first proves the
+smallest useful API call. If part of the selected MVP contract or a required
+downstream value is still unproven, the researcher returns that working partial
+result instead of pretending it is complete or discarding it. Optional breadth
+waits for the later best-effort pass. Once all first passes finish, the master
+can send the exact missing question back to that same conversation with only
+the relevant sibling results and recorded requests.
+An independent proven tool can prepare its plan and compile a draft while
+other research continues, when no queued research needs that attention. The master still
+reviews the complete plan before normal verification and publication; only an
+exactly matching draft is reused. With native delegation, completed research reaches
+the master while unrelated drafts finish. Those drafts settle before final planning
+can reuse or replace them. Declared consumers retain producer-first ordering.
+Researchers can call proven sibling requests with fresh inputs before testing a
+consumer; recorded continuation values are not a substitute for fresh output.
+Compilers can inspect full retained responses from that tool's earlier research
+through a local index, then choose relevant repeat and contrast cases for offline
+checks. Each observation keeps its own inputs, outcome and response chain. Researchers can
+query an entire retained response with a bounded, offline data projection; failed
+queries return for repair, and projected output is labelled separately from raw text.
+Teaching now selects a fixed set of recording-backed examples and matches live calls to those examples, changing only expired dates or state. A separate evidence reader establishes expected facts from raw recorded/live responses before seeing parser output, then judges the parser against those facts. Citations can quote the original response bytes or their displayed JSON representation. Each selected live case is reviewed against its matched recorded response chain; unrelated fixtures are left for their own case reviews. Every selected live case and declared dependency chain must pass before publication. Missing coverage is unverified, and raw failures stay with the draft for repair. Fixture bodies are checked before compilation, and research history and inspected recording evidence survive same-run contract revisions. Grounded input mappings are kept separate from the limits of the recorded test cases; missing contrasts alone should not freeze a tool to recorded constants. Research can batch selected calls sequentially and retain isolated browsers during agent thinking. Bootstrap snapshots are cached separately by the requested URL, and capture failures show which matcher conditions failed; cold-start setup remains unchanged. Readiness failures state when no actions have started, and schema repair errors name the exact required fields. These checks need fresh repeated validation before a reliability claim.
+
+Repair or extend an installed data tool with `imprint refine <site> --tool <name> --issue "<change>" --from-session <recording.json>`. Refinement works in an isolated staging home, preserves existing parameter contracts, and requires recording/live verification plus a strict audit before replacement. Failed refinements preserve installed tools and local evidence. Use `imprint audit <site> --strict` to reject known broken calls even when the aggregate score exceeds 95%. See [targeted refinement](docs/refinement.md).
+
+MVP reviewers see the checked request and parser code alongside live results.
+Publication retains the backend from that exact reviewed passing call in
+`backends.json`, so a fresh MCP process starts on the tested path. This records
+one execution choice, not a cold/warm benchmark or proof of repeatability.
+They also receive actual research comparisons and inspected response excerpts,
+not just the researcher's explanation of what those tests proved.
+Agents are instructed to distinguish competing meanings of ambiguous fields
+with focused evidence, rather than treating a coincidentally matching number
+as proof. Uncertain mappings go back to the master for research or a narrower MVP.
+Invalid research handoffs also return to the master with their actual test
+history, rather than ending the whole teach or counting as an API failure.
+Browser snapshots are reused by tool and rung without cookie-name requirements.
+An explicit bootstrap URL runs before resolving request URLs that need its
+captured state. MCP closes an idle or timed-out tool's CDP sessions without
+closing another tool's browser, and a cancelled call does not start another rung.
+Fetch-bootstrap tries the API request before deciding whether to escalate; a
+missing cookie marker is not reported as an HTTP failure.
+Rewording auth or token notes reuses that proof; the master explicitly requests
+new research when the actual strategy changes.
+The final reviewer receives the same human scope and checks requested tool
+connections rather than requiring explicitly excluded operations.
+If an agent mistypes run metadata, repair feedback supplies the exact current values.
+Recorded page references support generated API-navigation URLs; the final URL
+need not appear literally in the recording, but must be grounded and live-tested.
+Tool handoffs use agent-selected concrete result paths, not array wildcards.
+Binding failures explain the path problem and distinguish it from an API call failure.
+Result reviewers see the actual invocation inputs; an unrelated planned test's
+expected answer is never substituted for the research baseline or a chain call.
+A successful chain result can be reviewed even if a standalone test failed;
+that failed test remains visible and still prevents completion until repaired.
+Compiler guidance separates a returned value's location from its meaning and
+omits uncertain optional metadata instead of filling it from unrelated matching
+shapes. Extra responses used to corroborate research stay in the evidence;
+required execution requests must contribute necessary state or core output.
+Agents ground rendered-result completion checks in core content and inspect
+observed layout variations before treating an incidental element as required.
+Agents can scope a background response capture to a specific navigation click.
+Requests started before that action cannot satisfy the capture, including ones
+that finish later. Without an action boundary, capture starts with navigation.
+Navigation clicks wait for the selected target to become clickable within the
+existing navigation deadline, then dispatch once. Failed clicks report bounded
+match, geometry, computed-style and center-hit facts so agents can repair their
+chosen interaction from actual page evidence.
+Before accepting a navigation capture as reusable, researchers repeat a valid
+input and compare a small core-input variation with the same candidate. They
+reuse existing decisive observations and distinguish session reuse from setup.
+When a background capture fails despite current page results, agents inspect
+their delivery source, including structured document data. Changing the baseline
+input does not repair the failed valid case. Reviewers trace ambiguous metadata
+to its context; matching keywords or units alone cannot justify a named field.
+Compilers test the complete current research response before live validation,
+including result frames beyond initial metadata, alongside recording examples.
+For a request chain, they receive its actual ordered response bodies as a local
+offline fixture. They test associations using current response identities and
+unmatched records, rather than copying one example's values into parser logic.
+For framed protocols, a small parser test checks that an earlier empty or metadata
+frame does not hide later records; agents derive the expected result from evidence.
+Failed browser calls can include bounded page evidence from browser inspection,
+including through fallback and MCP audit errors. Agents use it to investigate missing
+captures without treating a timeout as automatic infrastructure failure or rendered
+text as API success. Network-capture timeouts also include a bounded list of
+observed response endpoints, methods, resource types, statuses and navigation
+scope facts, with omitted counts. These facts help agents compare a failed
+matcher with actual traffic; they do not change response selection.
+Parser checks distinguish unsupported missing fields from evidenced protocol defaults.
+Auditors receive exact report tool names.
+Planning and final review also check how callers obtain required inputs,
+without relying on identifiers hidden in the recording.
+Research uses a small contrasting core-input check before claiming parameter
+mappings are proven; optional parameter breadth remains deferred.
+Agents check the advertised meaning, not just whether results change; a range
+contrast distinguishes its bounds from a fixed result region that merely moves.
+Handoffs identify the response evidence that establishes the core records' scope
+for the compiler to preserve. Demonstrated ignored inputs return for contract
+revision; they are not deferred as optional minimization. Audits distinguish a
+bound pair's combined behavior from proof of each input's individual effect.
+For rendered results after navigation or actions, agents verify that the current
+collection finished rendering; document load, a page shell, or an updated control
+alone cannot establish readiness. When timing is uncertain, agents compare
+initial setup with changed-input calls in the same tool's warm session.
+Selection handling respects structured field boundaries and complete identities.
+Checking an input does not prove that it selects the corresponding result.
+That contrast must distinguish claimed mappings from defaults; changing one
+input does not prove the others, and unproven mappings return for follow-up.
+The master reviews that evidence even when research labels itself proven;
+missing proof within one tool can return to its retained researcher.
+Live verification uses the planner's selected test inputs, not a replacement
+with the research baseline; the proven backend remains reusable.
+The planner chooses that first live case to challenge weak core evidence;
+additional unexecuted cases are not claimed as coverage.
+Research handoff repair reports independent missing fields together, so one
+repair turn can correct the candidate, test reference, and remaining proof gaps.
+If a repair exposes further schema errors, the same conversation can correct
+them within the shared deadline. Identical rejected outputs stop the repair loop;
+invalid decisions never execute.
+Blocked terminal counts include unresolved discoveries even when no tool was planned.
+Researchers can inspect or search bounded portions of retained live results,
+including HTML attributes and embedded state, without repeating the API call.
+Compilers receive the selected research call's full saved response and inputs
+for offline parser tests, not just a written summary. This evidence stays out of
+published runtime artifacts.
+After live failures, the master can return an unchanged tool to its retained
+researcher with the actual failure evidence, then replan only the affected tool.
+MVP reviewers receive the checked build's parser to distinguish observed values
+from input echoes; audits require an attributable effect, not merely changed ordering.
+Server-returned query text is also an echo, not proof of applied settings.
+Final review also sees prior semantic rejections and their actual inputs, so a
+later passing baseline does not silently erase an unresolved core failure.
+MVP reviewers check returned values against their claimed meaning: optional
+breadth can wait, but mislabeled data is a repair, not polish.
+If the Codex child reports missing stdin despite a non-empty prompt, Imprint
+retries that exact delivery once on the same conversation and deadline.
+
+Researchers can return a concrete input or dependency gap for a master decision
+without exhausting transport permutations. The master coordinates affected
+producer outputs and consumer inputs together; fresh live proof is still required.
+Agents can plan repeated calls to the same tool and bind each call to an exact
+prior result. The runtime checks a finite invocation order and invalidates dependent
+proof when that source result changes; a continuation does not require a separate
+public tool. Existing single-call plans retain their behavior.
+Chain checks and audits compare actual producer record structures with the
+consumer's public contract. One selected record can contain several members;
+unless explicitly excluded, an available fresh multi-member record is checked
+and compared with the complete consumer result.
+A passing singleton check does not establish that every selected member survives.
+Validation, request construction, and parsing keep group properties separate
+from member properties; a valid group need not repeat its overall fields on every
+member. Parsers preserve the distinction between alternatives and required
+components, including when action links exist only on components. Verification
+compares eligible source records with the output and checks each attribute against
+its own evidence; a plausible subset or matching sibling value is insufficient.
+Missing optional details must not erase required members, and constructed
+selections must preserve the complete selected record through the consumer result.
+Reviewers also report
+explicit parser or request guards that reject inputs allowed by the public contract;
+a fixture's shape must not silently become a restriction on callers.
+
+Generated modules reload from their resolved filesystem paths, so repeated
+research tests also work when the teach directory is reached through a symlink.
+Generated wrappers forward caller cancellation and request/response observation
+callbacks. Cancellation reaches active fetch requests and response reads; a
+cancelled call is reported separately from a request timeout. Raw prepared-request
+observations stay inside host diagnostics. Parsers distinguish a valid empty
+result from a missing or unsupported result envelope.
+
+Semantic agents receive the current shared deadline and remaining time on each
+turn, including output repairs, so they can budget for compilation and live
+checks. Repair feedback identifies missing fields by path and expected type,
+including whether a list or scalar is expected. Invalid output remains rejected.
+Baseline and dependency API calls are cancelled when that budget expires,
+with a short bounded cleanup period; late results cannot become successful checks.
+Exhausting the run deadline is reported as a failed run; provider
+unavailability is reserved for an actual provider interruption.
+
+Every teach is fresh and stays in the foreground until it reaches a terminal
+result. There are no resume, phase-window, primary-tool, or partial-selection
+modes. A run succeeds only when every planned tool is verified; otherwise the
+terminal reports the failure honestly and exits non-zero.
+
+For an API operation that only the page can construct, a workflow navigation
+may explicitly select one matching live background response and return its body
+to the parser. The teaching agent derives that matcher from recording evidence;
+the runtime does not guess which request matters or turn the capability into a
+site rule. The recorded response used for offline checks is separate from the
+response order in a fresh live call. Playbooks remain the final fallback.
+
+During research and compilation, request transforms can compute navigation
+targets and click actions from current inputs or earlier responses. The declared
+API response matcher stays fixed so live and offline checks select the same data.
+Dependent selections preserve the machine values required by the next tool.
+Producer compilers receive the current tested consumer construction for declared
+links, so they can check the required representation instead of guessing from names.
+Adding contextual recording references preserves request proof when the tested
+request and public inputs remain covered; executable request changes still need
+matching proof. Parser tests compare contrasting fixture records and check that
+reported summaries agree with their underlying data. They retain records with
+absent optional fields and distinguish requested context from observed attributes.
+Provider capacity failures retry the same conversation within the existing
+deadline; deterministic request and access errors remain terminal.
+Compile-time browser cleanup waits for concurrent calls to finish; one completed
+request cannot idle-close another request's active browser.
+MCP failures include the completed backend attempts and timings, so a final
+fallback error does not hide an earlier navigation timeout.
 
 The recorder also has a bounded fallback for Next.js React Server Component
 responses that Chromium evicts before `Network.getResponseBody` can read them.
@@ -166,6 +412,9 @@ bunx playwright install chromium
 | 4 | Cursor | `cursor` on PATH |
 
 Override with `--provider <name>` and `--model <name>`.
+Codex teaching defaults to `gpt-6-sol`. Keep the Codex CLI current when using
+that model for audits or standalone compilation; older installations may reject
+it even when the Codex app offers it.
 
 </details>
 
@@ -196,21 +445,28 @@ The full order is `fetch → fetch-bootstrap → cdp-replay → stealth-fetch �
 
 For bot-protected sites, `imprint probe-backends <site> --tool <toolName>` writes a `backends.json` preference cache so cron and MCP start from the known-good backend instead of rediscovering blocked rungs. Use `imprint probe-backends <site> --all` to refresh every tool in a multi-tool site; `imprint mcp status` reports stale or invalid backend caches before they quietly fall back to the default ladder. CDP replay records both cold and warm timings when it succeeds: a timeout-safe cold start may rank by its fast warm runtime, but a cold start above the preferred threshold stays behind cold-safe backends in durable cache order.
 
-During `imprint teach`, the independent final verifier uses the same probe before it runs the compiler-written integration suite. Probe time is separate from the suite timeout, and verification pins the selected backend. Compiler revisions reuse that proven preference without probing; only a transport/network/browser failure can prompt a reprobe. Semantic failures return directly to the compiler. Live verifier progress and retained suite receipts are written beside the generated tool as `.live-verifier-log.jsonl` and `.live-verification-evidence.json`.
+During `imprint teach`, each tool goes through contract, replay, live, and
+producer-consumer checks as applicable. The checks leave factual receipts. A
+failure goes back to the master for a focused repair, and an independent final
+reviewer sees both the current plan and the check history before the run can
+complete.
 
-Every recording compiles to *both* `workflow.json` and `playbook.yaml`, so the ladder always has a DOM fallback.
+The agent prefers an API `workflow.json`. It adds `playbook.yaml` only as the
+last fallback when the higher replay rungs are not compatible with the
+recorded operation.
 
 ---
 
 ## Platform Support
 
-At the end of `imprint teach`, pick your AI platform and Imprint wires it up:
+After `imprint teach` completes, register the generated site with
+`imprint install <site> --platform <platform>`:
 
 | Platform | Integration |
 |:--|:--|
-| **Claude Code** | Automatic — runs `claude mcp add` |
-| **Codex CLI** | Automatic — runs `codex mcp add` |
-| **Claude Desktop** | Paste-ready JSON config |
+| **Claude Code** | Runs `claude mcp add` |
+| **Codex CLI** | Runs `codex mcp add` |
+| **Claude Desktop** | Writes or prints the MCP config |
 | **OpenClaw** | MCP config + SKILL.md export |
 | **Hermes** | MCP config + SKILL.md + cron mapping |
 
@@ -269,16 +525,20 @@ imprint <command> --help    # per-command options
 
 | Category | Commands |
 |:--|:--|
-| **Pipeline** | `teach` · `record` · `redact` · `generate` · `compile-playbook` · `emit` |
+| **Teaching** | `teach` (the single fresh foreground flow) |
+| **Artifact utilities** | `record` · `redact` · `generate` · `compile-playbook` · `emit` |
 | **Runtime** | `cron` · `mcp-server` · `playbook` · `probe-backends` · `audit` |
 | **Credentials** | `credential set` · `credential list` · `credential export` · `credential import` · `credential migrate` |
 | **Utilities** | `mcp` · `login` · `assemble` · `check` · `doctor` · `install` · `uninstall` |
+
+The artifact utilities are useful on individual files, but they are not
+resumable phases of `imprint teach`.
 
 ---
 
 ## Sharing Skills
 
-Teach on your laptop, ship to a remote agent. Generated MCP folders contain the portable tool artifacts: `workflow.json`, `playbook.yaml`, `index.ts`, optional shared modules, and cron/backend metadata. Copy `~/.imprint/<site>` into the receiver's `~/.imprint/<site>` or commit it to a private repo, install Imprint there, then register it:
+Teach on your laptop, ship to a remote agent. Generated MCP folders contain the portable tool artifacts: `workflow.json` or the fallback `playbook.yaml`, `index.ts`, optional parser/request-transform modules, and cron/backend metadata. Copy `~/.imprint/<site>` into the receiver's `~/.imprint/<site>` or commit it to a private repo, install Imprint there, then register it:
 
 ```bash
 bun install -g imprint-mcp
@@ -342,3 +602,5 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
 **[MIT License](LICENSE)**
 
 </div>
+
+Teach research retains each received response before later requests, extraction, or parsing can fail. Agents can inspect bounded excerpts of failed calls without repeating them; those responses remain failed evidence.

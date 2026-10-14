@@ -5,6 +5,7 @@
  * files are thin wrappers around executeWorkflow().
  */
 
+import { randomUUID } from 'node:crypto';
 import { dirname, resolve as pathResolve } from 'node:path';
 import {
   type CookieLookupConstraints,
@@ -19,6 +20,8 @@ import {
   readSiteManifest,
   saveSiteCookies,
 } from './credential-store.ts';
+import { redactFreeformText } from './freeform-redact.ts';
+import { importModuleFresh } from './import-module-fresh.ts';
 import {
   captureHeader,
   captureValueMatches,
@@ -27,6 +30,7 @@ import {
 } from './request-capture.ts';
 import type {
   RequestCapture,
+  RequestStageFact,
   StateCapability,
   StateMissingItem,
   ToolResult,
@@ -48,19 +52,27 @@ export interface CredentialStore {
 }
 
 type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
+type NavigationOverride = Omit<Partial<NavigationOptions>, 'networkResponse'>;
 type RequestTransformResult =
   | string
   | {
       url?: string;
       body?: string;
       headers?: Record<string, string>;
-      navigation?: Partial<NavigationOptions>;
+      navigation?: NavigationOverride;
       skip?: boolean;
     };
 
+type RequestTransform = (
+  method: string,
+  url: string,
+  responses: unknown[],
+  params?: Record<string, string | number | boolean>,
+) => RequestTransformResult;
+
 function mergeNavigationOptions(
   base: WorkflowRequest['navigation'],
-  override: Partial<NavigationOptions>,
+  override: NavigationOverride,
 ): NavigationOptions {
   if (
     override.actions !== undefined &&
@@ -82,7 +94,39 @@ function mergeNavigationOptions(
   ) {
     throw new Error('request transform returned an invalid navigation result selector');
   }
-  return { ...base, ...override } as NavigationOptions;
+  // The workflow matcher is both the live selector and the offline proof. Letting
+  // a transform change any part would make those two executions select different
+  // responses, so the whole matcher is immutable.
+  if (
+    Object.prototype.hasOwnProperty.call(override as Record<string, unknown>, 'networkResponse')
+  ) {
+    throw new Error(
+      'request transform cannot override navigation.networkResponse; declare the complete immutable matcher in workflow.json',
+    );
+  }
+
+  return {
+    ...base,
+    ...override,
+  } as NavigationOptions;
+}
+
+/** URL that actually produced the body being captured. A page-network
+ * navigation returns a background response rather than its outer document, so
+ * response cookies and cookie captures must use that selected response URL. */
+function responseProvenanceUrl(
+  outgoingUrl: string,
+  navigation: WorkflowRequest['navigation'],
+  response: Response,
+): string {
+  if (!navigation?.networkResponse) return outgoingUrl;
+  const selectedUrl = response.headers.get('x-imprint-network-response-url');
+  if (!selectedUrl) return outgoingUrl;
+  try {
+    return new URL(selectedUrl).toString();
+  } catch {
+    return outgoingUrl;
+  }
 }
 
 /** Browser-only workflow operations supplied by cdp-replay. Keeping this
@@ -102,6 +146,7 @@ export interface BrowserNavigationTransport {
       selector?: string;
       actions?: Array<{ action: 'click'; selector: string }>;
       resultSelector?: string;
+      networkResponse?: NavigationOptions['networkResponse'];
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
@@ -145,6 +190,32 @@ export async function loadCredentialStore(site: string): Promise<CredentialStore
   return store;
 }
 
+export interface ResponseObservation {
+  requestIndex: number;
+  status: number;
+  bodyByteLength: number;
+  /** Bounded, redacted response prefix for teach/debug repair. It is factual
+   * context only and never participates in runtime decisions. */
+  redactedBodyPreview?: string;
+  contentType?: string;
+  valueType: 'null' | 'array' | 'object' | 'string' | 'number' | 'boolean';
+  topLevelKeys?: string[];
+  arrayLength?: number;
+}
+
+/** Host-only per-request evidence, emitted before status, capture or parser failures.
+ * Body text has known login values redacted; it is never ordinary tool output. */
+export interface ResponseEvidence {
+  attemptId: string;
+  requestIndex: number;
+  recordingRequestSeq?: number;
+  receivedAt: string;
+  status: number;
+  contentType?: string;
+  bodyText?: string;
+  readError?: string;
+}
+
 interface ExecuteOptions {
   workflow: Workflow;
   params: Record<string, string | number | boolean>;
@@ -164,6 +235,75 @@ interface ExecuteOptions {
   signal?: AbortSignal;
   /** Disable auth cookie/secret writes during offline request rendering. */
   persistAuthState?: boolean;
+  /** Internal observation hook used by teach/debug tooling after every
+   * substitution and request transform. Raw values stay inside the host and
+   * must be projected to bounded, value-free facts before reaching an agent.
+   * The transport may still add ordinary wire headers afterward. */
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void;
+  /** Teach/debug observation. It cannot affect execution and never receives an
+   * unbounded response body. */
+  onResponse?: (observation: ResponseObservation) => void;
+  /** Host-only offline evidence for a completed request chain. Receives a copy
+   * before parsing; never included in ordinary tool output or prompt previews. */
+  onRawResponses?: (responses: unknown[]) => void;
+  onResponseEvidence?: (evidence: ResponseEvidence) => void;
+}
+
+export interface PreparedRequestObservation {
+  requestIndex: number;
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body?: string;
+}
+
+function observePreparedRequest(
+  opts: ExecuteOptions,
+  requestIndex: number,
+  request: Pick<WorkflowRequest, 'method' | 'url' | 'headers' | 'body'>,
+): void {
+  try {
+    opts.onPreparedRequest?.({
+      requestIndex,
+      method: request.method,
+      url: request.url,
+      headers: { ...request.headers },
+      ...(request.body === undefined ? {} : { body: request.body }),
+    });
+  } catch {
+    // Diagnostics must never change the workflow's execution result.
+  }
+}
+
+function observeResponseEvidence(
+  opts: ExecuteOptions,
+  attemptId: string,
+  requestIndex: number,
+  request: WorkflowRequest,
+  response: Response,
+  text: string,
+  readError: string | undefined,
+  credentials: CredentialStore,
+): void {
+  if (!opts.onResponseEvidence) return;
+  try {
+    const values = new Map(
+      Object.entries(credentials.values).map(([name, value]) => [value, `\${credential.${name}}`]),
+    );
+    opts.onResponseEvidence({
+      attemptId,
+      requestIndex,
+      recordingRequestSeq: request.recordingRequestSeq,
+      receivedAt: new Date().toISOString(),
+      status: response.status,
+      contentType: response.headers.get('content-type')?.slice(0, 200) ?? undefined,
+      ...(readError === undefined
+        ? { bodyText: redactFreeformText(text, values).redacted }
+        : { readError: redactFreeformText(readError, values).redacted.slice(0, 1_000) }),
+    });
+  } catch {
+    /* Diagnostics never change execution or parser input. */
+  }
 }
 
 interface ResponseSlot {
@@ -171,11 +311,94 @@ interface ResponseSlot {
   aliases: Record<string, unknown>;
 }
 
+function bodyStageFacts(
+  body: string | undefined,
+): Pick<RequestStageFact, 'bodyPresent' | 'bodyByteLength'> {
+  return {
+    bodyPresent: body !== undefined,
+    bodyByteLength: body === undefined ? 0 : new TextEncoder().encode(body).byteLength,
+  };
+}
+
+const RESPONSE_OBSERVATION_KEYS = 32;
+const RESPONSE_OBSERVATION_KEY_BYTES = 200;
+export const RESPONSE_OBSERVATIONS_MAX = 256;
+export const RESPONSE_OBSERVATION_PREVIEW_BYTES = 4_000;
+const RESPONSE_OBSERVATION_TRUNCATED_SUFFIX = '\n[preview truncated]';
+
+function utf8Prefix(value: string, maximumBytes: number): string {
+  const bytes = Buffer.from(value, 'utf8');
+  if (bytes.length <= maximumBytes) return value;
+  let end = maximumBytes;
+  while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
+  return bytes.subarray(0, end).toString('utf8');
+}
+
+function boundedResponsePreview(text: string, credentials: CredentialStore): string {
+  const values = new Map(
+    Object.entries(credentials.values).map(([name, value]) => [value, `\${credential.${name}}`]),
+  );
+  const redacted = redactFreeformText(text, values).redacted;
+  if (Buffer.byteLength(redacted, 'utf8') <= RESPONSE_OBSERVATION_PREVIEW_BYTES) return redacted;
+  const suffixBytes = Buffer.byteLength(RESPONSE_OBSERVATION_TRUNCATED_SUFFIX, 'utf8');
+  return `${utf8Prefix(
+    redacted,
+    RESPONSE_OBSERVATION_PREVIEW_BYTES - suffixBytes,
+  )}${RESPONSE_OBSERVATION_TRUNCATED_SUFFIX}`;
+}
+
+function responseObservation(
+  requestIndex: number,
+  response: Response,
+  text: string,
+  parsed: unknown,
+  credentials: CredentialStore,
+): ResponseObservation {
+  let valueType: ResponseObservation['valueType'];
+  if (parsed === null) valueType = 'null';
+  else if (Array.isArray(parsed)) valueType = 'array';
+  else if (typeof parsed === 'object') valueType = 'object';
+  else if (typeof parsed === 'number') valueType = 'number';
+  else if (typeof parsed === 'boolean') valueType = 'boolean';
+  else valueType = 'string';
+  const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.slice(0, 200);
+  return {
+    requestIndex,
+    status: response.status,
+    bodyByteLength: new TextEncoder().encode(text).byteLength,
+    redactedBodyPreview: boundedResponsePreview(text, credentials),
+    ...(contentType ? { contentType } : {}),
+    valueType,
+    ...(Array.isArray(parsed) ? { arrayLength: parsed.length } : {}),
+    ...(parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+      ? {
+          topLevelKeys: Object.keys(parsed as Record<string, unknown>)
+            .sort()
+            .slice(0, RESPONSE_OBSERVATION_KEYS)
+            .map((key) => utf8Prefix(key, RESPONSE_OBSERVATION_KEY_BYTES)),
+        }
+      : {}),
+  };
+}
+
+function withRequestStageFacts<T>(
+  result: ToolResult<T>,
+  facts: readonly RequestStageFact[],
+): ToolResult<T> {
+  if (result.ok || facts.length === 0) return result;
+  return { ...result, requestStageFacts: [...facts] };
+}
+
+function requestReferencesMissingItem(request: WorkflowRequest, item: StateMissingItem): boolean {
+  return item.source === 'state' && collectStatePlaceholders(request).includes(item.name);
+}
+
 export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promise<ToolResult<T>> {
   if (opts.workflow.toolKind === 'authenticate') {
     return executeAuthWorkflow(opts) as Promise<ToolResult<T>>;
   }
 
+  const attemptId = randomUUID();
   const fetchFn = opts.fetchImpl ?? fetch;
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
 
@@ -221,36 +444,52 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
   // keeps legacy request.extract aliases without replacing raw parser input.
   const responseSlots: ResponseSlot[] = [];
   const state: Record<string, unknown> = { ...(opts.initialState ?? {}) };
+  const requestStageFacts: RequestStageFact[] = [];
 
   // Per-execution mutable jar. Never shared across MCP/cron calls.
   const cookieJar = new RuntimeCookieJar(credentials.cookies);
   const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
-  if (!dependencyPreflight.ok) return dependencyPreflight.result;
+  if (!dependencyPreflight.ok) {
+    const blockingRequestIndex = opts.workflow.requests.findIndex((request) =>
+      dependencyPreflight.result.missing?.some((item) =>
+        requestReferencesMissingItem(request, item),
+      ),
+    );
+    if (blockingRequestIndex >= 0) {
+      requestStageFacts.push({
+        requestIndex: blockingRequestIndex,
+        stage: 'preparation',
+        outcome: 'failed',
+      });
+    }
+    return withRequestStageFacts(dependencyPreflight.result, requestStageFacts);
+  }
 
-  let requestTransform:
-    | ((
-        method: string,
-        url: string,
-        responses: unknown[],
-        params?: Record<string, string | number | boolean>,
-      ) => RequestTransformResult)
-    | null = null;
+  let requestTransform: RequestTransform | null = null;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
       const transformPath = pathResolve(
         dirname(opts.workflowPath),
         opts.workflow.requestTransformModule,
       );
-      const mod = await import(transformPath);
-      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+      const mod = await importModuleFresh(transformPath);
+      if (typeof mod.transform === 'function') {
+        requestTransform = mod.transform as RequestTransform;
+      }
     } catch {
       // Non-fatal — proceed without transform.
     }
   }
 
   for (let i = 0; i < opts.workflow.requests.length; i++) {
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
+    }
     const req = opts.workflow.requests[i];
     if (!req) continue;
 
@@ -263,11 +502,37 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       stateCapabilities,
       requestUrlTemplate: req.url,
     });
-    if (!subbedResult.ok) return subbedResult.result;
+    if (!subbedResult.ok) {
+      requestStageFacts.push({ requestIndex: i, stage: 'preparation', outcome: 'failed' });
+      return withRequestStageFacts(subbedResult.result, requestStageFacts);
+    }
     const subbed = subbedResult.value;
+    requestStageFacts.push({
+      requestIndex: i,
+      stage: 'preparation',
+      outcome: 'passed',
+      ...bodyStageFacts(subbed.body),
+    });
     let navigation = req.navigation;
 
+    if (opts.workflow.requestTransformModule && !requestTransform) {
+      requestStageFacts.push({
+        requestIndex: i,
+        stage: 'transform',
+        outcome: 'unavailable',
+        ...bodyStageFacts(subbed.body),
+      });
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `request transform module was unavailable for request ${i}`,
+        },
+        requestStageFacts,
+      );
+    }
     if (requestTransform) {
+      const bodyBeforeTransform = subbed.body;
       try {
         const transformResult = requestTransform(
           subbed.method,
@@ -278,7 +543,16 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         if (typeof transformResult === 'string') {
           subbed.url = transformResult;
         } else if (transformResult && typeof transformResult === 'object') {
-          if (transformResult.skip === true) continue;
+          if (transformResult.skip === true) {
+            requestStageFacts.push({
+              requestIndex: i,
+              stage: 'transform',
+              outcome: 'skipped',
+              ...bodyStageFacts(subbed.body),
+              bodyChanged: false,
+            });
+            continue;
+          }
           if (typeof transformResult.url === 'string') subbed.url = transformResult.url;
           if (transformResult.body !== undefined) subbed.body = transformResult.body;
           if (transformResult.headers) {
@@ -290,29 +564,58 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
             navigation = mergeNavigationOptions(navigation, transformResult.navigation);
           }
         }
+        requestStageFacts.push({
+          requestIndex: i,
+          stage: 'transform',
+          outcome: 'passed',
+          ...bodyStageFacts(subbed.body),
+          bodyChanged: subbed.body !== bodyBeforeTransform,
+        });
       } catch (err) {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: `request transform failed for request ${i}: ${
-            err instanceof Error ? err.message : String(err)
-          }`,
-        };
+        requestStageFacts.push({
+          requestIndex: i,
+          stage: 'transform',
+          outcome: 'failed',
+          ...bodyStageFacts(subbed.body),
+          bodyChanged: subbed.body !== bodyBeforeTransform,
+        });
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `request transform failed for request ${i}: ${
+              err instanceof Error ? err.message : String(err)
+            }`,
+          },
+          requestStageFacts,
+        );
       }
     }
 
     const cookieHeader = cookieJar.getCookieHeader(subbed.url);
     if (cookieHeader && !hasHeader(subbed.headers, 'cookie')) subbed.headers.cookie = cookieHeader;
+    observePreparedRequest(opts, i, subbed);
+
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
+    }
 
     let resp: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
       if (!opts.browser) {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
-        };
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: `Request ${i} requires top-level browser navigation; retry with cdp-replay.`,
+          },
+          requestStageFacts,
+        );
       }
       try {
         resp = await opts.browser.navigate(subbed.url, {
@@ -325,7 +628,11 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         liveCredentials.cookies = cookieJar.toJSON();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` };
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          { ok: false, error: 'NETWORK', message: `Navigation ${i} failed: ${msg}` },
+          requestStageFacts,
+        );
       }
     } else {
       const controller = new AbortController();
@@ -335,23 +642,46 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           method: subbed.method,
           headers: subbed.headers,
           body: subbed.body,
-          signal: controller.signal,
+          signal: opts.signal
+            ? AbortSignal.any([opts.signal, controller.signal])
+            : controller.signal,
           redirect: 'follow',
         });
       } catch (err) {
         if (responseAbortTimer) clearTimeout(responseAbortTimer);
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('aborted') || msg.includes('AbortError')) {
-          return {
-            ok: false,
-            error: 'NETWORK',
-            message: `Request ${i} timed out after ${timeoutMs}ms`,
-            remediation: 'Retry, or increase the timeout if the endpoint is slow.',
-          };
+        if (opts.signal?.aborted) {
+          requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+          return withRequestStageFacts(
+            { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+            requestStageFacts,
+          );
         }
-        return { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` };
+        if (msg.includes('aborted') || msg.includes('AbortError')) {
+          requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+          return withRequestStageFacts(
+            {
+              ok: false,
+              error: 'NETWORK',
+              message: `Request ${i} timed out after ${timeoutMs}ms`,
+              remediation: 'Retry, or increase the timeout if the endpoint is slow.',
+            },
+            requestStageFacts,
+          );
+        }
+        requestStageFacts.push({ requestIndex: i, stage: 'send', outcome: 'failed' });
+        return withRequestStageFacts(
+          { ok: false, error: 'NETWORK', message: `Request ${i} failed: ${msg}` },
+          requestStageFacts,
+        );
       }
     }
+    requestStageFacts.push({
+      requestIndex: i,
+      stage: 'send',
+      outcome: 'passed',
+      httpStatus: resp.status,
+    });
 
     let text = '';
     let responseReadError: string | undefined;
@@ -363,74 +693,116 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
 
+    observeResponseEvidence(
+      opts,
+      attemptId,
+      i,
+      req,
+      resp,
+      text,
+      responseReadError,
+      liveCredentials,
+    );
+
+    if (opts.signal?.aborted) {
+      return withRequestStageFacts(
+        { ok: false, error: 'NETWORK', message: `Request ${i} was cancelled.` },
+        requestStageFacts,
+      );
+    }
+
     const bodyPreview = responseReadError
       ? `[response body unavailable: ${responseReadError}]`
       : text;
 
+    let parsed: unknown = text;
+    if (!responseReadError) {
+      try {
+        parsed = JSON.parse(text);
+      } catch {
+        // Not valid JSON — keep as raw text string.
+      }
+      try {
+        opts.onResponse?.(responseObservation(i, resp, text, parsed, liveCredentials));
+      } catch {
+        // Diagnostics must never change the workflow's execution result.
+      }
+    }
+
     if (resp.status === 401) {
-      return {
-        ok: false,
-        error: 'AUTH_EXPIRED',
-        message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
-        remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'AUTH_EXPIRED',
+          message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
+          remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status === 403) {
       // 403 = bot detection / geo / ToS / missing capability. The body
       // usually disambiguates — surface it rather than guessing.
-      return {
-        ok: false,
-        error: 'FORBIDDEN',
-        message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
-        remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'FORBIDDEN',
+          message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
+          remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status === 429) {
-      return {
-        ok: false,
-        error: 'RATE_LIMITED',
-        message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
-        remediation: 'Back off and retry after the Retry-After interval.',
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'RATE_LIMITED',
+          message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
+          remediation: 'Back off and retry after the Retry-After interval.',
+        },
+        requestStageFacts,
+      );
     }
     if (resp.status >= 400) {
-      return {
-        ok: false,
-        error: 'BAD_RESPONSE',
-        message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
+        },
+        requestStageFacts,
+      );
     }
     if (responseReadError) {
       const timedOut =
         responseReadError.includes('aborted') || responseReadError.includes('AbortError');
-      return {
-        ok: false,
-        error: 'NETWORK',
-        message: timedOut
-          ? `Request ${i} timed out after ${timeoutMs}ms`
-          : `Response ${i} could not be read: ${responseReadError}`,
-        remediation: timedOut
-          ? 'Retry, or increase the timeout if the endpoint is slow.'
-          : undefined,
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'NETWORK',
+          message: timedOut
+            ? `Request ${i} timed out after ${timeoutMs}ms`
+            : `Response ${i} could not be read: ${responseReadError}`,
+          remediation: timedOut
+            ? 'Retry, or increase the timeout if the endpoint is slow.'
+            : undefined,
+        },
+        requestStageFacts,
+      );
     }
 
     // Capture Set-Cookie response headers into the in-flight cookie jar before
     // evaluating captures. Set-Cookie is not exposed as a normal header capture.
+    const capturedResponseUrl = responseProvenanceUrl(subbed.url, navigation, resp);
     try {
       for (const sc of extractSetCookieHeaders(resp.headers))
-        cookieJar.setCookieFromHeader(sc, subbed.url);
+        cookieJar.setCookieFromHeader(sc, capturedResponseUrl);
       liveCredentials.cookies = cookieJar.toJSON();
     } catch {
       // Non-fatal; cookies stay as they were.
     }
 
-    let parsed: unknown = text;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // Not valid JSON — keep as raw text string.
-    }
     const aliases = evaluateLegacyExtract(req, parsed);
     responseSlots.push({ raw: parsed, aliases });
 
@@ -438,38 +810,51 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       parsed,
       text,
       headers: resp.headers,
-      requestUrl: subbed.url,
+      requestUrl: capturedResponseUrl,
       cookieJar,
     });
-    if (!captureResult.ok) return captureResult.result;
+    if (!captureResult.ok) return withRequestStageFacts(captureResult.result, requestStageFacts);
     Object.assign(state, captureResult.value);
   }
 
   // Apply parser if present
   let finalData = responseSlots.at(-1)?.raw ?? null;
+  if (opts.onRawResponses) {
+    try {
+      opts.onRawResponses(structuredClone(responseSlots.map((slot) => slot.raw)));
+    } catch {
+      // Evidence collection must not change execution or parser inputs.
+    }
+  }
   if (opts.workflow.parserModule && opts.workflowPath) {
     try {
       const parserModulePath = pathResolve(dirname(opts.workflowPath), opts.workflow.parserModule);
-      const mod = await import(parserModulePath);
+      const mod = await importModuleFresh(parserModulePath);
       if (typeof mod.extract !== 'function') {
-        return {
-          ok: false,
-          error: 'BAD_RESPONSE',
-          message: 'parser module does not export extract function',
-          remediation: 'regenerate the workflow via `imprint compile`',
-        };
+        return withRequestStageFacts(
+          {
+            ok: false,
+            error: 'BAD_RESPONSE',
+            message: 'parser module does not export extract function',
+            remediation: 'regenerate the workflow via `imprint compile`',
+          },
+          requestStageFacts,
+        );
       }
       finalData = mod.extract(finalData, {
         params,
         responses: responseSlots.map((s) => s.raw),
       });
     } catch (err) {
-      return {
-        ok: false,
-        error: 'BAD_RESPONSE',
-        message: `parser failed: ${err instanceof Error ? err.message : String(err)}`,
-        remediation: 'check the parser module or regenerate the workflow',
-      };
+      return withRequestStageFacts(
+        {
+          ok: false,
+          error: 'BAD_RESPONSE',
+          message: `parser failed: ${err instanceof Error ? err.message : String(err)}`,
+          remediation: 'check the parser module or regenerate the workflow',
+        },
+        requestStageFacts,
+      );
     }
   }
 
@@ -482,6 +867,7 @@ function emptyStore(site: string): CredentialStore {
 }
 
 async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
+  const attemptId = randomUUID();
   const authConfig = opts.workflow.authConfig;
   const params = { ...opts.params };
   for (const parameter of opts.workflow.parameters) {
@@ -521,20 +907,15 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       message: `Auth action ${JSON.stringify(actionName)} requires: ${missingParameters.join(', ')}.`,
     };
   }
-  let requestTransform:
-    | ((
-        method: string,
-        url: string,
-        responses: unknown[],
-        params?: Record<string, string | number | boolean>,
-      ) => RequestTransformResult)
-    | undefined;
+  let requestTransform: RequestTransform | undefined;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
-      const mod = await import(
-        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule)
+      const mod = await importModuleFresh(
+        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule),
       );
-      if (typeof mod.transform === 'function') requestTransform = mod.transform;
+      if (typeof mod.transform === 'function') {
+        requestTransform = mod.transform as RequestTransform;
+      }
     } catch {
       // A missing transform is surfaced by the request that depended on it.
     }
@@ -554,6 +935,21 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       continuation: Object.keys(initialState).length > 0 ? initialState : undefined,
     };
   };
+
+  if (opts.workflow.requestTransformModule && !requestTransform) {
+    return fail({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      message: `request transform module was unavailable for auth action ${JSON.stringify(actionName)}`,
+      requestStageFacts: [
+        {
+          requestIndex: action.steps[0]?.request ?? 0,
+          stage: 'transform',
+          outcome: 'unavailable',
+        },
+      ],
+    });
+  }
 
   const persistenceFailure = (material: string, err: unknown): RuntimeErrorResult =>
     fail({
@@ -647,6 +1043,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     const cookieHeader = cookieJar.getCookieHeader(request.url);
     if (cookieHeader && !hasHeader(request.headers, 'cookie'))
       request.headers.cookie = cookieHeader;
+    observePreparedRequest(opts, requestIndex, request);
 
     let response: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
@@ -720,6 +1117,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     } finally {
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
+    observeResponseEvidence(
+      opts,
+      attemptId,
+      requestIndex,
+      req,
+      response,
+      text,
+      responseReadError,
+      liveCredentials,
+    );
     if (response.status >= 400) {
       const bodyPreview = responseReadError
         ? `[response body unavailable: ${responseReadError}]`
@@ -746,8 +1153,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       };
     }
 
+    const capturedResponseUrl = responseProvenanceUrl(request.url, navigation, response);
     for (const header of extractSetCookieHeaders(response.headers)) {
-      cookieJar.setCookieFromHeader(header, request.url);
+      cookieJar.setCookieFromHeader(header, capturedResponseUrl);
     }
     liveCredentials.cookies = cookieJar.toJSON();
 
@@ -757,7 +1165,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     } catch {
       // Keep the raw body for text captures.
     }
-    const context = { parsed, text, headers: response.headers, requestUrl: request.url };
+    const context = { parsed, text, headers: response.headers, requestUrl: capturedResponseUrl };
     responseSlots.push({ raw: parsed, aliases: evaluateLegacyExtract(req, parsed) });
     const captures = evaluateRequestCaptures(req.captures ?? [], {
       ...context,

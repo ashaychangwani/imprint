@@ -2,19 +2,17 @@
  * Candidate-tool detection for `imprint teach`.
  *
  * One browser recording can exercise multiple user-facing intents. This pass
- * runs after redaction and before compile so teach can fan out the shared
- * session into one generated tool per selected candidate.
+ * runs after redaction and before the master plan so teach can account for the
+ * complete set of user-facing operations in the shared session.
  */
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { inferAppApiHosts } from './app-api-hosts.ts';
-import { getEndpointKey } from './endpoint-key.ts';
-import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonObject, resolveProvider } from './llm.ts';
 import { createLog } from './log.ts';
+import type { RunDeadlineRef } from './provider-retry.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -120,7 +118,6 @@ export const ToolCandidateSchema = z.object({
   description: z.string().min(1),
   rationale: z.string().min(1),
   confidence: z.number().min(0).max(1),
-  primary: z.boolean(),
   requestSeqs: z.array(z.number().int().nonnegative()).default([]),
   representativeSeqs: z.array(z.number().int().nonnegative()).default([]),
   eventSeqs: z.array(z.number().int().nonnegative()).default([]),
@@ -133,8 +130,8 @@ export const ToolCandidateSchema = z.object({
   expectedOutput: z.string().default(''),
   likelyParams: z.array(CandidateParamSchema).default([]),
   dependencySeqs: z.array(z.number().int().nonnegative()).default([]),
-  /** Direct user-visible tool prerequisites. A consumer may only be selected
-   *  together with the transitive closure of these producer tools. */
+  /** Direct user-visible tool prerequisites used by the master when it chooses
+   *  dependency-aware build waves. */
   dependsOnTools: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
 });
 export type ToolCandidate = z.infer<typeof ToolCandidateSchema>;
@@ -145,15 +142,6 @@ const ToolCandidateDetectionSchema = z
     candidates: z.array(ToolCandidateSchema),
   })
   .superRefine((value, ctx) => {
-    if (value.candidates.length === 0) return;
-    const primaryCount = value.candidates.filter((c) => c.primary).length;
-    if (primaryCount !== 1) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ['candidates'],
-        message: `expected exactly one primary candidate, got ${primaryCount}`,
-      });
-    }
     const names = new Set<string>();
     for (const [i, candidate] of value.candidates.entries()) {
       if (names.has(candidate.toolName)) {
@@ -191,13 +179,37 @@ interface DetectToolCandidatesResult extends ToolCandidateDetection {
   durationMs: number;
 }
 
+interface CandidateDetectorAnalyzer {
+  analyze(
+    systemPrompt: string,
+    payload: unknown,
+    options?: {
+      signal?: AbortSignal;
+      deadlineMs?: number;
+      runDeadline?: RunDeadlineRef;
+    },
+  ): Promise<{
+    text: string;
+    inputTokens: number | null;
+    outputTokens: number | null;
+    durationMs: number;
+  }>;
+}
+
 interface DetectToolCandidatesOptions {
   /**
-   * The input session has already been reduced by request triage. Trust that
-   * selected XHR/Fetch scope instead of re-applying the raw-session origin
-   * heuristic, which would drop public cross-origin APIs such as api.remitly.io.
+   * The caller has already selected the exact request scope. Preserve even
+   * telemetry-shaped XHR/Fetch entries instead of applying the normal compact
+   * telemetry filter.
    */
   trustSessionScope?: boolean;
+  /** Reuse one exact compact payload for this detector call. */
+  candidatePayload?: ToolCandidatePayload;
+  /** Focused test seam; production resolves the configured shipped provider. */
+  analyzer?: CandidateDetectorAnalyzer;
+  signal?: AbortSignal;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
 }
 
 export async function detectToolCandidates(
@@ -221,9 +233,11 @@ export async function detectToolCandidates(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-      const payload = buildToolCandidatePayload(session, {
-        trustSessionScope: opts.trustSessionScope,
-      });
+      const payload =
+        opts.candidatePayload ??
+        buildToolCandidatePayload(session, {
+          trustSessionScope: opts.trustSessionScope,
+        });
       const payloadChars = JSON.stringify(payload).length;
 
       setSpanAttributes(span, {
@@ -232,25 +246,19 @@ export async function detectToolCandidates(
         'imprint.detect.payload_chars': payloadChars,
       });
 
-      if (payload.requests.length === 0) {
-        throw new Error(
-          [
-            'Candidate detection received no eligible XHR/Fetch requests.',
-            'Imprint needs at least one data-bearing request to compile a tool.',
-            'This usually means triage removed the load-bearing API call, the recording only captured page/static traffic, or the workflow uses a browser-local calculation with no backend request.',
-          ].join('\n'),
-        );
-      }
-
       log(
         `detecting candidate tools from ${payload.events.length} event(s), ${payload.requests.length} request(s); ${Math.round(payloadChars / 1024)} KB payload…`,
       );
-      const llm = resolveProvider(llmConfig ?? {});
+      const llm: CandidateDetectorAnalyzer = opts.analyzer ?? resolveProvider(llmConfig ?? {});
       const runOnce = async (): Promise<{
         detection: ToolCandidateDetection;
         result: Awaited<ReturnType<typeof llm.analyze>>;
       }> => {
-        const result = await llm.analyze(systemPrompt, payload);
+        const result = await llm.analyze(systemPrompt, payload, {
+          signal: opts.signal,
+          deadlineMs: opts.deadlineMs,
+          runDeadline: opts.runDeadline,
+        });
         const objectText = extractJsonObject(result.text);
         if (!objectText) {
           throw new Error(
@@ -268,35 +276,10 @@ export async function detectToolCandidates(
         return { detection: validateToolCandidateDetection(parsed), result };
       };
 
-      let { detection, result } = await runOnce();
-
-      // Anti-collapse guard: a single candidate from a session that hit multiple
-      // distinct endpoint families is almost always under-segmentation (the
-      // detector folded separate tools — e.g. search vs pricing vs autocomplete —
-      // into one). This is pure LLM variance; re-run once and keep the richer
-      // segmentation. Targeted so genuinely single-tool sites don't pay for it.
-      if (detection.candidates.length === 1 && distinctEndpointFamilies(payload) >= 2) {
-        log(
-          'detector returned 1 candidate but the session spans ≥2 endpoint families — re-running once to guard against under-segmentation…',
-        );
-        try {
-          const retry = await runOnce();
-          if (retry.detection.candidates.length > detection.candidates.length) {
-            log(`retry segmented into ${retry.detection.candidates.length} candidates; using it`);
-            ({ detection, result } = retry);
-          } else {
-            log('retry did not segment further; keeping the original detection');
-          }
-        } catch (err) {
-          log(
-            `retry failed (${err instanceof Error ? err.message : String(err)}); keeping original`,
-          );
-        }
-      }
+      const { detection, result } = await runOnce();
 
       setSpanAttributes(span, {
         'imprint.candidate_count': detection.candidates.length,
-        'imprint.primary_tool_name': detection.candidates.find((c) => c.primary)?.toolName,
         'imprint.detect.duration_ms': result.durationMs,
         'imprint.detect.input_tokens': result.inputTokens,
         'imprint.detect.output_tokens': result.outputTokens,
@@ -312,40 +295,7 @@ export async function detectToolCandidates(
 }
 
 export function validateToolCandidateDetection(input: unknown): ToolCandidateDetection {
-  const raw = ToolCandidateDetectionSchema.parse(input);
-  const before = raw.candidates.length;
-  if (before === 0) {
-    throw new Error(
-      [
-        'Candidate detector did not identify any tool candidates backed by requests.',
-        'Imprint needs at least one candidate with requestSeqs so the compiler has an API call to replay.',
-      ].join('\n'),
-    );
-  }
-  raw.candidates = raw.candidates.filter((c) => c.requestSeqs.length > 0);
-  if (raw.candidates.length === 0) {
-    throw new Error(
-      `All ${before} candidate(s) had empty requestSeqs — cannot compile tools without backing requests.`,
-    );
-  }
-  if (raw.candidates.length < before) {
-    log(
-      `dropped ${before - raw.candidates.length} candidate(s) with empty requestSeqs (${raw.candidates.length} remaining)`,
-    );
-  }
-  if (!raw.candidates.some((c) => c.primary)) {
-    const first = raw.candidates[0];
-    if (first) first.primary = true;
-  }
-  return raw;
-}
-
-export function primaryToolCandidate(detection: ToolCandidateDetection): ToolCandidate {
-  const primary = detection.candidates.find((c) => c.primary);
-  if (!primary) {
-    throw new Error('candidate detection has no primary candidate');
-  }
-  return primary;
+  return ToolCandidateDetectionSchema.parse(input);
 }
 
 /** Add deterministic candidate-level dependencies from request evidence.
@@ -415,61 +365,7 @@ export function mergeCandidateDependencies(
   }));
 }
 
-interface CandidateSelectionClosure {
-  selected: ToolCandidate[];
-  autoAdded: ToolCandidate[];
-  /** Cycles encountered while walking selected dependencies. Each path repeats
-   *  its first name at the end, e.g. ["a", "b", "a"]. */
-  cycles: string[][];
-}
-
-/** Return the transitive dependency closure in original detection order.
- * Cycles are included exactly once and reported, never treated as recursion
- * errors. Unknown selected/dependency names are ignored. */
-export function closeCandidateSelection(
-  candidates: ToolCandidate[],
-  selectedToolNames: Iterable<string>,
-): CandidateSelectionClosure {
-  const byName = new Map(candidates.map((candidate) => [candidate.toolName, candidate]));
-  const initiallySelected = new Set([...selectedToolNames].filter((name) => byName.has(name)));
-  const included = new Set<string>();
-  const visiting: string[] = [];
-  const cycles: string[][] = [];
-  const cycleKeys = new Set<string>();
-
-  const include = (name: string): void => {
-    if (included.has(name)) return;
-    const candidate = byName.get(name);
-    if (!candidate) return;
-    const cycleStart = visiting.indexOf(name);
-    if (cycleStart >= 0) {
-      const cycle = [...visiting.slice(cycleStart), name];
-      const key = [...new Set(cycle.slice(0, -1))].sort().join('\u0000');
-      if (!cycleKeys.has(key)) {
-        cycleKeys.add(key);
-        cycles.push(cycle);
-      }
-      return;
-    }
-    visiting.push(name);
-    for (const dependency of candidate.dependsOnTools) include(dependency);
-    visiting.pop();
-    included.add(name);
-  };
-
-  for (const name of initiallySelected) include(name);
-  const selected = candidates.filter((candidate) => included.has(candidate.toolName));
-  return {
-    selected,
-    autoAdded: selected.filter((candidate) => !initiallySelected.has(candidate.toolName)),
-    cycles,
-  };
-}
-
-export function buildSharedCompileContext(
-  detection: ToolCandidateDetection,
-  _selected: ToolCandidate[],
-): SharedCompileContext {
+export function buildSharedCompileContext(detection: ToolCandidateDetection): SharedCompileContext {
   return {
     ...detection.sharedContext,
     loginRequestSeqs: [...new Set(detection.sharedContext.loginRequestSeqs)].sort((a, b) => a - b),
@@ -499,7 +395,7 @@ interface CandidateRequestPayload {
   lastTimestamp?: number;
 }
 
-interface ToolCandidatePayload {
+export interface ToolCandidatePayload {
   site: string;
   url: string;
   narration: Array<{ seq: number; timestamp: number; text: string }>;
@@ -511,15 +407,9 @@ export function buildToolCandidatePayload(
   session: Session,
   opts: DetectToolCandidatesOptions = {},
 ): ToolCandidatePayload {
-  const startRoot = candidateStartRoot(session);
-  const appApiHosts = inferAppApiHosts(session, startRoot);
   const requests = compactRequestContexts(
     session.requests
-      .filter((request) =>
-        isCandidateRequest(request, startRoot, appApiHosts, {
-          trustSessionScope: opts.trustSessionScope,
-        }),
-      )
+      .filter((request) => isCandidateRequest(request, opts))
       .map((request) => {
         const body = truncate(request.body, BODY_LIMIT);
         const responsePreview = truncate(request.response?.body, RESPONSE_PREVIEW_LIMIT);
@@ -564,27 +454,6 @@ export function buildToolCandidatePayload(
   };
 }
 
-function candidateStartRoot(session: Session): string | null {
-  for (const value of [
-    session.url,
-    ...session.events.filter((event) => event.type === 'navigation').map((event) => event.detail),
-    ...session.requests
-      .filter((request) => request.resourceType === 'Document')
-      .map((request) => request.url),
-  ]) {
-    const root = rootFromHttpUrl(value);
-    if (root) return root;
-  }
-  return null;
-}
-
-function rootFromHttpUrl(value: string): string | null {
-  const url = safeUrl(value);
-  if (!url || !url.hostname) return null;
-  if (url.protocol !== 'http:' && url.protocol !== 'https:') return null;
-  return registrableDomain(url.hostname) || null;
-}
-
 function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   return [
     request.method,
@@ -600,42 +469,21 @@ function candidateRequestGroupKey(request: CandidateRequestPayload): unknown[] {
   ];
 }
 
-/** Telemetry / beacon endpoints. These fire constantly during any real session
- *  and are never the load-bearing request behind a user intent. Left in the
- *  candidate payload they add noise that pushes the detector to under-segment,
- *  and — worse — the detector can anchor a candidate's `requestSeqs` on one
- *  (e.g. Google's `/log`), sending compile to reverse-engineer a beacon. Excluded
- *  entirely. The boundary lookahead keeps `/login`, `/catalog`, etc. safe. */
-/** Count distinct endpoint families (batchexecute rpcid, else METHOD+path) that
- *  carry a non-trivial number of requests. ≥2 means the session genuinely hit
- *  multiple backends — a single detected candidate there signals under-
- *  segmentation. */
-function distinctEndpointFamilies(payload: ToolCandidatePayload): number {
-  const counts = new Map<string, number>();
-  for (const r of payload.requests) {
-    const key = getEndpointKey(r as unknown as CapturedRequest);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  let families = 0;
-  for (const c of counts.values()) if (c >= 3) families++;
-  return families;
-}
-
+/** Trust an explicitly triaged scope exactly. Otherwise keep every
+ * non-telemetry XHR/Fetch across hosts so public APIs remain visible to the
+ * master; the agents decide which requests implement user-facing operations. */
 function isCandidateRequest(
   request: CapturedRequest,
-  startRoot: string | null,
-  appApiHosts: Set<string>,
   opts: DetectToolCandidatesOptions = {},
 ): boolean {
   if (request.resourceType !== 'XHR' && request.resourceType !== 'Fetch') return false;
   const url = safeUrl(request.url);
   if (!url) return false;
-  if (isTelemetryRequest(request)) return false;
+  // A caller that supplies a triaged evidence package has already selected its
+  // request scope. Preserve it exactly; reclassifying it here can silently hide
+  // evidence the discovery agent needs.
   if (opts.trustSessionScope) return true;
-  if (startRoot && !isSameRegistrableDomain(url.hostname, startRoot)) {
-    return appApiHosts.has(url.hostname);
-  }
-  return true;
+  return !isTelemetryRequest(request);
 }
 
 function likelyLoginOrAuth(request: CapturedRequest): boolean {
@@ -645,9 +493,9 @@ function likelyLoginOrAuth(request: CapturedRequest): boolean {
   const headerText = JSON.stringify(request.headers ?? {}).toLowerCase();
   if (/\$\{credential\.[^}]+\}/.test(`${endpointText} ${headerText}`)) return true;
 
-  // Data requests often carry CSRF headers. Treat endpoint/body semantics as the
-  // signal so normal authenticated API calls do not get mislabeled as auth setup.
-  return /login|signin|sign-in|authenticate|authentication|oauth|session|password|csrf|token/.test(
+  // CSRF headers are common on ordinary data requests. Endpoint/body semantics
+  // are the hint so authenticated API calls are not all mislabeled as setup.
+  return /login|signin|sign-in|authenticate|authentication|oauth|session|password|csrf/.test(
     endpointText,
   );
 }

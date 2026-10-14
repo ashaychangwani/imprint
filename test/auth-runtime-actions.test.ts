@@ -9,6 +9,7 @@ import {
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  type ResponseEvidence,
   executeWorkflow,
 } from '../src/imprint/runtime.ts';
 import { type Workflow, WorkflowSchema } from '../src/imprint/types.ts';
@@ -93,6 +94,87 @@ afterEach(() => {
 });
 
 describe('auth action runtime', () => {
+  it('retains each auth response before a later request fails', async () => {
+    const evidence: ResponseEvidence[] = [];
+    let calls = 0;
+    const wf = workflow({
+      requests: [
+        { method: 'POST', url: 'https://fixture.test/first', headers: {} },
+        { method: 'POST', url: 'https://fixture.test/second', headers: {} },
+      ],
+      authConfig: {
+        entry: 'login',
+        actions: {
+          login: {
+            steps: [{ request: 0 }, { request: 1 }],
+            outcome: {
+              type: 'pause',
+              next: 'login',
+              evidence: [],
+              carry: [],
+              message: 'Continue.',
+            },
+          },
+        },
+      },
+    });
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async () =>
+        ++calls === 1
+          ? new Response('first retained')
+          : new Response('second failed', { status: 400 })) as unknown as typeof fetch,
+      onResponseEvidence: (item) => evidence.push(item),
+    });
+    expect(result.ok).toBeFalse();
+    expect(evidence.map(({ bodyText }) => bodyText)).toEqual(['first retained', 'second failed']);
+    expect(evidence[0]?.attemptId).toBe(evidence[1]?.attemptId);
+  });
+
+  it('does not send an auth request when its declared transform is unavailable', async () => {
+    const wf = {
+      ...workflow({
+        requests: [{ method: 'POST', url: 'https://fixture.test/login', headers: {} }],
+        authConfig: {
+          entry: 'login',
+          actions: {
+            login: {
+              steps: [{ request: 0 }],
+              outcome: {
+                type: 'pause',
+                next: 'login',
+                evidence: [],
+                carry: [],
+                message: 'Continue login.',
+              },
+            },
+          },
+        },
+      }),
+      requestTransformModule: './missing-transform.ts',
+    };
+    let sends = 0;
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      workflowPath: '/tmp/imprint-auth-transform-fixture/workflow.json',
+      fetchImpl: (async () => {
+        sends++;
+        return new Response('{}');
+      }) as unknown as typeof fetch,
+    });
+
+    expect(sends).toBe(0);
+    expect(result).toMatchObject({
+      ok: false,
+      error: 'BAD_RESPONSE',
+      requestStageFacts: [{ requestIndex: 0, stage: 'transform', outcome: 'unavailable' }],
+    });
+  });
+
   it('offline request rendering never persists auth cookies or secrets', async () => {
     const wf = workflow({
       requests: [
@@ -130,6 +212,28 @@ describe('auth action runtime', () => {
     expect(rendered.result).toEqual({ ok: true, data: { authenticated: true } });
     expect(await backend.getSecret('fixture-auth', 'durable_interface')).toBeNull();
     expect(await backend.getCookies('fixture-auth')).toEqual([]);
+  });
+
+  it('offline request rendering does not load current stored credentials implicitly', async () => {
+    await backend.setSecret('fixture-data', 'api_token', 'current-machine-token');
+    const wf = WorkflowSchema.parse({
+      toolName: 'credentialed_fixture',
+      intent: { description: 'Read fixture data' },
+      site: 'fixture-data',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://fixture.test/data',
+          headers: { authorization: 'Bearer ${credential.api_token}' },
+        },
+      ],
+    });
+
+    const rendered = await renderWorkflowRequests({ workflow: wf, params: {} });
+
+    expect(rendered.requests).toEqual([]);
+    expect(rendered.result).toMatchObject({ ok: false, error: 'STATE_MISSING' });
   });
 
   it('executes arbitrary actions and carries only the state declared by the artifact', async () => {
@@ -760,7 +864,12 @@ describe('auth action runtime', () => {
     const browser: BrowserNavigationTransport = {
       async navigate(url, options) {
         navigations.push({ url, options });
-        return new Response('{"arrived":true}');
+        return new Response('{"arrived":true}', {
+          headers: {
+            'x-imprint-network-response-url': 'https://api.fixture.test/api/complete',
+            'set-cookie': 'page_session=selected; Domain=api.fixture.test; Path=/api',
+          },
+        });
       },
       async snapshotCookies() {
         return [];
@@ -773,8 +882,24 @@ describe('auth action runtime', () => {
           url: 'https://fixture.test/document',
           headers: {},
           mode: 'navigate',
-          navigation: { urlIncludes: '/complete' },
-          captures: [{ source: 'json', name: 'arrived', path: 'arrived', equals: true }],
+          navigation: {
+            urlIncludes: '/complete',
+            networkResponse: {
+              urlIncludes: '/api/complete',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
+          },
+          captures: [
+            { source: 'json', name: 'arrived', path: 'arrived', equals: true },
+            {
+              source: 'cookie',
+              name: 'selected_session',
+              cookie: 'page_session',
+              domain: 'api.fixture.test',
+              path: '/api',
+            },
+          ],
         },
       ],
       authConfig: {
@@ -782,7 +907,7 @@ describe('auth action runtime', () => {
         actions: {
           navigate_document: {
             steps: [{ request: 0 }],
-            outcome: { type: 'success', evidence: ['arrived'] },
+            outcome: { type: 'success', evidence: ['arrived', 'selected_session'] },
           },
         },
         persist: [],
@@ -808,6 +933,11 @@ describe('auth action runtime', () => {
           headers: {},
           body: undefined,
           urlIncludes: '/complete',
+          networkResponse: {
+            urlIncludes: '/api/complete',
+            recordingResponseRequestSeq: 42,
+            method: 'POST',
+          },
         },
       },
     ]);

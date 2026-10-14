@@ -6,7 +6,7 @@
 
 import { runWorkflowWithLadder } from './backend-ladder.ts';
 import type { CdpBrowserFetch, CdpPageSnapshot } from './cdp-browser-fetch.ts';
-import { redactFreeformText } from './freeform-redact.ts';
+import { abortSignalError, withAbortSignal } from './concurrency.ts';
 import { createLog } from './log.ts';
 import type { CredentialStore } from './runtime.ts';
 
@@ -52,8 +52,6 @@ export class AuthVerifier {
     private readonly credentials: CredentialStore,
   ) {
     this.rememberSensitiveValues(credentials.values);
-    for (const cookie of credentials.cookies) this.rememberSensitiveValues(cookie.value);
-    for (const storage of credentials.storage ?? []) this.rememberSensitiveValues(storage.value);
   }
 
   async runAction(
@@ -61,6 +59,7 @@ export class AuthVerifier {
     parameters: Record<string, string | number | boolean> = {},
     options: { freshSession?: boolean; cleanSession?: boolean; signal?: AbortSignal } = {},
   ): Promise<AuthActionResult> {
+    if (options.signal?.aborted) throw abortSignalError(options.signal);
     if (options.freshSession || options.cleanSession) await this.reset();
     this.rememberSensitiveValues(parameters);
     const previousContinuation = this.continuation;
@@ -79,17 +78,6 @@ export class AuthVerifier {
     const durationMs = Date.now() - startedAt;
     const result = ladder.result;
 
-    for (const browser of this.cdpPool.values()) {
-      if (!browser.snapshotCookies) continue;
-      try {
-        for (const cookie of await browser.snapshotCookies()) {
-          this.rememberSensitiveValues(cookie.value);
-        }
-      } catch {
-        // A failed browser will be handled by the ladder's liveness policy.
-      }
-    }
-
     if (result.ok) {
       this.continuation = undefined;
     } else if (result.continuation !== undefined) {
@@ -97,7 +85,6 @@ export class AuthVerifier {
     } else {
       this.continuation = previousContinuation;
     }
-    this.rememberSensitiveValues(this.continuation);
 
     const actionResult: AuthActionResult = {
       action,
@@ -122,18 +109,19 @@ export class AuthVerifier {
   }
 
   async inspectPage(
-    options: { maxChars?: number; includeCookies?: boolean } = {},
+    options: { maxChars?: number; includeCookies?: boolean; signal?: AbortSignal } = {},
   ): Promise<AuthPageInspection> {
     const browser = Array.from(this.cdpPool.values()).at(-1);
     if (!browser) {
       return { ok: false, message: 'No active verification browser session exists.' };
     }
-    if (!browser.inspectPage) {
+    const inspectPage = browser.inspectPage;
+    if (!inspectPage) {
       return { ok: false, message: 'The active verification browser cannot inspect pages.' };
     }
 
     const maxChars = Math.max(256, Math.min(20_000, Math.floor(options.maxChars ?? 8_000)));
-    const snapshot = await browser.inspectPage();
+    const snapshot = await withAbortSignal(() => inspectPage.call(browser), options.signal);
     const bodyText = this.sanitize(snapshot.bodyText);
     return {
       ok: true,
@@ -146,6 +134,7 @@ export class AuthVerifier {
         : {
             cookies: snapshot.cookies.map((cookie) => ({
               name: cookie.name,
+              value: this.sanitizeOptional(cookie.value),
               domain: cookie.domain,
               path: cookie.path,
               expires: cookie.expires,
@@ -208,7 +197,7 @@ export class AuthVerifier {
   }
 
   private sanitize(value: string): string {
-    let sanitized = redactFreeformText(value).redacted;
+    let sanitized = value;
     const secrets = Array.from(this.sensitiveValues).sort((a, b) => b.length - a.length);
     for (const secret of secrets) {
       sanitized = sanitized.split(secret).join('[REDACTED]');

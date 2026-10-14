@@ -1,8 +1,23 @@
+import { currentNativeTeachAgents } from './native-teach-agents.ts';
 /** Multi-provider LLM client — system prompt + JSON-serialized
  *  user payload → raw model text. */
 
 import Anthropic from '@anthropic-ai/sdk';
-import { withTimeoutCleanup } from './concurrency.ts';
+import { Codex, type Thread } from '@openai/codex-sdk';
+import { runCodexSdkTurn } from './codex-sdk-turn.ts';
+import { runOwnedCli } from './compiler-process.ts';
+import {
+  ProviderReportedError,
+  type ProviderRetryEvent,
+  type RunDeadlineRef,
+  boundedRunDeadline,
+  providerControlError,
+  providerReportedError,
+  providerRetryAfterMs,
+  resolvedRunDeadline,
+  retryTransientProviderFailure,
+} from './provider-retry.ts';
+import { parseClaudeTerminalOutput } from './provider-terminal.ts';
 import {
   llmSpanAttributes,
   resolveTraceTokenCount,
@@ -42,24 +57,21 @@ interface LLMProvider {
   ): Promise<AnalyzeResult>;
 }
 
-interface CliProcessWithOutput {
-  stdout: ReadableStream<Uint8Array>;
-  stderr: ReadableStream<Uint8Array>;
-  exited: Promise<number>;
-  kill?: () => void;
-  pid?: number;
-}
-
-const CLI_STREAM_EXIT_GRACE_MS = 1000;
-const CLI_PID_POLL_INTERVAL_MS = 250;
-
 interface AnalyzeInvocationOptions {
   timeoutMs?: number;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
   timeoutLabel?: string;
+  signal?: AbortSignal;
   onEvent?: (event: AnalyzeInvocationEvent) => void;
+  onProviderRetry?: (event: ProviderRetryEvent) => void;
+  onDeadlineReached?: () => Promise<number | null | undefined>;
+  /** Stable logical conversation. Providers that support threads append this
+   * turn to the same agent context instead of reconstructing it from a summary. */
+  conversationKey?: string;
 }
 
-export type AnalyzeInvocationEvent = {
+type AnalyzeInvocationEvent = {
   type: string;
   timestamp: string;
   [key: string]: unknown;
@@ -80,6 +92,7 @@ export interface ToolUseProvider extends LLMProvider {
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<Anthropic.Message>;
 }
 
@@ -124,7 +137,11 @@ class AnthropicApiProvider implements LLMProvider {
     this.client = new Anthropic();
   }
 
-  async analyze(systemPrompt: string, userPayload: unknown): Promise<AnalyzeResult> {
+  async analyze(
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> {
     const userText = JSON.stringify(userPayload);
     const invocationParameters = {
       max_tokens: this.config.maxTokens,
@@ -140,16 +157,22 @@ class AnthropicApiProvider implements LLMProvider {
 
         let response: Awaited<ReturnType<typeof this.client.messages.create>>;
         try {
-          response = await this.client.messages.create({
-            model: this.config.model,
-            max_tokens: invocationParameters.max_tokens,
-            ...(invocationParameters.temperature === undefined
-              ? {}
-              : { temperature: invocationParameters.temperature }),
-            system: systemPrompt,
-            messages: [{ role: 'user', content: userText }],
-          });
+          response = await this.client.messages.create(
+            {
+              model: this.config.model,
+              max_tokens: invocationParameters.max_tokens,
+              ...(invocationParameters.temperature === undefined
+                ? {}
+                : { temperature: invocationParameters.temperature }),
+              system: systemPrompt,
+              messages: [{ role: 'user', content: userText }],
+            },
+            { signal: opts.signal },
+          );
         } catch (err) {
+          if (opts.signal?.aborted && opts.signal.reason instanceof Error) {
+            throw opts.signal.reason;
+          }
           throw enrichAnthropicApiError(err, this.config);
         }
 
@@ -177,19 +200,26 @@ class AnthropicApiProvider implements LLMProvider {
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   }): Promise<Anthropic.Message> {
     return await traceMessageWithTools(this.name, this.config.model, opts, async () => {
       try {
-        const response = await this.client.messages.create({
-          model: this.config.model,
-          max_tokens: opts.maxTokens ?? this.config.maxTokens,
-          ...temperatureFragment(this.config.model, this.config.temperature),
-          system: opts.system,
-          messages: opts.messages,
-          tools: opts.tools,
-        });
+        const response = await this.client.messages.create(
+          {
+            model: this.config.model,
+            max_tokens: opts.maxTokens ?? this.config.maxTokens,
+            ...temperatureFragment(this.config.model, this.config.temperature),
+            system: opts.system,
+            messages: opts.messages,
+            tools: opts.tools,
+          },
+          { signal: opts.signal },
+        );
         return response;
       } catch (err) {
+        if (opts.signal?.aborted && opts.signal.reason instanceof Error) {
+          throw opts.signal.reason;
+        }
         throw enrichAnthropicApiError(err, this.config);
       }
     });
@@ -197,31 +227,53 @@ class AnthropicApiProvider implements LLMProvider {
 }
 
 function enrichAnthropicApiError(err: unknown, config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
+  const value =
+    err && typeof err === 'object'
+      ? (err as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  const nested =
+    value.error && typeof value.error === 'object'
+      ? (value.error as Record<string, unknown>)
+      : undefined;
+  const reported = new ProviderReportedError(
+    'anthropic-api',
+    {
+      statuses: [Number(value.status), Number(value.statusCode)].filter(Number.isInteger),
+      codes: [value.code, value.type, nested?.code, nested?.type].filter(
+        (item): item is string => typeof item === 'string',
+      ),
+      messages: [msg],
+      retryAfterMs: providerRetryAfterMs(value.headers),
+    },
+    err,
+  );
 
   if (lc.includes('401') || lc.includes('authentication') || lc.includes('api key')) {
     return new Error(
       'Anthropic API call failed: invalid API key\n→ check ANTHROPIC_API_KEY is set correctly\n→ get your key at: https://console.anthropic.com/settings/keys',
-      { cause: err },
+      { cause: reported },
     );
   }
 
   if (lc.includes('429') || lc.includes('rate limit')) {
     return new Error(
       'Anthropic API call failed: rate limit exceeded\n→ wait a moment and retry\n→ check usage limits at: https://console.anthropic.com/settings/limits',
-      { cause: err },
+      { cause: reported },
     );
   }
 
   if (lc.includes('400') || lc.includes('invalid') || lc.includes('model')) {
     return new Error(
       `Anthropic API call failed: bad request (model="${config.model}")\n→ check model ID is valid\n→ see available models at: https://docs.anthropic.com/en/docs/about-claude/models`,
-      { cause: err },
+      { cause: reported },
     );
   }
 
-  return new Error(`Anthropic API call failed: ${msg}`, { cause: err });
+  return new Error(`Anthropic API call failed: ${msg}`, { cause: reported });
 }
 
 class ClaudeCliProvider implements LLMProvider {
@@ -260,20 +312,20 @@ class ClaudeCliProvider implements LLMProvider {
           this.model,
         ];
 
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: args[0],
+          args: args.slice(1),
+        });
+        let output: Awaited<ReturnType<typeof runOwnedCli>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([userText]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
+          output = await runOwnedCli({
+            command: args[0] as string,
             args: args.slice(1),
-            pid: proc.pid,
+            input: userText,
+            signal: opts.signal,
           });
         } catch (err) {
           opts.onEvent?.({
@@ -284,31 +336,22 @@ class ClaudeCliProvider implements LLMProvider {
           });
           throw enrichClaudeCliError(err, { model: this.model });
         }
-
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture claude-cli output streams');
-        }
-
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('claude-cli', exitCode, stderr);
+        const { stdout, stderr, exitCode } = output;
 
         let parsed: {
+          type?: string;
+          is_error?: boolean;
           result?: string;
+          errors?: string[];
+          api_error_status?: number | string;
+          terminal_reason?: string;
+          error?: {
+            message?: string;
+            type?: string;
+            code?: string;
+            status?: number;
+            status_code?: number;
+          };
           usage?: {
             input_tokens?: number;
             output_tokens?: number;
@@ -316,8 +359,11 @@ class ClaudeCliProvider implements LLMProvider {
             cache_creation_input_tokens?: number;
           };
         };
+        const terminal = parseClaudeTerminalOutput(stdout, stderr);
+        if (terminal.providerError) throw terminal.providerError;
+        if (exitCode !== 0) throw cliExitError('claude-cli', exitCode ?? -1, stderr);
         try {
-          parsed = JSON.parse(stdout);
+          parsed = JSON.parse(stdout) as typeof parsed;
         } catch (parseErr) {
           throw enrichClaudeCliError(parseErr, { model: this.model });
         }
@@ -347,6 +393,8 @@ class ClaudeCliProvider implements LLMProvider {
 }
 
 function enrichClaudeCliError(err: unknown, _config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
   const msg = err instanceof Error ? err.message : String(err);
   const lc = msg.toLowerCase();
 
@@ -367,9 +415,27 @@ function enrichClaudeCliError(err: unknown, _config: { model: string }): Error {
 class CodexCliProvider implements LLMProvider {
   readonly name: ProviderName = 'codex-cli';
   private model: string;
+  private readonly codex: Codex;
+  private readonly nativePrompts = new WeakMap<object, Map<string, string>>();
+  private readonly conversations = new Map<
+    string,
+    { thread: Thread; systemPrompt: string; initialized: boolean; threadId?: string }
+  >();
 
   constructor({ model }: { model: string }) {
     this.model = model;
+    this.codex = new Codex({
+      // Codex owns retained-history compaction. Imprint only asks it to compact
+      // early enough that the next ordinary agent message still fits.
+      // The largest normal research delta is a newly inspected evidence slice.
+      // Compacting at 80k leaves ample room for that next bounded turn inside
+      // the current 258k model window, even though Codex only checks between
+      // turns and does not include the incoming message in that decision.
+      config: {
+        model_auto_compact_token_limit: 80_000,
+        model_auto_compact_token_limit_scope: 'total',
+      },
+    });
   }
 
   async analyze(
@@ -377,11 +443,80 @@ class CodexCliProvider implements LLMProvider {
     userPayload: unknown,
     opts: AnalyzeInvocationOptions = {},
   ): Promise<AnalyzeResult> {
-    const combinedPrompt = `<system_instructions>
-${systemPrompt}
-</system_instructions>
-
-<user_payload_json>
+    const family = currentNativeTeachAgents();
+    if (family) {
+      const started = Date.now();
+      const prompts = this.nativePrompts.get(family) ?? new Map<string, string>();
+      this.nativePrompts.set(family, prompts);
+      const priorPrompt = opts.conversationKey ? prompts.get(opts.conversationKey) : undefined;
+      const roleInstructions =
+        priorPrompt === systemPrompt
+          ? ''
+          : `<system_instructions>${systemPrompt}</system_instructions>\n`;
+      const prompt = `${roleInstructions}<user_payload_json>${JSON.stringify(userPayload)}</user_payload_json>\n${cliFinalArtifactInstruction()}`;
+      return await traceAnalyze(
+        this.name,
+        this.model,
+        systemPrompt,
+        prompt.length,
+        async () => {
+          const response = await family.submit(prompt, {
+            conversation: opts.conversationKey,
+            signal: opts.signal,
+          });
+          if (opts.conversationKey) prompts.set(opts.conversationKey, systemPrompt);
+          opts.onEvent?.({
+            type: 'native.assignment_completed',
+            timestamp: new Date().toISOString(),
+            conversationKey: opts.conversationKey,
+            agentId: response.agentId,
+          });
+          return {
+            text: normalizeCliAnalyzeOutput(response.text, systemPrompt),
+            inputTokens: null,
+            outputTokens: null,
+            cacheReadInputTokens: null,
+            cacheCreationInputTokens: null,
+            durationMs: Date.now() - started,
+            stopReason: null,
+          };
+        },
+        promptTraceDetails(prompt, {
+          command: 'native-subagent',
+          conversationKey: opts.conversationKey,
+        }),
+      );
+    }
+    const existing = opts.conversationKey
+      ? this.conversations.get(opts.conversationKey)
+      : undefined;
+    const thread =
+      existing?.thread ??
+      this.codex.startThread({
+        model: this.model,
+        sandboxMode: 'read-only',
+        workingDirectory: process.cwd(),
+        skipGitRepoCheck: true,
+        approvalPolicy: 'never',
+        threadSource: 'imprint-teach',
+      });
+    if (opts.conversationKey && !existing) {
+      // Keep the same SDK thread even when its first turn is interrupted. A
+      // provider retry should continue this conversation, not silently fork it.
+      this.conversations.set(opts.conversationKey, {
+        thread,
+        systemPrompt,
+        initialized: false,
+      });
+    }
+    const systemUpdate = existing?.initialized
+      ? systemPrompt === existing.systemPrompt
+        ? ''
+        : systemPrompt.startsWith(existing.systemPrompt)
+          ? `<additional_turn_instructions>\n${systemPrompt.slice(existing.systemPrompt.length).trim()}\n</additional_turn_instructions>\n\n`
+          : `<updated_role_instructions>\n${systemPrompt}\n</updated_role_instructions>\n\n`
+      : `<system_instructions>\n${systemPrompt}\n</system_instructions>\n\n`;
+    const combinedPrompt = `${systemUpdate}<user_payload_json>
 ${JSON.stringify(userPayload)}
 </user_payload_json>
 
@@ -394,23 +529,32 @@ ${cliFinalArtifactInstruction()}`;
       async () => {
         const t0 = Date.now();
 
-        const args = codexAnalyzeArgs(this.model);
-
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: '@openai/codex-sdk',
+          conversationKey: opts.conversationKey,
+          threadId: existing?.threadId,
+        });
+        let turn: Awaited<ReturnType<Thread['run']>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([combinedPrompt]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
-            args: args.slice(1),
-            pid: proc.pid,
-          });
+          turn = await runCodexTurnWithWatchdog(
+            (signal) =>
+              retryMissingCodexStdin(
+                combinedPrompt,
+                () =>
+                  runCodexSdkTurn(thread, combinedPrompt, { signal }, { onEvent: opts.onEvent }),
+                {
+                  signal,
+                  onRetry: () =>
+                    console.error(
+                      '[imprint] Codex received no stdin prompt; retrying the same conversation once',
+                    ),
+                },
+              ),
+            { signal: opts.signal },
+          );
         } catch (err) {
           opts.onEvent?.({
             type: 'process.spawn_failed',
@@ -420,62 +564,132 @@ ${cliFinalArtifactInstruction()}`;
           });
           throw enrichCodexCliError(err, { model: this.model });
         }
-
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture codex-cli output streams');
+        if (!turn.finalResponse) {
+          throw new Error('codex-cli output missing a final agent message');
         }
+        const threadId = thread.id ?? existing?.threadId;
+        if (opts.conversationKey)
+          this.conversations.set(opts.conversationKey, {
+            thread,
+            systemPrompt,
+            initialized: true,
+            threadId,
+          });
+        opts.onEvent?.({
+          type: 'thread.available',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          conversationKey: opts.conversationKey,
+          threadId,
+        });
 
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('codex-cli', exitCode, stderr);
-
-        const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
+        const text = normalizeCliAnalyzeOutput(turn.finalResponse, systemPrompt);
+        const usage = turn.usage;
 
         return {
           text,
-          inputTokens: null,
-          outputTokens: null,
+          inputTokens: usage ? Math.max(0, usage.input_tokens - usage.cached_input_tokens) : null,
+          outputTokens: usage?.output_tokens ?? null,
+          cacheReadInputTokens: usage?.cached_input_tokens ?? null,
+          cacheCreationInputTokens: usage?.cache_write_input_tokens ?? null,
           durationMs: Date.now() - t0,
           stopReason: null,
         };
       },
       promptTraceDetails(combinedPrompt, {
-        command: 'codex exec',
+        command: '@openai/codex-sdk',
         sandbox: 'read-only',
+        conversationKey: opts.conversationKey,
       }),
     );
   }
 }
 
-export function codexAnalyzeArgs(model: string): string[] {
-  return [
-    'codex',
-    '-a',
-    'never',
-    'exec',
-    '-m',
-    model,
-    '-s',
-    'read-only',
-    '--ephemeral',
-    '--ignore-user-config',
-    '--ignore-rules',
-    '--skip-git-repo-check',
-  ];
+const DEFAULT_CODEX_TURN_WATCHDOG_MS = 5 * 60_000;
+
+/** Retry only an explicit pre-turn delivery failure for a known nonempty prompt. */
+export async function retryMissingCodexStdin<T>(
+  prompt: string,
+  run: () => Promise<T>,
+  options: { signal?: AbortSignal; onRetry?: () => void } = {},
+): Promise<T> {
+  try {
+    return await run();
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '';
+    if (
+      !prompt.trim() ||
+      options.signal?.aborted ||
+      !/^Codex Exec exited with code 1:\s*(?:Reading prompt from stdin\.\.\.\s*)?No prompt provided via stdin\.\s*$/.test(
+        message,
+      )
+    )
+      throw error;
+    options.onRetry?.();
+    return await run();
+  }
+}
+
+export function codexTurnWatchdogMs(value = process.env.IMPRINT_CODEX_TURN_TIMEOUT_MS): number {
+  if (value === undefined || value.trim() === '') return DEFAULT_CODEX_TURN_WATCHDOG_MS;
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed > 0
+    ? Math.floor(parsed)
+    : DEFAULT_CODEX_TURN_WATCHDOG_MS;
+}
+
+/**
+ * The Codex SDK can occasionally leave `Thread.run()` pending after its child
+ * process has already exited. Bound one SDK turn so the ordinary provider
+ * retry loop can continue the retained conversation instead of parking the
+ * complete teach run until its outer deadline.
+ */
+export async function runCodexTurnWithWatchdog<T>(
+  run: (signal: AbortSignal) => Promise<T>,
+  options: { signal?: AbortSignal; timeoutMs?: number } = {},
+): Promise<T> {
+  const timeoutMs = options.timeoutMs ?? codexTurnWatchdogMs();
+  const controller = new AbortController();
+  const abortFromParent = (): void => {
+    controller.abort(
+      options.signal?.reason instanceof Error
+        ? options.signal.reason
+        : new DOMException('Codex turn cancelled', 'AbortError'),
+    );
+  };
+  if (options.signal?.aborted) abortFromParent();
+  else options.signal?.addEventListener('abort', abortFromParent, { once: true });
+
+  const timeoutError = new ProviderReportedError(
+    'codex-cli',
+    {
+      codes: ['codex_turn_stalled'],
+      messages: [`Codex turn did not settle within ${timeoutMs}ms`],
+    },
+    undefined,
+    'provider_process_interrupted',
+  );
+  const timer = setTimeout(() => controller.abort(timeoutError), timeoutMs);
+  const aborted = new Promise<never>((_resolve, reject) => {
+    const rejectWithReason = (): void =>
+      reject(
+        controller.signal.reason instanceof Error
+          ? controller.signal.reason
+          : new DOMException('Codex turn cancelled', 'AbortError'),
+      );
+    if (controller.signal.aborted) rejectWithReason();
+    else controller.signal.addEventListener('abort', rejectWithReason, { once: true });
+  });
+  const pending = run(controller.signal);
+  // A broken SDK promise may remain pending even after its child is aborted.
+  // The race must not leave a later rejection unobserved.
+  void pending.catch(() => {});
+  try {
+    return await Promise.race([pending, aborted]);
+  } finally {
+    clearTimeout(timer);
+    options.signal?.removeEventListener('abort', abortFromParent);
+  }
 }
 
 export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string): string {
@@ -483,98 +697,28 @@ export function normalizeCliAnalyzeOutput(stdout: string, systemPrompt: string):
   return extractJsonObject(stdout) ?? stdout;
 }
 
-type CliFailureCode =
-  | 'not_found'
-  | 'input_too_large'
-  | 'subscription_access_disabled'
-  | 'authentication'
-  | 'authorization'
-  | 'rate_limited'
-  | 'model_unavailable'
-  | 'unknown';
-
 const CLI_STDERR_TAIL_LIMIT = 2000;
 
-class CliProviderError extends Error {
-  readonly provider: ProviderName;
-  readonly exitCode: number;
-  readonly errorCode: CliFailureCode;
-  readonly stderrTail: string;
-  readonly stderrChars: number;
-
-  constructor(opts: {
-    provider: ProviderName;
-    exitCode: number;
-    errorCode: CliFailureCode;
-    stderrTail: string;
-    stderrChars: number;
-  }) {
-    super(
-      `${opts.provider} failed: exit_code=${opts.exitCode} error_code=${opts.errorCode} stderr_tail_chars=${opts.stderrTail.length} stderr_chars=${opts.stderrChars}`,
+export function cliExitError(provider: ProviderName, exitCode: number, stderr: string): Error {
+  if (provider === 'codex-cli' && exitCode === 101) {
+    const diagnostic = stderr.trim();
+    return new ProviderReportedError(
+      provider,
+      {
+        codes: ['cli_exit_101'],
+        messages: [
+          diagnostic
+            ? `${provider} process exited 101: ${cliStderrTail(diagnostic)}`
+            : `${provider} process exited 101 without a diagnostic`,
+        ],
+      },
+      undefined,
+      'provider_process_interrupted',
     );
-    this.name = 'CliProviderError';
-    this.provider = opts.provider;
-    this.exitCode = opts.exitCode;
-    this.errorCode = opts.errorCode;
-    this.stderrTail = opts.stderrTail;
-    this.stderrChars = opts.stderrChars;
   }
-}
-
-function cliExitError(provider: ProviderName, exitCode: number, stderr: string): CliProviderError {
-  return new CliProviderError({
-    provider,
-    exitCode,
-    errorCode: classifyCliFailure(stderr),
-    stderrTail: cliStderrTail(stderr),
-    stderrChars: stderr.length,
-  });
-}
-
-export function classifyCliFailure(stderr: string): CliFailureCode {
-  const lc = stderr.toLowerCase();
-  if (lc.includes('enoent') || lc.includes('command not found')) return 'not_found';
-  if (
-    lc.includes('input exceeds the maximum length') ||
-    lc.includes('input_too_large') ||
-    lc.includes('maximum length')
-  ) {
-    return 'input_too_large';
-  }
-  if (
-    lc.includes('disabled claude subscription access') ||
-    lc.includes('subscription access') ||
-    lc.includes('use an anthropic api key instead')
-  ) {
-    return 'subscription_access_disabled';
-  }
-  if (lc.includes('rate limit') || lc.includes('rate_limit') || lc.includes('429')) {
-    return 'rate_limited';
-  }
-  if (
-    lc.includes('unauthorized') ||
-    lc.includes('not authenticated') ||
-    lc.includes('login') ||
-    lc.includes('401')
-  ) {
-    return 'authentication';
-  }
-  if (
-    lc.includes('forbidden') ||
-    lc.includes('access denied') ||
-    lc.includes('permission denied') ||
-    lc.includes('403')
-  ) {
-    return 'authorization';
-  }
-  if (
-    lc.includes('model not found') ||
-    lc.includes('model unavailable') ||
-    lc.includes('unsupported model')
-  ) {
-    return 'model_unavailable';
-  }
-  return 'unknown';
+  return new Error(
+    `${provider} exited ${exitCode}${stderr ? `: ${cliStderrTail(stderr)}` : ' without provider diagnostics'}`,
+  );
 }
 
 export function cliStderrTail(stderr: string, limit = CLI_STDERR_TAIL_LIMIT): string {
@@ -612,20 +756,7 @@ async function traceAnalyze(
         : {}),
     },
     async (span) => {
-      let result: AnalyzeResult;
-      try {
-        result = await fn();
-      } catch (err) {
-        if (err instanceof CliProviderError) {
-          setSpanAttributes(span, {
-            'imprint.llm.provider_error_code': err.errorCode,
-            'imprint.llm.provider_exit_code': err.exitCode,
-            'imprint.llm.stderr_tail_chars': err.stderrTail.length,
-            'imprint.llm.stderr_chars': err.stderrChars,
-          });
-        }
-        throw err;
-      }
+      const result = await fn();
       // Providers report `inputTokens` as the *uncached* input only; the cached
       // portion lives in the cache fields. Phoenix expects the TOTAL prompt plus
       // the cache breakdown so it can calculate cost server-side, so sum them
@@ -639,8 +770,13 @@ async function traceAnalyze(
         cacheReadTokens,
         cacheWriteTokens,
       );
-      const inputTokens = resolveTraceTokenCount(totalInputTokens, details?.inputText);
-      const outputTokens = resolveTraceTokenCount(result.outputTokens, result.text);
+      const nativeUsage = details?.invocationParameters?.command === 'native-subagent';
+      const inputTokens = nativeUsage
+        ? { tokens: null, source: 'native_family_rollout' }
+        : resolveTraceTokenCount(totalInputTokens, details?.inputText);
+      const outputTokens = nativeUsage
+        ? { tokens: null, source: 'native_family_rollout' }
+        : resolveTraceTokenCount(result.outputTokens, result.text);
       setSpanAttributes(span, {
         ...llmSpanAttributes({
           provider,
@@ -660,6 +796,7 @@ async function traceAnalyze(
           outputValue: captureIo ? result.text : undefined,
           invocationParameters: details?.invocationParameters,
         }),
+        ...(nativeUsage ? { 'imprint.llm.usage_accounted_by': 'native_family' } : {}),
         'imprint.llm.duration_ms': result.durationMs,
         'imprint.llm.output_chars': result.text.length,
       });
@@ -676,6 +813,7 @@ async function traceMessageWithTools(
     messages: Anthropic.MessageParam[];
     tools: Anthropic.Tool[];
     maxTokens?: number;
+    signal?: AbortSignal;
   },
   fn: () => Promise<Anthropic.Message>,
 ): Promise<Anthropic.Message> {
@@ -804,152 +942,6 @@ function promptTraceDetails(
   };
 }
 
-export async function collectCliProcessOutput(
-  proc: CliProcessWithOutput,
-  opts: {
-    timeoutMs?: number;
-    timeoutLabel?: string;
-    onEvent?: (event: AnalyzeInvocationEvent) => void;
-  } = {},
-): Promise<{
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}> {
-  const exitPromise = observeCliExit(proc, opts.onEvent);
-  const stdoutPromise = readCliStreamToText(proc.stdout, exitPromise, 'stdout', opts.onEvent);
-  const stderrPromise = readCliStreamToText(proc.stderr, exitPromise, 'stderr', opts.onEvent);
-  const collect = Promise.all([stdoutPromise, stderrPromise, exitPromise]);
-  const [stdout, stderr, exitCode] = opts.timeoutMs
-    ? await withTimeoutCleanup(collect, opts.timeoutMs, opts.timeoutLabel ?? 'cli provider', () => {
-        opts.onEvent?.({
-          type: 'process.timeout',
-          timestamp: new Date().toISOString(),
-          timeoutMs: opts.timeoutMs,
-          timeoutLabel: opts.timeoutLabel ?? 'cli provider',
-        });
-        proc.kill?.();
-      })
-    : await collect;
-  opts.onEvent?.({
-    type: 'process.output_collected',
-    timestamp: new Date().toISOString(),
-    stdoutChars: stdout.length,
-    stderrChars: stderr.length,
-    exitCode,
-  });
-  return { stdout, stderr, exitCode };
-}
-
-function observeCliExit(
-  proc: CliProcessWithOutput,
-  onEvent?: (event: AnalyzeInvocationEvent) => void,
-): Promise<number> {
-  let settled = false;
-  const exited = proc.exited.then((exitCode) => {
-    settled = true;
-    return exitCode;
-  });
-  if (!proc.pid) return exited;
-
-  const pidGone = new Promise<number>((resolve) => {
-    const timer = setInterval(() => {
-      if (settled) {
-        clearInterval(timer);
-        return;
-      }
-      if (processExists(proc.pid)) return;
-      settled = true;
-      clearInterval(timer);
-      onEvent?.({
-        type: 'process.exit_unobserved',
-        timestamp: new Date().toISOString(),
-        pid: proc.pid,
-      });
-      resolve(0);
-    }, CLI_PID_POLL_INTERVAL_MS);
-  });
-
-  return Promise.race([exited, pidGone]);
-}
-
-function processExists(pid: number | undefined): boolean {
-  if (!pid) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    const code = typeof err === 'object' && err && 'code' in err ? err.code : undefined;
-    return code === 'EPERM';
-  }
-}
-
-async function readCliStreamToText(
-  stream: ReadableStream<Uint8Array>,
-  exited: Promise<unknown>,
-  streamName: 'stdout' | 'stderr',
-  onEvent?: (event: AnalyzeInvocationEvent) => void,
-): Promise<string> {
-  const reader = stream.getReader();
-  const decoder = new TextDecoder();
-  let text = '';
-  let processExited = false;
-  const exitSignal = exited.then(() => {
-    processExited = true;
-    return 'process-exited' as const;
-  });
-
-  try {
-    while (true) {
-      const read = reader.read();
-      const result = await Promise.race([
-        read,
-        processExited
-          ? new Promise<'stream-timeout'>((resolve) =>
-              setTimeout(() => resolve('stream-timeout'), CLI_STREAM_EXIT_GRACE_MS),
-            )
-          : exitSignal,
-      ]);
-
-      if (result === 'stream-timeout') {
-        read.catch(() => undefined);
-        onEvent?.({
-          type: 'process.stream_abandoned',
-          timestamp: new Date().toISOString(),
-          stream: streamName,
-          graceMs: CLI_STREAM_EXIT_GRACE_MS,
-        });
-        try {
-          await Promise.race([
-            reader.cancel(),
-            new Promise((resolve) => setTimeout(resolve, CLI_STREAM_EXIT_GRACE_MS)),
-          ]);
-        } catch {
-          // The process already exited; returning captured output is more useful.
-        }
-        break;
-      }
-
-      if (result === 'process-exited') {
-        read.catch(() => undefined);
-        continue;
-      }
-
-      if (result.done) break;
-      text += decoder.decode(result.value, { stream: true });
-    }
-  } finally {
-    text += decoder.decode();
-    try {
-      reader.releaseLock();
-    } catch {
-      // Ignore lock-release errors from streams already closed/cancelled by Bun.
-    }
-  }
-
-  return text;
-}
-
 function promptRequestsJsonObject(systemPrompt: string): boolean {
   const lc = systemPrompt.toLowerCase();
   if (/\byaml\b/.test(lc)) return false;
@@ -957,11 +949,30 @@ function promptRequestsJsonObject(systemPrompt: string): boolean {
   return /\bjson\b/.test(lc) && /\bobject\b/.test(lc);
 }
 
-function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
+export function enrichCodexCliError(err: unknown, _config: { model: string }): Error {
+  const control = providerControlError(err);
+  if (control) return control;
+  const reported = providerReportedError(err);
+  if (reported) return reported;
   const msg = err instanceof Error ? err.message : String(err);
-  const lc = msg.toLowerCase();
 
-  if (lc.includes('enoent') || lc.includes('not found') || lc.includes('command not found')) {
+  // @openai/codex-sdk reports process exits as ordinary Error objects instead
+  // of the structured provider error used by the older CLI adapter. Normalize
+  // that exact adapter-owned shape so a blank exit 101 gets the same bounded
+  // provider retry as every other interrupted Codex call. Keep diagnostics and
+  // all other exit codes deterministic.
+  const sdkExit = /^Codex Exec exited with code (\d+):([\s\S]*)$/.exec(msg);
+  if (sdkExit) return cliExitError('codex-cli', Number(sdkExit[1]), sdkExit[2] ?? '');
+
+  const errorCode =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? String((err as { code?: unknown }).code)
+      : undefined;
+  if (
+    errorCode === 'ENOENT' ||
+    errorCode === 'ENOTDIR' ||
+    /^Unable to locate Codex CLI binaries\b/.test(msg)
+  ) {
     return new Error(
       'codex-cli not found\n→ install Codex CLI, run `codex login`, and make sure `codex` is on PATH',
       { cause: err },
@@ -1006,20 +1017,20 @@ ${cliFinalArtifactInstruction()}`;
           args.push('--model', this.model);
         }
 
-        let proc: ReturnType<typeof Bun.spawn>;
+        opts.onEvent?.({
+          type: 'process.started',
+          timestamp: new Date().toISOString(),
+          provider: this.name,
+          command: args[0],
+          args: args.slice(1),
+        });
+        let output: Awaited<ReturnType<typeof runOwnedCli>>;
         try {
-          proc = Bun.spawn(args, {
-            stdin: new Blob([combinedPrompt]),
-            stdout: 'pipe',
-            stderr: 'pipe',
-          });
-          opts.onEvent?.({
-            type: 'process.started',
-            timestamp: new Date().toISOString(),
-            provider: this.name,
-            command: args[0],
+          output = await runOwnedCli({
+            command: args[0] as string,
             args: args.slice(1),
-            pid: proc.pid,
+            input: combinedPrompt,
+            signal: opts.signal,
           });
         } catch (err) {
           opts.onEvent?.({
@@ -1030,28 +1041,9 @@ ${cliFinalArtifactInstruction()}`;
           });
           throw enrichCursorCliError(err);
         }
+        const { stdout, stderr, exitCode } = output;
 
-        if (
-          typeof proc.stdout === 'number' ||
-          typeof proc.stderr === 'number' ||
-          !proc.stdout ||
-          !proc.stderr
-        ) {
-          throw new Error('Failed to capture cursor-cli output streams');
-        }
-
-        const { stdout, stderr, exitCode } = await collectCliProcessOutput(
-          {
-            stdout: proc.stdout,
-            stderr: proc.stderr,
-            exited: proc.exited,
-            kill: proc.kill.bind(proc),
-            pid: proc.pid,
-          },
-          { timeoutMs: opts.timeoutMs, timeoutLabel: opts.timeoutLabel, onEvent: opts.onEvent },
-        );
-
-        if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode, stderr);
+        if (exitCode !== 0) throw cliExitError('cursor-cli', exitCode ?? -1, stderr);
 
         const text = normalizeCliAnalyzeOutput(stdout, systemPrompt);
 
@@ -1092,7 +1084,7 @@ const VALID_PROVIDERS: readonly ProviderName[] = [
   'cursor-cli',
 ];
 
-export interface ProviderStatus {
+interface ProviderStatus {
   name: ProviderName;
   detected: boolean;
   availableForTeach: boolean;
@@ -1200,7 +1192,7 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
       return new ClaudeCliProvider({ model });
     case 'codex-cli':
       return new CodexCliProvider({
-        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-5.6-sol',
+        model: opts.model ?? process.env.CODEX_MODEL ?? 'gpt-6-sol',
       });
     case 'cursor-cli':
       return new CursorCliProvider({ model: opts.model });
@@ -1209,7 +1201,58 @@ function createProvider(name: ProviderName, opts: LLMOptions = {}): LLMProvider 
 
 export function resolveProvider(opts: LLMOptions = {}): LLMProvider {
   const name = opts.provider ?? detectProvider();
-  return createProvider(name, opts);
+  return withTransientProviderRetry(createProvider(name, opts));
+}
+
+/** Apply one provider-neutral capacity retry policy to every ordinary LLM call. */
+function withTransientProviderRetry(provider: LLMProvider): LLMProvider {
+  const analyze = async (
+    systemPrompt: string,
+    userPayload: unknown,
+    opts: AnalyzeInvocationOptions = {},
+  ): Promise<AnalyzeResult> => {
+    const timeoutDeadline =
+      opts.timeoutMs !== undefined && opts.timeoutMs > 0 ? Date.now() + opts.timeoutMs : undefined;
+    const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
+    const scopedDeadline = boundedRunDeadline(runDeadline, timeoutDeadline);
+    return await retryTransientProviderFailure(
+      async (activeSignal) =>
+        await provider.analyze(systemPrompt, userPayload, {
+          ...opts,
+          signal: activeSignal,
+          timeoutMs: undefined,
+          deadlineMs: scopedDeadline?.deadlineMs,
+          runDeadline: scopedDeadline,
+        }),
+      {
+        runDeadline,
+        phaseDeadlineMs: timeoutDeadline,
+        signal: opts.signal,
+        onDeadlineReached: opts.onDeadlineReached,
+        onRetry: (event) => {
+          opts.onProviderRetry?.(event);
+          opts.onEvent?.({
+            type: 'provider.retry_scheduled',
+            timestamp: new Date().toISOString(),
+            provider: provider.name,
+            attempt: event.attempt,
+            delayMs: event.delayMs,
+            reason: event.reason,
+          });
+        },
+      },
+    );
+  };
+
+  if (isToolUseProvider(provider)) {
+    const wrapped: ToolUseProvider = {
+      name: provider.name,
+      analyze,
+      messageWithTools: provider.messageWithTools.bind(provider),
+    };
+    return wrapped;
+  }
+  return { name: provider.name, analyze };
 }
 
 /** The model to use for the compile-agent (the agentic, tool-using compile
@@ -1232,7 +1275,7 @@ export function preferredAgentModel(provider: ProviderName): string {
     case 'claude-cli':
       return 'claude-opus-4-8';
     case 'codex-cli':
-      return 'gpt-5.6-sol';
+      return 'gpt-6-sol';
     case 'cursor-cli':
       return 'claude-opus-4-8'; // best-effort; cursor passes through
   }
@@ -1278,7 +1321,8 @@ export function availableModelsForProvider(provider: ProviderName): ModelOption[
       ];
     case 'codex-cli':
       return [
-        { model: 'gpt-5.6-sol', isDefault: true },
+        { model: 'gpt-6-sol', isDefault: true },
+        { model: 'gpt-5.6-sol', isDefault: false },
         { model: 'gpt-5.6-terra', isDefault: false },
         { model: 'gpt-5.6-luna', isDefault: false },
         { model: 'gpt-5.5', isDefault: false },

@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import {
   appendFileSync,
   existsSync,
@@ -23,8 +23,8 @@ import {
   readLiveIntegrationEvidence,
   runCapturedIntegrationCase,
 } from './compile-verification.ts';
+import { collectOwnedProcess, spawnOwnedProcess } from './compiler-process.ts';
 import { workflowHasIrreversibleEffect } from './effects.ts';
-import { redactFreeformText } from './freeform-redact.ts';
 import {
   type ProviderName,
   isToolUseProvider,
@@ -32,13 +32,27 @@ import {
   resolveProvider,
 } from './llm.ts';
 import {
+  type BackendRequestStageFact,
   canRebindBackendsCacheToWorkflow,
+  parseBackendRequestStageFacts,
   type probeResolvedTool,
   rebindBackendsCacheToWorkflow,
+  sanitizeBackendRequestStageFacts,
+  stripBackendRequestStageFacts,
 } from './probe-backends.ts';
+import {
+  ProviderDeadlineError,
+  type RunDeadlineRef,
+  boundedRunDeadline,
+  combinedDeadlineSignal,
+  providerControlError,
+  providerReportedError,
+  resolvedRunDeadline,
+  retryTransientProviderFailure,
+} from './provider-retry.ts';
+import { ProviderTerminalAccumulator } from './provider-terminal.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
 import { loadCredentialStore } from './runtime.ts';
-import { isSensitiveKey } from './sensitive-keys.ts';
 import { buildZodValidator } from './tool-loader.ts';
 import {
   type BackendsCache,
@@ -61,7 +75,6 @@ const LIVE_VERIFIER_LOG_FILE = '.live-verifier-log.jsonl';
 // for the normal fetch/stealth/playbook candidates plus CDP and fetch-bootstrap
 // fallbacks; the former 240s cap could kill CDP after a 150s playbook attempt.
 const BACKEND_PREPARATION_BUDGET_MS = 8 * 60_000;
-const MAX_CREDITED_BACKEND_PREPARATIONS = 2;
 const BACKEND_PROBE_SHUTDOWN_GRACE_MS = 5_000;
 const MAX_PROMPT_EVIDENCE_RECORDS = 48;
 const MAX_PROMPT_EVIDENCE_RECORD_CHARS = 8_000;
@@ -177,17 +190,6 @@ export const LiveVerificationReportSchema = z
 
 type LiveVerificationReport = z.infer<typeof LiveVerificationReportSchema>;
 
-export function isInfrastructureOnlyInconclusiveReport(report: LiveVerificationReport): boolean {
-  return (
-    report.status === 'inconclusive' &&
-    report.baseline.verdict === 'infrastructure' &&
-    report.issues.length === 0 &&
-    report.parameters.every(
-      (parameter) => parameter.verdict === 'works' || parameter.verdict === 'untestable',
-    )
-  );
-}
-
 interface LiveIntegrationSuiteResult {
   exitCode: number;
   timedOut: boolean;
@@ -229,6 +231,40 @@ interface BackendPreparationResult {
   preferredBackend: ConcreteBackend;
   reusedCache: boolean;
   durationMs: number;
+}
+
+interface BackendPreparationFailureObservation {
+  error: string;
+  requestStageFacts: BackendRequestStageFact[];
+}
+
+type BackendPreparationError = Error & {
+  requestStageFacts?: unknown;
+};
+
+function backendPreparationError(
+  message: string,
+  requestStageFacts: readonly BackendRequestStageFact[],
+): BackendPreparationError {
+  const error = new Error(message) as BackendPreparationError;
+  error.requestStageFacts = sanitizeBackendRequestStageFacts(requestStageFacts);
+  return error;
+}
+
+/** Convert any backend-preparation error into the value-free observation given
+ * to the verifier. Subprocess trailers and arbitrary extra fields are removed. */
+export function backendPreparationFailureObservation(
+  error: unknown,
+): BackendPreparationFailureObservation {
+  const rawMessage = error instanceof Error ? error.message : String(error);
+  const attached =
+    error instanceof Error
+      ? sanitizeBackendRequestStageFacts((error as BackendPreparationError).requestStageFacts)
+      : [];
+  return {
+    error: stripBackendRequestStageFacts(rawMessage),
+    requestStageFacts: attached.length > 0 ? attached : parseBackendRequestStageFacts(rawMessage),
+  };
 }
 
 export function effectiveParamsForEvidence(
@@ -280,6 +316,7 @@ export async function runLiveIntegrationSuite(opts: {
   attempt?: number;
   reason?: string;
   sessionLabel?: string;
+  signal?: AbortSignal;
 }): Promise<LiveIntegrationSuiteResult> {
   // The suite is launched directly from the generated tool directory, bypassing
   // normal tool discovery. Repair a stale global/worktree runtime link here so
@@ -349,6 +386,7 @@ export async function runLiveIntegrationSuite(opts: {
       },
       {
         bail: true,
+        signal: opts.signal,
         onOutput: (stream, chunk) => {
           runningReceipt = {
             ...runningReceipt,
@@ -434,18 +472,15 @@ export async function runLiveIntegrationSuite(opts: {
   }
 }
 
-function sanitizeEvidenceValue(value: unknown, key?: string, depth = 0): unknown {
-  if (key && isSensitiveKey(key)) return '[REDACTED]';
+function sanitizeEvidenceValue(value: unknown, depth = 0): unknown {
   if (depth > 8) return '[TRUNCATED_DEPTH]';
   if (typeof value === 'string') {
     const bounded =
       value.length > 2_000 ? `${value.slice(0, 2_000)}…[TRUNCATED:${value.length}]` : value;
-    return redactFreeformText(bounded).redacted;
+    return bounded;
   }
   if (Array.isArray(value)) {
-    const items = value
-      .slice(0, 50)
-      .map((item) => sanitizeEvidenceValue(item, undefined, depth + 1));
+    const items = value.slice(0, 50).map((item) => sanitizeEvidenceValue(item, depth + 1));
     if (value.length > 50) items.push(`[TRUNCATED_ITEMS:${value.length - 50}]`);
     return items;
   }
@@ -453,7 +488,7 @@ function sanitizeEvidenceValue(value: unknown, key?: string, depth = 0): unknown
     return Object.fromEntries(
       Object.entries(value as Record<string, unknown>).map(([name, item]) => [
         name,
-        sanitizeEvidenceValue(item, name, depth + 1),
+        sanitizeEvidenceValue(item, depth + 1),
       ]),
     );
   }
@@ -652,6 +687,8 @@ interface LiveVerificationAuthSessionOptions {
   attempt?: number;
   sessionLabel: string;
   deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
+  signal?: AbortSignal;
 }
 
 export async function runLiveAuthRefreshToolCall(
@@ -690,6 +727,8 @@ export async function runLiveAuthRefreshToolCall(
       observation: await session.run({ action: input.action, parameters }),
     };
   } catch (error) {
+    const control = providerControlError(error);
+    if (control) throw control;
     return {
       session,
       error: error instanceof Error ? error.message : String(error),
@@ -717,6 +756,7 @@ export class LiveVerificationAuthSession {
       parameters?: Record<string, string | number | boolean>;
     } = {},
   ): Promise<LiveAuthActionObservation> {
+    const runDeadline = resolvedRunDeadline(this.opts.runDeadline, this.opts.deadlineMs);
     if (this.closed) throw new Error('authentication refresh session is already closed');
     await this.initialize();
     const workflow = this.workflow;
@@ -725,9 +765,9 @@ export class LiveVerificationAuthSession {
     if (!workflow?.authConfig || !verifier || !expectedAction) {
       throw new Error('authentication refresh session was not initialized');
     }
-    if (Date.now() >= (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY)) {
+    if (Date.now() >= (runDeadline?.deadlineMs ?? Number.POSITIVE_INFINITY)) {
       await this.close();
-      throw new Error('authentication refresh exceeded the live verification deadline');
+      throw new ProviderDeadlineError(runDeadline?.deadlineMs ?? Date.now());
     }
 
     const action = input.action ?? expectedAction;
@@ -755,28 +795,14 @@ export class LiveVerificationAuthSession {
       );
     }
 
-    const remainingMs = (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY) - Date.now();
-    let deadlineReached = false;
-    const actionController = new AbortController();
-    const deadlineTimer = Number.isFinite(remainingMs)
-      ? setTimeout(
-          () => {
-            deadlineReached = true;
-            actionController.abort();
-            // Abort browser-backed work without releasing the site lock. The lock
-            // is released only after runAction settles and the session closes.
-            void verifier.drain();
-          },
-          Math.max(1, remainingMs),
-        )
-      : undefined;
+    const active = combinedDeadlineSignal(runDeadline, undefined, this.opts.signal);
     try {
       const result = await verifier.runAction(action, parameters, {
         freshSession: !this.started,
-        signal: actionController.signal,
+        signal: active.signal,
       });
-      if (deadlineReached || Date.now() >= (this.opts.deadlineMs ?? Number.POSITIVE_INFINITY)) {
-        throw new Error('authentication refresh exceeded the live verification deadline');
+      if (active.signal?.aborted) {
+        throw verifierAbortReason(active.signal);
       }
       this.started = true;
       const observation: LiveAuthActionObservation = {
@@ -839,7 +865,7 @@ export class LiveVerificationAuthSession {
       await this.close();
       throw error;
     } finally {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
+      active.dispose();
     }
   }
 
@@ -876,7 +902,9 @@ export class LiveVerificationAuthSession {
       );
     }
 
-    this.release = await acquireSiteLiveLock(this.opts.workflowPath, this.opts.deadlineMs);
+    const runDeadline = resolvedRunDeadline(this.opts.runDeadline, this.opts.deadlineMs);
+    if (this.opts.signal?.aborted) throw verifierAbortReason(this.opts.signal);
+    this.release = await acquireSiteLiveLock(this.opts.workflowPath, runDeadline?.deadlineMs);
     try {
       // Another verifier can pass the optimistic check above while this process
       // waits for the site lock. Re-check under the lock before starting auth.
@@ -920,6 +948,7 @@ export async function prepareLiveVerificationBackend(opts: {
   logPath?: string;
   attempt?: number;
   probe?: typeof probeResolvedTool;
+  signal?: AbortSignal;
 }): Promise<BackendPreparationResult> {
   const tool = resolveWorkflowTool(opts.workflowPath);
   const toolDir = tool.dir;
@@ -977,6 +1006,7 @@ export async function prepareLiveVerificationBackend(opts: {
               logPath: opts.logPath,
               attempt: opts.attempt,
               label,
+              signal: opts.signal,
             })
           ).cache;
     const preferredBackend = cache.preferredOrder[0];
@@ -1011,7 +1041,7 @@ export async function prepareLiveVerificationBackend(opts: {
     });
     return result;
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
+    const failure = backendPreparationFailureObservation(error);
     const durationMs = Date.now() - startedAt;
     persistLiveVerificationEvidence(evidencePath, [
       {
@@ -1022,7 +1052,8 @@ export async function prepareLiveVerificationBackend(opts: {
         finishedAt: new Date().toISOString(),
         reason: opts.reason,
         forceReprobe: opts.forceReprobe ?? false,
-        error: message,
+        error: failure.error,
+        requestStageFacts: failure.requestStageFacts,
         durationMs,
       },
     ]);
@@ -1030,9 +1061,13 @@ export async function prepareLiveVerificationBackend(opts: {
       type: 'backend.prepare.failed',
       attempt: opts.attempt,
       label,
-      error: message,
+      error: failure.error,
+      requestStageFacts: failure.requestStageFacts,
       durationMs,
     });
+    if (failure.requestStageFacts.length > 0) {
+      throw backendPreparationError(failure.error, failure.requestStageFacts);
+    }
     throw error;
   }
 }
@@ -1044,13 +1079,14 @@ async function runBackendProbeSubprocess(opts: {
   logPath?: string;
   attempt?: number;
   label: string;
+  signal?: AbortSignal;
 }): Promise<Awaited<ReturnType<typeof probeResolvedTool>>> {
   const previousCacheContents = existsSync(opts.outPath)
     ? readFileSync(opts.outPath, 'utf8')
     : undefined;
   const tool = resolveWorkflowTool(opts.workflowPath);
   const assetRoot = pathJoin(tool.dir, '..', '..');
-  const child = spawn(
+  const child = spawnOwnedProcess(
     process.execPath,
     [
       'run',
@@ -1067,13 +1103,17 @@ async function runBackendProbeSubprocess(opts: {
       stdio: ['pipe', 'pipe', 'pipe'],
     },
   );
-  const unregisterParentCleanup = registerOwnedProcessTreeCleanup(child);
   child.stdin?.end(JSON.stringify(opts.params));
 
   let stderr = '';
+  let rawStderrTail = '';
   const logChunk = (stream: 'stdout' | 'stderr', raw: unknown): void => {
-    const chunk = redactFreeformText(boundedTail(String(raw), 4_000)).redacted;
-    if (stream === 'stderr') stderr = boundedTail(`${stderr}${chunk}`, 8_000);
+    const rawChunk = String(raw);
+    const chunk = boundedTail(rawChunk, 4_000);
+    if (stream === 'stderr') {
+      rawStderrTail = appendBackendProbeRawStderrTail(rawStderrTail, rawChunk);
+      stderr = boundedTail(`${stderr}${chunk}`, 8_000);
+    }
     appendLiveVerifierLog(opts.logPath, {
       type: 'backend.probe.progress',
       attempt: opts.attempt,
@@ -1082,19 +1122,16 @@ async function runBackendProbeSubprocess(opts: {
       chunk,
     });
   };
-  child.stdout?.on('data', (chunk) => logChunk('stdout', chunk));
-  child.stderr?.on('data', (chunk) => logChunk('stderr', chunk));
-
-  let outcome: Awaited<ReturnType<typeof waitForOwnedProcessTree>>;
-  try {
-    outcome = await waitForOwnedProcessTree(
-      child,
-      BACKEND_PREPARATION_BUDGET_MS,
-      BACKEND_PROBE_SHUTDOWN_GRACE_MS,
-    );
-  } finally {
-    unregisterParentCleanup();
-  }
+  const outcome = await waitForOwnedProcessTree(
+    child,
+    BACKEND_PREPARATION_BUDGET_MS,
+    BACKEND_PROBE_SHUTDOWN_GRACE_MS,
+    {
+      onStdoutChunk: (chunk) => logChunk('stdout', chunk),
+      onStderrChunk: (chunk) => logChunk('stderr', chunk),
+    },
+    opts.signal,
+  );
   if (outcome.timedOut) {
     // probeResolvedTool checkpoints every successful candidate. If a later
     // optional rung consumed the aggregate deadline, use the new valid cache
@@ -1125,8 +1162,11 @@ async function runBackendProbeSubprocess(opts: {
     );
   }
   if (outcome.exitCode !== 0) {
-    throw new Error(
-      `backend probe exited ${outcome.exitCode}${stderr ? `: ${stderr.slice(-2_000)}` : ''}`,
+    const requestStageFacts = parseBackendRequestStageFacts(rawStderrTail);
+    const publicStderr = stripBackendRequestStageFacts(stderr);
+    throw backendPreparationError(
+      `backend probe exited ${outcome.exitCode}${publicStderr ? `: ${publicStderr.slice(-2_000)}` : ''}`,
+      requestStageFacts,
     );
   }
 
@@ -1140,6 +1180,12 @@ async function runBackendProbeSubprocess(opts: {
   return { cache: cacheStatus.cache, outPath: opts.outPath };
 }
 
+/** Retain the private transport marker independently of the shorter public log
+ * chunk. The subprocess emits at most 32 whitelisted request-stage facts. */
+export function appendBackendProbeRawStderrTail(current: string, raw: unknown): string {
+  return boundedTail(`${current}${String(raw)}`, 8_000);
+}
+
 interface LiveSemanticVerificationResult {
   report: LiveVerificationReport;
   provider: ProviderName;
@@ -1151,12 +1197,34 @@ interface LiveSemanticVerificationResult {
   completedReview: boolean;
 }
 
+function verifierAbortReason(signal: AbortSignal | undefined): Error {
+  return signal?.reason instanceof Error
+    ? signal.reason
+    : new DOMException('Semantic verification cancelled', 'AbortError');
+}
+
+function throwIfVerifierCancelled(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) throw verifierAbortReason(signal);
+}
+
 export async function runLiveSemanticVerification(opts: {
   provider: ProviderName;
   toolDir: string;
   evidence: LiveIntegrationEvidence[];
   deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
+  onDeadlineReached?: () => Promise<number | null>;
+  signal?: AbortSignal;
 }): Promise<LiveSemanticVerificationResult> {
+  throwIfVerifierCancelled(opts.signal);
+  const runDeadline = resolvedRunDeadline(
+    opts.runDeadline,
+    opts.deadlineMs ?? Date.now() + 10 * 60_000,
+  );
+  const verifierDeadline = boundedRunDeadline(runDeadline, Date.now() + 10 * 60_000);
+  if (verifierDeadline && Date.now() >= verifierDeadline.deadlineMs) {
+    throw new ProviderDeadlineError(verifierDeadline.deadlineMs);
+  }
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
   const workflow = WorkflowSchema.parse(JSON.parse(readFileSync(workflowPath, 'utf8')));
   const model = preferredVerificationModel(opts.provider);
@@ -1166,7 +1234,6 @@ export async function runLiveSemanticVerification(opts: {
   const verifierSessionLabel = nextRecordLabel(evidencePath, 'verifier-session');
   const sessionStartedAtMs = Date.now();
   const sessionStartedAt = new Date(sessionStartedAtMs).toISOString();
-  const preparationBudget = { creditedCount: 0, creditMs: 0, grantedMs: 0 };
   let verifierSession: PersistedLiveVerificationRecord = {
     label: verifierSessionLabel,
     kind: 'verifier-session',
@@ -1183,10 +1250,6 @@ export async function runLiveSemanticVerification(opts: {
     ]);
   const attemptErrors: string[] = [];
   let attemptsUsed = 0;
-  // Verification gets its own reasoning window. Backend preparation is added
-  // separately below and both attempts share this one absolute deadline.
-  const verifierDeadlineMs = opts.deadlineMs ?? Date.now() + 10 * 60_000;
-
   persistLiveVerificationEvidence(evidencePath, accumulated);
   appendLiveVerifierLog(logPath, {
     type: 'verifier.session.started',
@@ -1196,6 +1259,7 @@ export async function runLiveSemanticVerification(opts: {
   });
 
   for (let attempt = 1; attempt <= 2; attempt++) {
+    throwIfVerifierCancelled(opts.signal);
     attemptsUsed = attempt;
     try {
       if (existsSync(reportPath)) unlinkSync(reportPath);
@@ -1221,11 +1285,13 @@ export async function runLiveSemanticVerification(opts: {
               reportPath,
               initialMessage: retryMessage,
               model,
-              deadlineMs: verifierDeadlineMs,
-              preparationBudget,
+              deadlineMs: verifierDeadline?.deadlineMs,
+              runDeadline: verifierDeadline,
+              onDeadlineReached: opts.onDeadlineReached,
               logPath,
               attempt,
               sessionLabel: verifierSessionLabel,
+              signal: opts.signal,
             })
           : await runCliVerifier({
               provider: opts.provider,
@@ -1233,11 +1299,14 @@ export async function runLiveSemanticVerification(opts: {
               reportPath,
               initialMessage: retryMessage,
               model,
-              deadlineMs: verifierDeadlineMs,
+              deadlineMs: verifierDeadline?.deadlineMs,
+              runDeadline: verifierDeadline,
+              onDeadlineReached: opts.onDeadlineReached,
               logSinceMs: sessionStartedAtMs,
               logPath,
               attempt,
               sessionLabel: verifierSessionLabel,
+              signal: opts.signal,
             });
       accumulated = mergePersistedRecords(
         accumulated,
@@ -1281,6 +1350,11 @@ export async function runLiveSemanticVerification(opts: {
         completedReview: true,
       };
     } catch (error) {
+      throwIfVerifierCancelled(opts.signal);
+      const control = providerControlError(error);
+      if (control) throw control;
+      const reported = providerReportedError(error);
+      if (reported) throw reported;
       const message = error instanceof Error ? error.message : String(error);
       attemptErrors.push(`attempt ${attempt}: ${message}`);
       accumulated = mergePersistedRecords(
@@ -1390,6 +1464,8 @@ export function buildVerifierArtifactContext(toolDir: string, toolName: string):
   }
   return {
     workflow: JSON.parse(readFileSync(pathJoin(toolDir, 'workflow.json'), 'utf8')),
+    requestTransform: readVerifierArtifact(pathJoin(toolDir, 'request-transform.ts')),
+    requestTests: readVerifierArtifact(pathJoin(toolDir, 'request.test.ts')),
     parser: readVerifierArtifact(pathJoin(toolDir, 'parser.ts')),
     parserTests: readVerifierArtifact(pathJoin(toolDir, 'parser.test.ts')),
     integrationTests: readVerifierArtifact(pathJoin(toolDir, 'integration.test.ts')),
@@ -1509,21 +1585,11 @@ function compactVerifierValue(value: unknown, depth: number): unknown {
 }
 
 function clipVerifierString(value: string, maxChars: number): string {
-  const redacted = redactFreeformText(value).redacted;
+  const redacted = value;
   if (redacted.length <= maxChars) return redacted;
   const headChars = Math.ceil(maxChars * 0.6);
   const tailChars = Math.floor(maxChars * 0.4);
   return `${redacted.slice(0, headChars)}\n...[prompt preview truncated ${redacted.length - maxChars} chars]...\n${redacted.slice(-tailChars)}`;
-}
-
-function creditBackendPreparation(
-  budget: { creditedCount: number; creditMs: number },
-  durationMs: number,
-  reusedCache: boolean,
-): void {
-  if (reusedCache || budget.creditedCount >= MAX_CREDITED_BACKEND_PREPARATIONS) return;
-  budget.creditedCount++;
-  budget.creditMs += Math.min(Math.max(0, durationMs), BACKEND_PREPARATION_BUDGET_MS);
 }
 
 async function runAnthropicVerifier(opts: {
@@ -1532,11 +1598,21 @@ async function runAnthropicVerifier(opts: {
   initialMessage: string;
   model: string;
   deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
+  onDeadlineReached?: () => Promise<number | null>;
   logPath: string;
   attempt: number;
   sessionLabel: string;
-  preparationBudget: { creditedCount: number; creditMs: number; grantedMs: number };
+  signal?: AbortSignal;
 }): Promise<LiveVerificationReport> {
+  const active = combinedDeadlineSignal(
+    opts.runDeadline,
+    undefined,
+    opts.signal,
+    Date.now,
+    undefined,
+    opts.onDeadlineReached,
+  );
   const provider = resolveProvider({
     provider: 'anthropic-api',
     model: opts.model,
@@ -1562,6 +1638,8 @@ async function runAnthropicVerifier(opts: {
           attempt: opts.attempt,
           sessionLabel: opts.sessionLabel,
           deadlineMs: opts.deadlineMs,
+          runDeadline: opts.runDeadline,
+          signal: active.signal,
         });
         authSession = result.session;
         return result.error
@@ -1572,7 +1650,7 @@ async function runAnthropicVerifier(opts: {
     {
       name: 'prepare_live_backend',
       description:
-        'Reuse the current preferred backend, probing only when no valid preference exists. Set forceReprobe only after the preferred backend fails because of a transport, network, or browser-infrastructure error; semantic output failures must go back to the compiler without reprobe.',
+        'Reuse the current preferred backend, probing only when no valid preference exists. Set forceReprobe only after the preferred backend fails because of a transport, network, or browser-infrastructure error; semantic output failures must go back to the compiler without reprobe. On failure, requestStageFacts report value-free preparation, transform, and send outcomes for each attempted request.',
       input_schema: {
         type: 'object',
         properties: {
@@ -1593,7 +1671,6 @@ async function runAnthropicVerifier(opts: {
         }
         const parsed = validator.safeParse(input.params ?? {});
         if (!parsed.success) return { result: parsed.error.message, isError: true };
-        const startedAt = Date.now();
         try {
           const result = await prepareLiveVerificationBackend({
             workflowPath: opts.workflowPath,
@@ -1602,13 +1679,14 @@ async function runAnthropicVerifier(opts: {
             forceReprobe: input.forceReprobe === true,
             logPath: opts.logPath,
             attempt: opts.attempt,
+            signal: active.signal,
           });
-          creditBackendPreparation(opts.preparationBudget, result.durationMs, result.reusedCache);
           return { result: JSON.stringify(result) };
         } catch (error) {
-          creditBackendPreparation(opts.preparationBudget, Date.now() - startedAt, false);
+          const control = providerControlError(error);
+          if (control) throw control;
           return {
-            result: error instanceof Error ? error.message : String(error),
+            result: JSON.stringify(backendPreparationFailureObservation(error)),
             isError: true,
           };
         }
@@ -1632,9 +1710,12 @@ async function runAnthropicVerifier(opts: {
             attempt: opts.attempt,
             reason: typeof input.reason === 'string' ? input.reason : undefined,
             sessionLabel: opts.sessionLabel,
+            signal: active.signal,
           });
           return { result: JSON.stringify(suite) };
         } catch (error) {
+          const control = providerControlError(error);
+          if (control) throw control;
           return {
             result: error instanceof Error ? error.message : String(error),
             isError: true,
@@ -1679,8 +1760,12 @@ async function runAnthropicVerifier(opts: {
             workflowPath: opts.workflowPath,
             params: parsed.data as Record<string, string | number | boolean>,
             preferredOnlyBackend: true,
+            deadlineMs: opts.runDeadline?.deadlineMs ?? opts.deadlineMs,
+            signal: active.signal,
           });
         } catch (error) {
+          const control = providerControlError(error);
+          if (control) throw control;
           const message = error instanceof Error ? error.message : String(error);
           appendLiveVerifierLog(opts.logPath, {
             type: 'targeted-call.failed',
@@ -1773,14 +1858,11 @@ async function runAnthropicVerifier(opts: {
       initialUserMessage: opts.initialMessage,
       tools,
       deadlineMs: opts.deadlineMs ?? Date.now() + 10 * 60_000,
+      runDeadline: opts.runDeadline,
+      onDeadlineReached: opts.onDeadlineReached,
       softTurnCap: 12,
       llm: provider,
-      onDeadlineReached: async () => {
-        const extensionMs = opts.preparationBudget.creditMs - opts.preparationBudget.grantedMs;
-        if (extensionMs <= 0) return null;
-        opts.preparationBudget.grantedMs += extensionMs;
-        return extensionMs;
-      },
+      signal: active.signal,
       onConversationUpdate: (conversation) => {
         for (const entry of conversation.slice(loggedConversationEntries)) {
           appendLiveVerifierLog(opts.logPath, {
@@ -1795,6 +1877,7 @@ async function runAnthropicVerifier(opts: {
     if (!submitted) throw new Error(`semantic verifier ended without a report (${result.outcome})`);
     return submitted;
   } finally {
+    active.dispose();
     await authSession?.close();
   }
 }
@@ -1806,14 +1889,18 @@ async function runCliVerifier(opts: {
   initialMessage: string;
   model: string;
   deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
+  onDeadlineReached?: () => Promise<number | null>;
   logPath: string;
   attempt: number;
   sessionLabel: string;
   logSinceMs: number;
+  signal?: AbortSignal;
 }): Promise<LiveVerificationReport> {
   if (opts.provider !== 'codex-cli' && opts.provider !== 'claude-cli') {
     throw new Error(`CLI verifier is unsupported for ${opts.provider}`);
   }
+  const cliProvider = opts.provider;
   const mcpArgs = [
     'run',
     CLI_PATH,
@@ -1829,35 +1916,43 @@ async function runCliVerifier(opts: {
     '--session-label',
     opts.sessionLabel,
   ];
-  const child =
-    opts.provider === 'codex-cli'
-      ? spawnCodexVerifier(opts, mcpArgs)
-      : spawnClaudeVerifier(opts, mcpArgs);
-  const unregisterParentCleanup = registerOwnedProcessTreeCleanup(child);
-  const deadlineMs = opts.deadlineMs ?? Date.now() + 10 * 60_000;
-  let exitCode: number | null;
-  let stderr: string;
-  try {
-    ({ exitCode, stderr } = await waitForChild(
-      child,
-      deadlineMs,
-      opts.logPath,
-      opts.attempt,
-      opts.logSinceMs,
-    ));
-  } finally {
-    unregisterParentCleanup();
-  }
-  if (!existsSync(opts.reportPath)) {
-    throw new Error(
-      `${opts.provider} semantic verifier exited ${exitCode} without a report${stderr ? `: ${stderr.slice(-1000)}` : ''}`,
-    );
-  }
-  const parsed = LiveVerificationReportSchema.safeParse(
-    JSON.parse(readFileSync(opts.reportPath, 'utf8')),
+  const runDeadline = resolvedRunDeadline(
+    opts.runDeadline,
+    opts.deadlineMs ?? Date.now() + 10 * 60_000,
   );
-  if (!parsed.success) throw new Error(`malformed semantic report: ${parsed.error.message}`);
-  return parsed.data;
+  return await retryTransientProviderFailure(
+    async () => {
+      const child =
+        opts.provider === 'codex-cli'
+          ? spawnCodexVerifier({ ...opts, deadlineMs: runDeadline?.deadlineMs }, mcpArgs)
+          : spawnClaudeVerifier({ ...opts, deadlineMs: runDeadline?.deadlineMs }, mcpArgs);
+      const { exitCode, stderr } = await waitForVerifierChild(
+        child,
+        runDeadline,
+        opts.logPath,
+        opts.attempt,
+        opts.logSinceMs,
+        opts.signal,
+        5_000,
+        cliProvider,
+      );
+      if (!existsSync(opts.reportPath)) {
+        throw new Error(
+          `${opts.provider} semantic verifier exited ${exitCode} without a report${stderr ? `: ${stderr.slice(-1000)}` : ''}`,
+        );
+      }
+      const parsed = LiveVerificationReportSchema.safeParse(
+        JSON.parse(readFileSync(opts.reportPath, 'utf8')),
+      );
+      if (!parsed.success) throw new Error(`malformed semantic report: ${parsed.error.message}`);
+      return parsed.data;
+    },
+    {
+      runDeadline,
+      signal: opts.signal,
+      onDeadlineReached: opts.onDeadlineReached,
+    },
+  );
 }
 
 function spawnCodexVerifier(
@@ -1895,9 +1990,8 @@ function spawnCodexVerifier(
     '--skip-git-repo-check',
     '-',
   ];
-  const child = spawn('codex', args, {
+  const child = spawnOwnedProcess('codex', args, {
     cwd: REPO_ROOT,
-    detached: true,
     env: {
       ...process.env,
       IMPRINT_LIVE_VERIFIER_DEADLINE_MS: String(opts.deadlineMs ?? Date.now() + 10 * 60_000),
@@ -1955,9 +2049,8 @@ function spawnClaudeVerifier(
     opts.model,
     opts.initialMessage,
   ];
-  return spawn('claude', args, {
+  return spawnOwnedProcess('claude', args, {
     cwd: REPO_ROOT,
-    detached: true,
     env: {
       ...process.env,
       IMPRINT_LIVE_VERIFIER_DEADLINE_MS: String(opts.deadlineMs ?? Date.now() + 10 * 60_000),
@@ -1967,257 +2060,105 @@ function spawnClaudeVerifier(
   });
 }
 
-async function waitForChild(
+export async function waitForVerifierChild(
   child: ChildProcess,
-  deadlineMs: number,
+  deadline: number | RunDeadlineRef | undefined,
   logPath: string,
   attempt: number,
-  logSinceMs: number,
+  _logSinceMs: number,
+  signal?: AbortSignal,
+  shutdownGraceMs = 5_000,
+  provider?: 'claude-cli' | 'codex-cli',
 ): Promise<{ exitCode: number | null; stderr: string }> {
+  const runDeadline =
+    typeof deadline === 'number' ? resolvedRunDeadline(undefined, deadline) : deadline;
   let stderr = '';
-  // Always drain both pipes. CLI JSON streams can exceed the OS pipe buffer;
-  // leaving stdout unread would deadlock an otherwise completed verifier.
-  child.stdout?.on('data', (chunk) => {
-    appendLiveVerifierLog(logPath, {
-      type: 'provider.stdout',
-      attempt,
-      chunk: boundedTail(String(chunk), 8_000),
-    });
-  });
-  child.stderr?.on('data', (chunk) => {
-    stderr = `${stderr}${String(chunk)}`.slice(-8000);
-    appendLiveVerifierLog(logPath, {
-      type: 'provider.stderr',
-      attempt,
-      chunk: boundedTail(String(chunk), 8_000),
-    });
-  });
-  return await new Promise((resolve, reject) => {
-    let timedOut = false;
-    let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
-    const clearTimers = (): void => {
-      if (deadlineTimer) clearTimeout(deadlineTimer);
-      if (forceTimer) clearTimeout(forceTimer);
-    };
-    const timeOut = (): void => {
-      timedOut = true;
-      const preparationCreditMs = backendPreparationDeadlineCreditMs(
-        logPath,
-        logSinceMs,
-        Date.now(),
-      );
-      appendLiveVerifierLog(logPath, {
-        type: 'provider.timeout',
-        attempt,
-        deadlineMs,
-        preparationCreditMs,
-      });
-      signalVerifierProcessTree(child, 'SIGTERM');
-      forceTimer = setTimeout(() => {
-        signalVerifierProcessTree(child, 'SIGKILL');
-        reject(new Error('semantic verifier timed out'));
-      }, 5_000);
-      forceTimer.unref?.();
-    };
-    const checkDeadline = (): void => {
-      const now = Date.now();
-      const preparationCreditMs = backendPreparationDeadlineCreditMs(logPath, logSinceMs, now);
-      const remainingMs = deadlineMs + preparationCreditMs - now;
-      if (remainingMs <= 0) {
-        timeOut();
-        return;
-      }
-      // Recheck periodically because preparation activity is written by the
-      // verifier MCP subprocess while this parent is waiting on the CLI.
-      deadlineTimer = setTimeout(checkDeadline, Math.min(remainingMs, 500));
-      deadlineTimer.unref?.();
-    };
-    checkDeadline();
-    child.once('error', (error) => {
-      clearTimers();
-      signalVerifierProcessTree(child, 'SIGKILL');
-      reject(error);
-    });
-    child.once('close', (code) => {
-      clearTimers();
-      // Codex/Claude can exit while an MCP tool call is still in flight. Their
-      // stdio MCP child (and a Chrome it launched) remains in the detached
-      // verifier process group unless we explicitly reap the group here. A
-      // retry must never start a second probe beside an orphaned first probe.
-      signalVerifierProcessTree(child, 'SIGKILL');
-      appendLiveVerifierLog(logPath, {
-        type: 'provider.closed',
-        attempt,
-        exitCode: code,
-      });
-      if (timedOut) reject(new Error('semantic verifier timed out'));
-      else resolve({ exitCode: code, stderr });
-    });
-  });
-}
+  const terminal = provider ? new ProviderTerminalAccumulator(provider) : undefined;
+  const active = combinedDeadlineSignal(runDeadline, undefined, signal);
 
-export function backendPreparationDeadlineCreditMs(
-  logPath: string,
-  sinceMs: number,
-  nowMs = Date.now(),
-): number {
-  if (!existsSync(logPath)) return 0;
-  const preparations = new Map<
-    string,
-    { startedAtMs: number; durationMs?: number; reusedCache?: boolean }
-  >();
-  for (const line of readFileSync(logPath, 'utf8').split('\n')) {
-    if (!line.trim()) continue;
-    let event: Record<string, unknown>;
-    try {
-      event = JSON.parse(line) as Record<string, unknown>;
-    } catch {
-      // The append-only log can end in a partial line while the MCP process is writing.
-      continue;
-    }
-    const timestampMs =
-      typeof event.timestamp === 'string' ? Date.parse(event.timestamp) : Number.NaN;
-    if (!Number.isFinite(timestampMs) || timestampMs < sinceMs || typeof event.label !== 'string') {
-      continue;
-    }
-    if (event.type === 'backend.prepare.started') {
-      preparations.set(event.label, { startedAtMs: timestampMs });
-      continue;
-    }
-    if (event.type !== 'backend.prepare.completed' && event.type !== 'backend.prepare.failed') {
-      continue;
-    }
-    const preparation = preparations.get(event.label);
-    if (!preparation) continue;
-    preparation.durationMs =
-      typeof event.durationMs === 'number'
-        ? event.durationMs
-        : Math.max(0, timestampMs - preparation.startedAtMs);
-    preparation.reusedCache = event.reusedCache === true;
+  try {
+    const output = await collectOwnedProcess(child, {
+      signal: active.signal,
+      shutdownGraceMs,
+      onStdoutLine: (line) => terminal?.ingestLine(line),
+      onStdoutChunk: (chunk) =>
+        appendLiveVerifierLog(logPath, {
+          type: 'provider.stdout',
+          attempt,
+          chunk: boundedTail(chunk, 8_000),
+        }),
+      onStderrChunk: (chunk) => {
+        stderr = `${stderr}${chunk}`.slice(-8000);
+        appendLiveVerifierLog(logPath, {
+          type: 'provider.stderr',
+          attempt,
+          chunk: boundedTail(chunk, 8_000),
+        });
+      },
+    });
+    terminal?.ingestStderr(stderr);
+    const parsed = terminal?.result();
+    if (parsed?.providerError) throw parsed.providerError;
+    appendLiveVerifierLog(logPath, {
+      type: 'provider.closed',
+      attempt,
+      exitCode: output.exitCode,
+    });
+    return { exitCode: output.exitCode, stderr };
+  } finally {
+    active.dispose();
   }
-
-  return [...preparations.values()]
-    .sort((a, b) => a.startedAtMs - b.startedAtMs)
-    .filter((preparation) => !preparation.reusedCache)
-    .slice(0, MAX_CREDITED_BACKEND_PREPARATIONS)
-    .reduce(
-      (total, preparation) =>
-        total +
-        Math.min(
-          Math.max(0, preparation.durationMs ?? nowMs - preparation.startedAtMs),
-          BACKEND_PREPARATION_BUDGET_MS,
-        ),
-      0,
-    );
 }
 
 export async function waitForOwnedProcessTree(
   child: ChildProcess,
   timeoutMs: number,
   shutdownGraceMs: number,
+  callbacks: {
+    onStdoutChunk?: (chunk: string) => void;
+    onStderrChunk?: (chunk: string) => void;
+  } = {},
+  signal?: AbortSignal,
 ): Promise<{ exitCode: number | null; timedOut: boolean }> {
-  return await new Promise((resolve, reject) => {
-    let settled = false;
-    let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = (value: {
-      exitCode: number | null;
-      timedOut: boolean;
-    }): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (forceTimer) clearTimeout(forceTimer);
-      resolve(value);
-    };
-    const timer = setTimeout(() => {
-      signalVerifierProcessTree(child, 'SIGTERM');
-      forceTimer = setTimeout(() => {
-        signalVerifierProcessTree(child, 'SIGKILL');
-        finish({ exitCode: child.exitCode, timedOut: true });
-      }, shutdownGraceMs);
-      forceTimer.unref?.();
-    }, timeoutMs);
-    child.once('error', (error) => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (forceTimer) clearTimeout(forceTimer);
-      reject(error);
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = setTimeout(() => {
+    timedOut = true;
+    controller.abort(new Error('Owned process deadline exceeded'));
+  }, timeoutMs);
+  const cancel = (): void =>
+    controller.abort(
+      signal?.reason instanceof Error
+        ? signal.reason
+        : new DOMException('Owned process cancelled', 'AbortError'),
+    );
+  if (signal?.aborted) cancel();
+  else signal?.addEventListener('abort', cancel, { once: true });
+  timer.unref?.();
+  try {
+    const output = await collectOwnedProcess(child, {
+      signal: controller.signal,
+      shutdownGraceMs,
+      ...callbacks,
     });
-    child.once('close', (code) => {
-      const timedOut = forceTimer !== undefined;
-      // Reap any browser/crashpad descendants that survived the worker itself.
-      signalVerifierProcessTree(child, timedOut ? 'SIGKILL' : 'SIGTERM');
-      finish({ exitCode: code, timedOut });
-    });
-  });
-}
-
-export function registerOwnedProcessTreeCleanup(
-  child: ChildProcess,
-  shutdownGraceMs = BACKEND_PROBE_SHUTDOWN_GRACE_MS,
-): () => void {
-  const signals: NodeJS.Signals[] = ['SIGINT', 'SIGTERM'];
-  const onExit = (): void => signalVerifierProcessTree(child, 'SIGKILL');
-  const signalHandlers = new Map<NodeJS.Signals, () => void>();
-  const forceTimers = new Set<ReturnType<typeof setTimeout>>();
-  let shutdownRequested = false;
-  const hadExistingHandler = new Map(
-    signals.map((signal) => [signal, process.listenerCount(signal) > 0]),
-  );
-  const unregisterSignals = (): void => {
-    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
-  };
-  const unregister = (): void => {
-    unregisterSignals();
-    // Once parent shutdown has begun, the direct worker can exit before a
-    // browser or other detached descendant in its process group. Preserve the
-    // scheduled escalation and exit fallback in that case. Normal completion
-    // still removes every listener and timer immediately.
-    if (shutdownRequested) return;
-    process.removeListener('exit', onExit);
-    for (const timer of forceTimers) clearTimeout(timer);
-    forceTimers.clear();
-  };
-  process.once('exit', onExit);
-  for (const signal of signals) {
-    const handler = (): void => {
-      shutdownRequested = true;
-      unregisterSignals();
-      signalVerifierProcessTree(child, signal);
-      const forceTimer = setTimeout(() => {
-        forceTimers.delete(forceTimer);
-        signalVerifierProcessTree(child, 'SIGKILL');
-        if (forceTimers.size === 0) process.removeListener('exit', onExit);
-      }, shutdownGraceMs);
-      forceTimers.add(forceTimer);
-      forceTimer.unref?.();
-      // Let an existing teach/compile signal handler perform its own graceful
-      // shutdown. If this verifier is running standalone, restore the default
-      // behavior so installing cleanup does not accidentally swallow SIGINT.
-      if (!hadExistingHandler.get(signal)) process.kill(process.pid, signal);
-    };
-    signalHandlers.set(signal, handler);
-    process.once(signal, handler);
+    return { exitCode: output.exitCode, timedOut: false };
+  } catch (error) {
+    if (signal?.aborted) throw verifierAbortReason(signal);
+    if (!timedOut) throw error;
+    return { exitCode: child.exitCode, timedOut: true };
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', cancel);
   }
-  return unregister;
-}
-
-function signalVerifierProcessTree(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (child.pid !== undefined) {
-    try {
-      process.kill(-child.pid, signal);
-      return;
-    } catch {
-      // Fall back to the direct child when process groups are unavailable.
-    }
-  }
-  child.kill(signal);
 }
 
 export function semanticVerificationFailures(report: LiveVerificationReport): string[] {
-  if (report.status === 'approved' || report.status === 'approved_with_gaps') return [];
+  if (report.status === 'approved') return [];
+  if (report.status === 'approved_with_gaps') {
+    return [
+      `independent live semantic verification remains unresolved: ${report.summary}\nGaps: ${report.gaps.join('; ') || 'none'}\nEvidence: ${report.evidenceArtifact ?? LIVE_VERIFICATION_EVIDENCE_FILE}\nVerifier log: ${report.logArtifact ?? LIVE_VERIFIER_LOG_FILE}`,
+    ];
+  }
   if (report.status === 'inconclusive') {
     return [
       `independent live semantic verification was inconclusive: ${report.summary}\nBaseline: ${report.baseline.reason}\nGaps: ${report.gaps.join('; ') || 'none'}\nEvidence: ${report.evidenceArtifact ?? LIVE_VERIFICATION_EVIDENCE_FILE}\nVerifier log: ${report.logArtifact ?? LIVE_VERIFIER_LOG_FILE}`,

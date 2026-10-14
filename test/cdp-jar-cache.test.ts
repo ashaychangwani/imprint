@@ -49,17 +49,22 @@ describe('cdp-jar-cache loadJar/saveJar/clearJar', () => {
     expect(loadJar(siteDir)).toBeNull();
   });
 
-  it('rejects a non-validated (_abck != 0) jar', () => {
+  it('reuses a fresh jar without cookie-specific validation markers', () => {
     const j = validJar();
     j.abckFlag = '-1';
     saveJar(siteDir, j);
-    expect(loadJar(siteDir)).toBeNull();
+    expect(loadJar(siteDir)?.abckFlag).toBe('-1');
   });
 
   it('clearJar removes the cached jar', () => {
     saveJar(siteDir, validJar());
     clearJar(siteDir);
     expect(loadJar(siteDir)).toBeNull();
+  });
+  it('reuses a fresh browser snapshot even when the site issues no cookies', () => {
+    const jar = { ...validJar(), cookies: [], validated: false, abckFlag: 'missing' };
+    saveJar(siteDir, jar);
+    expect(loadJar(siteDir)?.cookies).toEqual([]);
   });
 });
 

@@ -12,6 +12,7 @@
 
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { AKAMAI_SENSOR_COOKIE, isAbckValidated } from './bot-defense.ts';
+import { withTimeout } from './concurrency.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { createLog } from './log.ts';
 
@@ -39,6 +40,8 @@ export interface StealthFetchOptions {
   /** Stop auto-retrying after this many consecutive 403s so the ladder
    *  can escalate to playbook. Default 3. */
   maxConsecutiveFailures?: number;
+  /** Maximum time for one browser bootstrap. Default 60 seconds. */
+  bootstrapTimeoutMs?: number;
 }
 
 export interface FetchInit {
@@ -122,6 +125,7 @@ export interface BootstrapArgs {
   userAgent?: string;
   headed: boolean;
   sensorWaitSeconds: number;
+  bootstrapTimeoutMs: number;
 }
 
 /**
@@ -223,6 +227,7 @@ export function createStealthFetch(
     maxRetries: o.maxRetries ?? 1,
     maxTokenAgeSeconds: o.maxTokenAgeSeconds ?? 600,
     maxConsecutiveFailures: o.maxConsecutiveFailures ?? 3,
+    bootstrapTimeoutMs: o.bootstrapTimeoutMs ?? 60_000,
   };
   const bootstrapFn = internals?.bootstrap ?? bootstrapStealthToken;
   const underlyingFetchFn = internals?.underlyingFetch ?? defaultUnderlyingFetch;
@@ -243,14 +248,19 @@ export function createStealthFetch(
     if (tokens) return;
     const t0 = Date.now();
     log('bootstrapping…');
-    tokens = await bootstrapFn({
-      baseUrl: opts.baseUrl,
-      bootstrapUrl: opts.bootstrapUrl,
-      probeUrl,
-      userAgent: opts.userAgent,
-      headed: opts.headed,
-      sensorWaitSeconds: opts.sensorWaitSeconds,
-    });
+    tokens = await withTimeout(
+      bootstrapFn({
+        baseUrl: opts.baseUrl,
+        bootstrapUrl: opts.bootstrapUrl,
+        probeUrl,
+        userAgent: opts.userAgent,
+        headed: opts.headed,
+        sensorWaitSeconds: opts.sensorWaitSeconds,
+        bootstrapTimeoutMs: opts.bootstrapTimeoutMs,
+      }),
+      opts.bootstrapTimeoutMs,
+      'stealth browser bootstrap',
+    );
     consecutiveFailures = 0; // fresh tokens → past failures don't count
     log(
       `bootstrapped in ${Date.now() - t0}ms — ${tokens.cookies.length} cookies, ${Object.keys(tokens.sensorHeaders).length} sensor headers`,
@@ -499,6 +509,11 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
   const chromium = await getStealthChromium();
   const stealthActive = await isStealthPluginAvailable();
   let browser: Browser | undefined;
+  let bootstrapTimedOut = false;
+  const bootstrapTimer = setTimeout(() => {
+    bootstrapTimedOut = true;
+    void browser?.close().catch(() => {});
+  }, args.bootstrapTimeoutMs);
   try {
     browser = await chromium.launch({
       headless: !args.headed,
@@ -690,6 +705,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       })
       .map((c) => ({ name: c.name, value: c.value }));
 
+    if (bootstrapTimedOut) throw new Error('stealth browser bootstrap timed out');
     return {
       cookies,
       sensorHeaders,
@@ -700,6 +716,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       clientHints,
     };
   } finally {
+    clearTimeout(bootstrapTimer);
     await browser?.close().catch(() => {});
   }
 }

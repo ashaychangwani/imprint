@@ -12,19 +12,17 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
 import {
-  __drainPendingProbeRunsForTest,
   __resetCompileCdpPoolForTest,
+  __resetCompilePacingForTest,
   __resetCompileWinningBackendForTest,
   __setCdpBrowserFetchFactoryForTest,
   __setCdpJarMinterForTest,
   __setPlaybookRunnerForTest,
-  __setProbeTimeoutMsForTest,
   cdpReplayPoolKey,
+  compileBackendStateDir,
   effectiveAutoLadder,
   evaluateBootstrapCapture,
   pickBaseUrl,
-  pickProbeWinner,
-  prefersCdpReplayFirst,
   renderWorkflowRequests,
   resolveLadder,
   runWithLadder,
@@ -72,18 +70,13 @@ beforeEach(() => {
   }));
   // Disable the compile-path .act rate gate so tests don't sleep between calls.
   process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '0';
-  // Shorten the parallel probe deadline so its setTimeout doesn't keep bun's
-  // event loop alive past the default 5s test timeout.
-  __setProbeTimeoutMsForTest(1_000);
 });
 
 afterEach(async () => {
-  await __drainPendingProbeRunsForTest();
   rmSync(root, { recursive: true, force: true });
   __setCdpJarMinterForTest(null);
   __setCdpBrowserFetchFactoryForTest(null);
   __setPlaybookRunnerForTest(null);
-  __setProbeTimeoutMsForTest(null);
   // The compile CDP pool is now process-global — reset it so a pooled browser /
   // armed idle timer can't leak across tests.
   __resetCompileCdpPoolForTest();
@@ -182,35 +175,29 @@ describe('resolveLadder', () => {
   });
 });
 
-describe('pickProbeWinner (cdp-replay preferred over stealth-fetch)', () => {
-  it('prefers cdp-replay over a FASTER stealth-fetch — its cold start amortizes via the pool', () => {
-    const w = pickProbeWinner([
-      { backend: 'stealth-fetch' as const, durationMs: 1300 },
-      { backend: 'cdp-replay' as const, durationMs: 33000 },
-    ]);
-    expect(w?.backend).toBe('cdp-replay');
-  });
-
-  it('prefers fetch when it succeeded (cheapest, no browser)', () => {
-    const w = pickProbeWinner([
-      { backend: 'cdp-replay' as const, durationMs: 33000 },
-      { backend: 'fetch' as const, durationMs: 300 },
-      { backend: 'stealth-fetch' as const, durationMs: 1300 },
-    ]);
-    expect(w?.backend).toBe('fetch');
-  });
-
-  it('falls back to stealth-fetch when it is the only winner', () => {
-    const w = pickProbeWinner([{ backend: 'stealth-fetch' as const, durationMs: 1300 }]);
-    expect(w?.backend).toBe('stealth-fetch');
-  });
-
-  it('returns undefined when there are no winners', () => {
-    expect(pickProbeWinner([])).toBeUndefined();
-  });
-});
-
 describe('runWithLadder — single-rung explicit', () => {
+  it('passes cancellation into fetch and never escalates or memoizes a cancelled call', async () => {
+    const controller = new AbortController();
+    const reason = new Error('fixture deadline');
+    const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
+    const tool = makeFakeTool('fixture-cancel', behavior);
+    tool.toolFn = async (_params, options) => {
+      expect(options?.signal).toBe(controller.signal);
+      controller.abort(reason);
+      return { ok: true, data: { items: ['late fixture result'] } };
+    };
+    const winners = new Map<string, ConcreteBackend>();
+
+    await expect(
+      runWithLadder(['fetch', 'stealth-fetch'], tool, {}, root, new Map(), {
+        signal: controller.signal,
+        winnerCache: winners,
+      }),
+    ).rejects.toBe(reason);
+    expect(winners.size).toBe(0);
+    expect(behavior.calls.stealth).toBe(0);
+  });
+
   it('never executes the playbook rung for authenticate workflows', async () => {
     const behavior: FakeToolBehavior = { calls: { fetch: 0, stealth: 0 } };
     const tool = makeFakeTool('auth-fixture', behavior);
@@ -245,11 +232,36 @@ describe('runWithLadder — single-rung explicit', () => {
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('alpha', behavior);
-    const r = await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
+    const originalStderrWrite = process.stderr.write;
+    let stderr = '';
+    process.stderr.write = ((chunk: string | Uint8Array) => {
+      stderr += String(chunk);
+      return true;
+    }) as typeof process.stderr.write;
+    const r = await (async () => {
+      try {
+        return await runWithLadder(['fetch'], tool, {}, root, makeStealthCache(tool));
+      } finally {
+        process.stderr.write = originalStderrWrite;
+      }
+    })();
     expect(r.usedBackend).toBe('fetch');
     expect(r.result.ok).toBe(true);
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(0);
+    expect(r.attempts).toEqual([
+      expect.objectContaining({
+        backend: 'fetch',
+        outcome: 'ok',
+        detail: expect.stringMatching(
+          /^request completed in \d+ms; semantic verification is separate$/,
+        ),
+      }),
+    ]);
+    expect(stderr).toMatch(
+      /\[imprint backend\] fetch: REQUEST COMPLETED in \d+ms \(transport only; semantic verification is separate\)/,
+    );
+    expect(stderr).not.toContain('fetch: OK');
   });
 
   it('does NOT escalate on FORBIDDEN when ladder has only one rung', async () => {
@@ -384,6 +396,7 @@ describe('runWithLadder — auto escalation', () => {
     if (r.result.ok) throw new Error('expected failure');
     expect(r.result.error).toBe('NETWORK');
     expect(r.result.message).toContain('stealth-fetch timed out');
+    expect(r.attempts.map(({ detail }) => detail).join('\n')).toContain('fetch timed out');
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(1);
     expect(r.attempts).toHaveLength(2);
@@ -888,6 +901,17 @@ describe('runWithLadder — empty ladder', () => {
 });
 
 describe('runWorkflowWithLadder', () => {
+  it('isolates persistent browser state by tool and backend rung', () => {
+    const firstTool = pathJoin(root, 'site', 'first_tool');
+    const secondTool = pathJoin(root, 'site', 'second_tool');
+
+    const firstCdp = compileBackendStateDir(firstTool, 'cdp-replay');
+    expect(firstCdp).not.toBe(compileBackendStateDir(secondTool, 'cdp-replay'));
+    expect(firstCdp).not.toBe(compileBackendStateDir(firstTool, 'fetch-bootstrap'));
+    expect(firstCdp).not.toBe(compileBackendStateDir(firstTool, 'stealth-fetch'));
+    expect(firstCdp).toContain(pathJoin('.imprint-backend-state', 'first_tool', 'cdp-replay'));
+  });
+
   // The synthetic ResolvedTool path: takes a workflow.json on disk and
   // dispatches through the real `runWithLadder`. We use a local HTTP
   // server to keep the test hermetic — the only thing we're really
@@ -942,13 +966,39 @@ describe('runWorkflowWithLadder', () => {
         ),
       );
 
-      const { result, usedBackend } = await runWorkflowWithLadder({
+      const preparedRequests: unknown[] = [];
+      const rawChains: unknown[][] = [];
+      const perRequest: unknown[] = [];
+      const { result, usedBackend, responseObservations } = await runWorkflowWithLadder({
         workflowPath,
         params: { q: 'hello' },
         forceBackend: 'fetch',
+        onPreparedRequest: (observation) => preparedRequests.push(observation),
+        onRawResponses: (responses) => rawChains.push(responses),
+        onResponseEvidence: (response) => perRequest.push(response),
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
+      expect(rawChains).toEqual([[{ q: 'hello', ok: true }]]);
+      expect(perRequest[0]).toMatchObject({ backend: 'fetch', requestIndex: 0, status: 200 });
+      expect(responseObservations).toEqual([
+        expect.objectContaining({
+          backend: 'fetch',
+          requestIndex: 0,
+          status: 200,
+          valueType: 'object',
+          topLevelKeys: ['ok', 'q'],
+        }),
+      ]);
+      expect(preparedRequests).toEqual([
+        {
+          backend: 'fetch',
+          requestIndex: 0,
+          method: 'GET',
+          url: `http://127.0.0.1:${port}/api/echo?q=hello`,
+          headers: {},
+        },
+      ]);
       if (result.ok) {
         expect(result.data).toEqual({ q: 'hello', ok: true });
       }
@@ -1009,7 +1059,6 @@ describe('runWorkflowWithLadder', () => {
       });
       expect(result.ok).toBe(true);
       expect(usedBackend).toBe('fetch');
-      // Two-rung ladder advertised; only the first rung needed to run.
       expect(attempts.map((a) => a.backend)).toEqual(['fetch']);
     } finally {
       server.stop(true);
@@ -1018,7 +1067,6 @@ describe('runWorkflowWithLadder', () => {
 
   it('uses a valid sibling backends.json before probing', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(2_000);
     const server = Bun.serve({
       port: 0,
       fetch: () =>
@@ -1066,9 +1114,47 @@ describe('runWorkflowWithLadder', () => {
     }
   });
 
+  it('stops on a non-transport failure without trying unrelated backends', async () => {
+    __resetCompileWinningBackendForTest();
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response('expired', { status: 401 }),
+    });
+    try {
+      const toolDir = pathJoin(root, 'probe-failure-site', 'probe_failure_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'probe_failure_tool',
+          intent: { description: 'Keep every attempted backend fact.' },
+          parameters: [],
+          requests: [
+            { method: 'GET', url: `http://127.0.0.1:${server.port}/expired`, headers: {} },
+          ],
+          site: 'probe-failure-site',
+        }),
+      );
+      saveCachedToken(pathJoin(root, 'probe-failure-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
+
+      const run = await runWorkflowWithLadder({ workflowPath, params: {} });
+
+      expect(run.result).toMatchObject({ ok: false, error: 'AUTH_EXPIRED' });
+      expect(run.usedBackend).toBe('fetch');
+      expect(run.attempts.map(({ backend }) => backend)).toEqual(['fetch']);
+    } finally {
+      server.stop(true);
+      __resetCompileWinningBackendForTest();
+    }
+  });
+
   it('memoizes the winning backend across calls without breaking the fetch path', async () => {
     __resetCompileWinningBackendForTest();
-    __setProbeTimeoutMsForTest(250);
     let hits = 0;
     const server = Bun.serve({
       port: 0,
@@ -1099,13 +1185,16 @@ describe('runWorkflowWithLadder', () => {
         sensorHeaders: {},
         bootstrappedAt: Date.now(),
       });
-      // First call: parallel probe — fetch wins (fastest). Second call:
-      // memo=fetch, sequential from the memoized winner.
+      // First call stops at fetch. The second call starts at the memoized winner.
       const startedAt = Date.now();
       const a = await runWorkflowWithLadder({ workflowPath, params: {} });
       const b = await runWorkflowWithLadder({ workflowPath, params: {} });
       expect(a.usedBackend).toBe('fetch');
       expect(b.usedBackend).toBe('fetch');
+      expect(a.attempts.map(({ backend }) => backend)).toEqual(['fetch']);
+      expect(
+        a.attempts.some(({ backend, outcome }) => backend === 'fetch' && outcome === 'ok'),
+      ).toBe(true);
       // Second call uses the memo path (sequential, single-rung)
       expect(b.attempts.map((x) => x.backend)).toEqual(['fetch']);
       expect(hits).toBeGreaterThanOrEqual(2);
@@ -1115,6 +1204,100 @@ describe('runWorkflowWithLadder', () => {
       __resetCompileWinningBackendForTest();
     }
   }, 15_000);
+
+  it('remembers the reached rung without relying on cookie validation', async () => {
+    __resetCompileWinningBackendForTest();
+    let mints = 0;
+    __setCdpJarMinterForTest(async () => {
+      mints++;
+      return {
+        cookies: [],
+        ua: 'JarUA/148',
+        html: '',
+        bootstrapEpoch: Date.now(),
+        abckFlag: '-1',
+        validated: false,
+      } as MintedJar;
+    });
+    // This test is about remembering the reached rung. Stop the ladder at
+    // a deterministic, non-escalatable CDP result instead of letting the
+    // unrelated stealth rung launch a real browser after the parser rejects
+    // the synthetic response.
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}', { status: 401 })) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => ({
+        cookies: [],
+        ua: 'FixtureUA/148',
+        html: '',
+        bootstrapEpoch: Date.now(),
+        abckFlag: '0',
+        validated: true,
+      }),
+      close: async () => {},
+    }));
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => new Response('{}', { status: 200 }),
+    });
+    try {
+      const toolDir = pathJoin(root, 'unvalidated-site', 'unvalidated_tool');
+      mkdirSync(toolDir, { recursive: true });
+      const workflowPath = pathJoin(toolDir, 'workflow.json');
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'unvalidated_tool',
+          intent: { description: 'Return records.' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${server.port}/x`, headers: {} }],
+          parserModule: './parser.ts',
+          site: 'unvalidated-site',
+        }),
+      );
+      writeFileSync(
+        pathJoin(toolDir, 'parser.ts'),
+        'export function parse() { throw new Error("unusable response"); }\n',
+      );
+      saveCachedToken(pathJoin(root, 'unvalidated-site'), {
+        cookies: [],
+        sensorHeaders: {},
+        bootstrappedAt: Date.now(),
+      });
+
+      const first = await runWorkflowWithLadder({ workflowPath, params: {} });
+      const afterFirst = mints;
+      const second = await runWorkflowWithLadder({ workflowPath, params: {} });
+
+      expect(first.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(true);
+      expect(afterFirst).toBe(1);
+      expect(
+        first.attempts.find(({ backend }) => backend === 'fetch-bootstrap')?.detail,
+      ).not.toContain('did not validate');
+      expect(second.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(false);
+      expect(mints).toBe(afterFirst);
+
+      writeFileSync(
+        workflowPath,
+        JSON.stringify({
+          toolName: 'unvalidated_tool',
+          intent: { description: 'Return records.' },
+          parameters: [],
+          requests: [{ method: 'GET', url: `http://127.0.0.1:${server.port}/y`, headers: {} }],
+          parserModule: './parser.ts',
+          site: 'unvalidated-site',
+        }),
+      );
+      const changedRequest = await runWorkflowWithLadder({ workflowPath, params: {} });
+      expect(changedRequest.attempts.some(({ backend }) => backend === 'fetch-bootstrap')).toBe(
+        true,
+      );
+      expect(mints).toBe(afterFirst + 1);
+    } finally {
+      server.stop(true);
+      __resetCompileWinningBackendForTest();
+    }
+  });
 });
 
 describe('evaluateBootstrapCapture — response_header source (Fix C)', () => {
@@ -1235,16 +1418,241 @@ describe('renderWorkflowRequests — offline param verification', () => {
         },
       ],
     };
-    const { requests } = await renderWorkflowRequests({
+    const { requests, result } = await renderWorkflowRequests({
       workflow: wf,
       params: { q: 'hello' },
       recordedResponseFor: (_m, u) =>
-        u.includes('/page') ? { status: 200, body: '<x>TOKEN=deadbeef</x>' } : undefined,
+        u.includes('/page')
+          ? {
+              status: 200,
+              body: '<x>TOKEN=deadbeef</x>',
+              headers: {
+                'content-security-policy': "script-src 'self'\nreport-uri /csp",
+              },
+            }
+          : undefined,
     });
     const act = requests.find((r) => r.url.includes('/act'));
     // The capture resolved from the recorded response, fully offline.
+    expect(result.ok).toBe(true);
     expect(act?.headers['X-Tok'] ?? act?.headers['x-tok']).toBe('deadbeef');
     expect(act?.body).toContain('q=hello');
+  });
+
+  it('renders requests after a browser navigation using only recorded responses', async () => {
+    const toolDir = pathJoin(root, 'navigate-render');
+    mkdirSync(toolDir, { recursive: true });
+    const wf: Workflow = {
+      toolName: 'navigate_render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'q', type: 'string', description: 'q' }],
+      requestTransformModule: './request-transform.ts',
+      requests: [
+        {
+          method: 'GET',
+          mode: 'navigate',
+          url: 'https://example.com/page',
+          headers: {},
+        },
+        {
+          method: 'POST',
+          url: 'https://example.com/search',
+          headers: { 'content-type': 'application/json' },
+          body: '{}',
+        },
+      ],
+    };
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(wf));
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `export function transform(_method, url, responses, params) {
+        if (!url.endsWith('/search')) return { url };
+        return { body: JSON.stringify({ sid: responses[0]?.sid, q: params?.q }) };
+      }`,
+    );
+
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      workflowPath,
+      params: { q: 'Seattle' },
+      recordedResponseFor: (_method, url) =>
+        url.endsWith('/page')
+          ? { status: 200, body: '{"sid":"from-recording"}' }
+          : { status: 200, body: '{"items":[]}' },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requests).toHaveLength(2);
+    expect(requests[0]).toMatchObject({ method: 'GET', url: 'https://example.com/page' });
+    expect(JSON.parse(requests[1]?.body ?? '{}')).toEqual({
+      sid: 'from-recording',
+      q: 'Seattle',
+    });
+  });
+
+  it('selects recorded responses by accepted request provenance, not rendered URL', async () => {
+    const wf: Workflow = {
+      toolName: 'provenance_response_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [{ name: 'q', type: 'string', description: 'q' }],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/same?q=${param.q}',
+          headers: {},
+          captures: [
+            {
+              name: 'first',
+              required: true,
+              capability: 'ordinary_http',
+              source: 'json',
+              path: 'value',
+            },
+          ],
+        },
+        {
+          method: 'GET',
+          url: 'https://example.com/same?q=${param.q}',
+          headers: { 'x-first': '${state.first}' },
+        },
+      ],
+    };
+    const lookups: Array<{ ordinal: number; seq?: number; url: string }> = [];
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      params: { q: 'synthetic-render-value' },
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 71 },
+        { artifactRequestIndex: 1, recordingRequestSeq: 93 },
+      ],
+      recordedResponseFor: (_method, url, lookup) => {
+        lookups.push({
+          ordinal: lookup.requestOrdinal,
+          seq: lookup.provenance?.recordingRequestSeq,
+          url,
+        });
+        return lookup.provenance?.recordingRequestSeq === 71
+          ? { status: 200, body: '{"value":"from-seq-71"}' }
+          : { status: 200, body: '{"done":true}' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(lookups).toEqual([
+      {
+        ordinal: 0,
+        seq: 71,
+        url: 'https://example.com/same?q=synthetic-render-value',
+      },
+      {
+        ordinal: 1,
+        seq: 93,
+        url: 'https://example.com/same?q=synthetic-render-value',
+      },
+    ]);
+    expect(requests[1]?.headers['x-first']).toBe('from-seq-71');
+  });
+
+  it('uses separate navigation-request and background-response provenance offline', async () => {
+    const wf: Workflow = {
+      toolName: 'navigation_response_provenance_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          recordingRequestSeq: 10,
+          mode: 'navigate',
+          url: 'https://example.com/results',
+          headers: {},
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 20,
+            },
+          },
+          captures: [
+            {
+              name: 'token',
+              required: true,
+              capability: 'browser_bootstrap',
+              source: 'json',
+              path: 'token',
+            },
+            {
+              name: 'trace',
+              required: true,
+              capability: 'browser_bootstrap',
+              source: 'response_header',
+              header: 'x-page-trace',
+              mode: 'last',
+            },
+          ],
+        },
+        {
+          method: 'POST',
+          recordingRequestSeq: 30,
+          url: 'https://api.example.com/api/details',
+          headers: {
+            'x-result-token': '${state.token}',
+            'x-response-trace': '${state.trace}',
+          },
+        },
+      ],
+    };
+    const lookups: Array<{
+      requestSeq?: number;
+      responseRequestSeq?: number;
+    }> = [];
+
+    const { requests, result } = await renderWorkflowRequests({
+      workflow: wf,
+      params: {},
+      requestProvenance: [
+        {
+          artifactRequestIndex: 0,
+          recordingRequestSeq: 10,
+          recordingResponseRequestSeq: 20,
+        },
+        { artifactRequestIndex: 1, recordingRequestSeq: 30 },
+      ],
+      recordedResponseFor: (_method, _url, lookup) => {
+        lookups.push({
+          requestSeq: lookup.provenance?.recordingRequestSeq,
+          responseRequestSeq: lookup.provenance?.recordingResponseRequestSeq,
+        });
+        const responseSeq =
+          lookup.provenance?.recordingResponseRequestSeq ?? lookup.provenance?.recordingRequestSeq;
+        return responseSeq === 20
+          ? {
+              status: 201,
+              body: '{"token":"page-created-token"}',
+              headers: {
+                'x-page-trace': 'selected-response-header',
+                'set-cookie': 'page_session=selected; Path=/api',
+              },
+              url: 'https://api.example.com/api/results',
+            }
+          : { status: 200, body: '{"done":true}' };
+      },
+    });
+
+    expect(result.ok).toBe(true);
+    expect(requests[0]).toMatchObject({
+      method: 'GET',
+      url: 'https://example.com/results',
+    });
+    expect(requests[1]?.headers['x-result-token']).toBe('page-created-token');
+    expect(requests[1]?.headers['x-response-trace']).toBe('selected-response-header');
+    expect(requests[1]?.headers.cookie).toContain('page_session=selected');
+    expect(lookups).toEqual([
+      { requestSeq: 10, responseRequestSeq: 20 },
+      { requestSeq: 30, responseRequestSeq: undefined },
+    ]);
   });
 
   it('seeds captured state for an isolated downstream request test', async () => {
@@ -1308,9 +1716,107 @@ describe('renderWorkflowRequests — offline param verification', () => {
     });
     expect(requests.map((r) => r.url)).toEqual(['https://example.com/search']);
   });
+
+  it('keeps accepted provenance aligned when a transform skips an earlier request', async () => {
+    const toolDir = pathJoin(root, 'skip-first-render');
+    mkdirSync(toolDir, { recursive: true });
+    const wf: Workflow = {
+      toolName: 'skip_first_render_test',
+      intent: { description: 'x' },
+      site: 'example.com',
+      parameters: [],
+      requestTransformModule: './request-transform.ts',
+      requests: [
+        { method: 'GET', url: 'https://example.com/skipped', headers: {} },
+        { method: 'GET', url: 'https://example.com/sent', headers: {} },
+      ],
+    };
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(wf));
+    writeFileSync(
+      pathJoin(toolDir, 'request-transform.ts'),
+      `export function transform(_method, url) {
+        return url.endsWith('/skipped') ? { skip: true } : { url };
+      }`,
+    );
+    const seen: Array<{ ordinal: number; seq?: number }> = [];
+
+    await renderWorkflowRequests({
+      workflow: wf,
+      workflowPath,
+      params: {},
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 10 },
+        { artifactRequestIndex: 1, recordingRequestSeq: 20 },
+      ],
+      recordedResponseFor: (_method, _url, lookup) => {
+        seen.push({
+          ordinal: lookup.requestOrdinal,
+          seq: lookup.provenance?.recordingRequestSeq,
+        });
+        return { status: 200, body: '{"ok":true}' };
+      },
+    });
+
+    expect(seen).toEqual([{ ordinal: 0, seq: 20 }]);
+  });
 });
 
 describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', () => {
+  it('reuses bootstrap snapshots only for the same rendered URL context', async () => {
+    __setCdpJarMinterForTest(null);
+    const minted: string[] = [];
+    __setCdpBrowserFetchFactoryForTest((opts) => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => {
+        const url = opts.bootstrapUrl ?? opts.baseUrl;
+        minted.push(url);
+        return {
+          cookies: [],
+          ua: 'FixtureBrowser',
+          html: `<div data-context="${new URL(url).searchParams.get('selection')}"></div>`,
+          bootstrapEpoch: Date.now(),
+          abckFlag: 'unknown',
+        };
+      },
+      close: async () => {},
+    }));
+    const tool: ResolvedTool = {
+      site: 'fixture',
+      dir: pathJoin(root, 'fixture', 'lookup'),
+      workflow: {
+        site: 'fixture',
+        toolName: 'lookup',
+        intent: { description: 'Look up the selected item' },
+        parameters: [{ name: 'selection', type: 'string', description: 'Item' }],
+        bootstrap: {
+          url: 'https://fixture.example/start?selection=${param.selection}',
+          captures: [
+            {
+              source: 'html_regex',
+              name: 'context',
+              group: 1,
+              pattern: 'data-context="([^"]+)"',
+              required: true,
+              capability: 'browser_bootstrap',
+            },
+          ],
+        },
+        requests: [{ method: 'GET', url: 'https://fixture.example/api/items', headers: {} }],
+      },
+      toolFn: async (_params, opts) => ({ ok: true, data: opts?.initialState }),
+    };
+    for (const selection of ['alpha', 'alpha', 'beta', 'alpha']) {
+      const result = await runWithLadder(['fetch-bootstrap'], tool, { selection }, root, new Map());
+      expect(result.result).toMatchObject({ ok: true, data: { context: selection } });
+    }
+    expect(minted).toEqual([
+      'https://fixture.example/start?selection=alpha',
+      'https://fixture.example/start?selection=beta',
+    ]);
+  });
+
   it('threads the minted jar cookies into credentials and the jar UA into the replay fetch', async () => {
     const jar: MintedJar = {
       cookies: [
@@ -1381,7 +1887,7 @@ describe('fetch-bootstrap happy path (cdp jar minted → plain-fetch replay)', (
   });
 });
 
-describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () => {
+describe('fetch-bootstrap observes the API instead of classifying cookies', () => {
   function bootstrapTool(site: string, onReplay: () => void): ResolvedTool {
     return {
       site,
@@ -1403,7 +1909,7 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
     };
   }
 
-  it('escalates immediately — no replay, no second mint — when jar.validated===false', async () => {
+  it('executes a successful request even when jar.validated===false', async () => {
     let mints = 0;
     __setCdpJarMinterForTest(async () => {
       mints++;
@@ -1432,10 +1938,10 @@ describe('fetch-bootstrap fast-fail on an unvalidated jar (latency Fix A)', () =
         skipBootstrapSplice: true,
       },
     );
-    expect(r.result.ok).toBe(false);
-    if (!r.result.ok) expect(r.result.error).toBe('FORBIDDEN');
-    expect(replays).toBe(0); // doomed plain-fetch replay skipped
-    expect(mints).toBe(1); // no second re-mint (was 2 → ~80s)
+    expect(r.result.ok).toBe(true);
+    expect(r.usedBackend).toBe('fetch-bootstrap');
+    expect(replays).toBe(1);
+    expect(mints).toBe(1);
   });
 
   it('still replays a validated jar (happy path preserved)', async () => {
@@ -1515,6 +2021,119 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     };
   }
 
+  it('isolates pooled CDP sessions by tool and rendered bootstrap context', () => {
+    const first = cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=one');
+    expect(cdpReplayPoolKey('fixture', 'search_two', 'https://fixture.test/search?q=one')).not.toBe(
+      first,
+    );
+    expect(cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=two')).not.toBe(
+      first,
+    );
+    expect(cdpReplayPoolKey('fixture', 'search_one', 'https://fixture.test/search?q=one')).toBe(
+      first,
+    );
+  });
+
+  it('cancels pending CDP setup without executing requests or evicting a replacement session', async () => {
+    let start!: () => void;
+    let finish!: () => void;
+    const started = new Promise<void>((resolve) => {
+      start = resolve;
+    });
+    const pending = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    let closed = 0;
+    let calls = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: fetch,
+      ensureBootstrapped: async () => [],
+      mintJar: async () => {
+        start();
+        await pending;
+        return defaultedJar;
+      },
+      close: async () => {
+        closed++;
+      },
+    }));
+    const tool = defaultedBootstrapTool('fixture', () => {
+      calls++;
+      return { ok: true, data: {} };
+    });
+    const controller = new AbortController();
+    const reason = new Error('fixture deadline');
+    const cdpPool = new Map();
+    const running = runWithLadder(
+      ['cdp-replay', 'fetch'],
+      tool,
+      { origin: 'fixture' },
+      root,
+      new Map(),
+      {
+        cdpPool,
+        signal: controller.signal,
+      },
+    );
+    const outcome = running.catch((error) => error);
+    await started;
+    const key = cdpReplayPoolKey(
+      'fixture',
+      'tool_fixture',
+      'https://fixture.example.com/search?origin=fixture&returnDate=&adults=1',
+    );
+    const replacement = { ...cdpPool.get(key), close: async () => {} };
+    cdpPool.set(key, replacement);
+    controller.abort(reason);
+    finish();
+    expect(await outcome).toBe(reason);
+    expect(calls).toBe(0);
+    expect(closed).toBe(1);
+    expect(cdpPool.get(key)).toBe(replacement);
+  });
+
+  for (const backend of ['fetch-bootstrap', 'cdp-replay'] as const) {
+    it(`${backend} captures bootstrap state before resolving the API request URL`, async () => {
+      const jar = { ...defaultedJar, html: '<div data-session="fixture-session"></div>' };
+      __setCdpJarMinterForTest(async () => jar);
+      __setCdpBrowserFetchFactoryForTest(() => ({
+        fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => jar,
+        close: async () => {},
+      }));
+      let captured: unknown;
+      const tool = defaultedBootstrapTool('fixture', (_params, opts) => {
+        captured = (opts.initialState as Record<string, unknown>)?.session_id;
+        return { ok: true, data: { items: ['fixture-item'] } };
+      });
+      tool.workflow.requests = [
+        {
+          method: 'GET',
+          url: 'https://fixture.example.com/items?session=${state.session_id}',
+          headers: {},
+        },
+      ];
+      tool.workflow.bootstrap = {
+        url: 'https://fixture.example.com/start',
+        captures: [
+          {
+            source: 'html_regex',
+            name: 'session_id',
+            pattern: 'data-session="([^"]+)"',
+            group: 1,
+            required: true,
+            capability: 'browser_bootstrap',
+          },
+        ],
+      };
+
+      const result = await runWithLadder([backend], tool, {}, root, new Map());
+      expect(result.result.ok).toBe(true);
+      expect(captured).toBe('fixture-session');
+    });
+  }
+
   it('uses workflow defaults before fetch-bootstrap substitutes bootstrap.url', async () => {
     let seenBootstrapUrl: string | undefined;
     let seenParams: Record<string, unknown> | undefined;
@@ -1587,6 +2206,51 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     expect(closes).toBe(1);
   });
 
+  it('resolves a whole request URL parameter before cdp-replay bootstraps', async () => {
+    let seenBaseUrl: string | undefined;
+    __setCdpBrowserFetchFactoryForTest((opts) => {
+      seenBaseUrl = opts.baseUrl;
+      return {
+        fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
+        navigate: async () => new Response('<html></html>', { status: 200 }),
+        snapshotCookies: async () => [],
+        ensureBootstrapped: async () => [],
+        mintJar: async () => defaultedJar,
+        close: async () => {},
+      };
+    });
+    const tool: ResolvedTool = {
+      site: 'dynamic-url',
+      dir: pathJoin(root, 'dynamic-url', 'tool'),
+      workflow: {
+        toolName: 'dynamic_url_tool',
+        intent: { description: 'Load a caller-provided URL.' },
+        parameters: [
+          {
+            name: 'search_url',
+            type: 'string',
+            description: 'Complete URL to load.',
+          },
+        ],
+        requests: [{ method: 'GET', url: '${param.search_url}', headers: {} }],
+        site: 'dynamic-url',
+      },
+      toolFn: async () => ({ ok: true, data: { via: 'cdp-replay' } }),
+    };
+
+    const r = await runWithLadder(
+      ['cdp-replay'],
+      tool,
+      { search_url: 'https://example.com/travel/search?q=one' },
+      root,
+      new Map(),
+    );
+
+    expect(r.usedBackend).toBe('cdp-replay');
+    expect(r.result.ok).toBe(true);
+    expect(seenBaseUrl).toBe('https://example.com');
+  });
+
   it('retains an inspectable failed page when the caller owns the CDP pool', async () => {
     let closes = 0;
     const inspectPage = async () => ({
@@ -1616,7 +2280,13 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     });
 
     expect(r.result.ok).toBe(false);
-    const retained = cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'));
+    const retained = cdpPool.get(
+      cdpReplayPoolKey(
+        'flights',
+        'tool_flights',
+        'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+      ),
+    );
     expect(retained?.inspectPage).toBe(inspectPage);
     expect(closes).toBe(0);
   });
@@ -1655,10 +2325,104 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
 
     expect(r.result.ok).toBe(false);
     expect(inspections).toBe(1);
+    expect(r.result).toHaveProperty('pageDiagnostic.title', 'Unexpected page');
     expect(
-      cdpPool.get(cdpReplayPoolKey('flights', 'https://flights.example.com'))?.inspectPage,
+      cdpPool.get(
+        cdpReplayPoolKey(
+          'flights',
+          'tool_flights',
+          'https://flights.example.com/search?origin=SAN&returnDate=&adults=1',
+        ),
+      )?.inspectPage,
     ).toBe(inspectPage);
     expect(closes).toBe(0);
+  });
+
+  it('retains bounded failed-page evidence through a later fallback without an observation callback', async () => {
+    let inspections = 0;
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      inspectPage: async () => {
+        inspections++;
+        return {
+          url: 'https://fixture.invalid/results?key=fixture-password',
+          title: 'Available results',
+          bodyText: `30 results for fixture-password ${'item '.repeat(1_000)}`,
+          cookies: [
+            {
+              name: 'session',
+              value: 'fixture-cookie-secret',
+              domain: 'fixture.invalid',
+              path: '/',
+            },
+          ],
+        };
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {},
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Navigation timed out waiting for a background response.',
+    }));
+    const r = await runWithLadder(
+      ['cdp-replay', 'fetch'],
+      tool,
+      { origin: 'SAN' },
+      root,
+      new Map(),
+      {
+        cdpPool: new Map(),
+        credentials: { site: 'flights', cookies: [], values: { password: 'fixture-password' } },
+        skipBootstrapSplice: true,
+      },
+    );
+    expect(r.usedBackend).toBe('fetch');
+    expect(r.attempts.map((attempt) => attempt.backend)).toEqual(['cdp-replay', 'fetch']);
+    expect(inspections).toBe(1);
+    expect(r.result.ok).toBe(false);
+    if (r.result.ok) throw new Error('expected original failure');
+    expect(r.result.error).toBe('NETWORK');
+    expect(r.result.message).toBe('Navigation timed out waiting for a background response.');
+    expect(r.result.pageDiagnostic?.title).toBe('Available results');
+    expect(r.result.pageDiagnostic?.bodyText).toContain('30 results for ${credential.password}');
+    expect(r.result.pageDiagnostic?.bodyText.length).toBe(3_000);
+    expect(r.result.pageDiagnostic?.truncated).toBe(true);
+    expect(JSON.stringify(r.result)).not.toContain('fixture-password');
+    expect(JSON.stringify(r.result)).not.toContain('fixture-cookie-secret');
+    expect(r.result.pageDiagnostic).not.toHaveProperty('cookies');
+  });
+
+  it('honors caller cancellation during failed-page inspection', async () => {
+    let closed = false;
+    const controller = new AbortController();
+    __setCdpBrowserFetchFactoryForTest(() => ({
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+      inspectPage: () => {
+        controller.abort(new Error('fixture caller deadline'));
+        return new Promise(() => {});
+      },
+      ensureBootstrapped: async () => [],
+      mintJar: async () => defaultedJar,
+      close: async () => {
+        closed = true;
+      },
+    }));
+    const tool = defaultedBootstrapTool('flights', () => ({
+      ok: false,
+      error: 'NETWORK',
+      message: 'Background response missing.',
+    }));
+    await expect(
+      runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+        cdpPool: new Map(),
+        onResponse: () => {},
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('fixture caller deadline');
+    expect(closed).toBe(true);
   });
 
   it('evicts a NETWORK failure when the browser liveness probe also fails', async () => {
@@ -1681,7 +2445,10 @@ describe('browser-backed rungs honor workflow parameter defaults', () => {
     }));
     const cdpPool = new Map();
 
-    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), { cdpPool });
+    await runWithLadder(['cdp-replay'], tool, { origin: 'SAN' }, root, new Map(), {
+      cdpPool,
+      onResponse: () => {},
+    });
 
     expect(cdpPool.size).toBe(0);
     expect(closes).toBe(1);
@@ -1782,8 +2549,8 @@ describe('cdp-replay cookie seeding by toolKind', () => {
   // A validated jar with an anti-bot cookie sitting in the site dir — the exact
   // shape `saveJar` leaves behind after any prior cdp-replay run.
   function seedJarOnDisk(site: string): void {
-    const siteDir = pathJoin(root, site);
-    mkdirSync(siteDir, { recursive: true });
+    const cacheDir = compileBackendStateDir(pathJoin(root, site, 'tool'), 'cdp-replay');
+    mkdirSync(cacheDir, { recursive: true });
     const jar: MintedJar = {
       cookies: [{ name: '_abck', value: 'SEED~0~SEED', domain: `.${site}.example.com`, path: '/' }],
       ua: 'JarUA/148',
@@ -1792,7 +2559,7 @@ describe('cdp-replay cookie seeding by toolKind', () => {
       abckFlag: '0',
       validated: true,
     };
-    writeFileSync(pathJoin(siteDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
+    writeFileSync(pathJoin(cacheDir, '.cdp-jar.json'), `${JSON.stringify(jar)}\n`, 'utf8');
   }
 
   function captureSeed(): { seen: () => Array<{ name: string }> | undefined } {
@@ -2030,7 +2797,15 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
     expect(r3.result.ok).toBe(true);
     expect(createCount).toBe(1);
     expect(closes).toBe(0);
-    expect(cdpPool.has(cdpReplayPoolKey('google-flights', 'https://www.google.com'))).toBe(true);
+    expect(
+      cdpPool.has(
+        cdpReplayPoolKey(
+          'google-flights',
+          googleFlightsWorkflow.toolName,
+          googleFlightsWorkflow.bootstrap?.url ?? 'https://www.google.com',
+        ),
+      ),
+    ).toBe(true);
     expect(requestBodies).toHaveLength(3);
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SJC');
     expect(decodeURIComponent(requestBodies[0] ?? '')).toContain('SAN');
@@ -2042,6 +2817,100 @@ describe('runWithLadder — Google Flights CDP reuse', () => {
 });
 
 describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend divergence)', () => {
+  it('returns a local transform failure without retrying it through another transport', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 0: no matching tuple',
+        requestStageFacts: [
+          { requestIndex: 0, stage: 'preparation', outcome: 'passed' },
+          { requestIndex: 0, stage: 'transform', outcome: 'failed' },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('local-transform', behavior, pathJoin(root, 'local', 'tool'));
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.usedBackend).toBe('fetch');
+    expect(result.result.ok).toBe(false);
+    expect(result.attempts).toHaveLength(1);
+    expect(result.attempts[0]).toMatchObject({ backend: 'fetch', outcome: 'failed' });
+    expect(behavior.calls.fetch).toBe(1);
+    expect(behavior.calls.stealth).toBe(0);
+  });
+
+  it('allows another transport when a later transform depends on an earlier response', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request transform failed for request 1: no matching tuple',
+        requestStageFacts: [
+          { requestIndex: 0, stage: 'send', outcome: 'passed', httpStatus: 200 },
+          { requestIndex: 1, stage: 'preparation', outcome: 'passed' },
+          { requestIndex: 1, stage: 'transform', outcome: 'failed' },
+        ],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool(
+      'response-dependent-transform',
+      behavior,
+      pathJoin(root, 'local', 'tool'),
+    );
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.usedBackend).toBe('stealth-fetch');
+    expect(result.result).toEqual({ ok: true, data: { via: 'stealth' } });
+    expect(result.attempts).toHaveLength(2);
+    expect(behavior.calls).toEqual({ fetch: 1, stealth: 1 });
+  });
+
+  it('returns a local preparation failure without launching a browser-backed rung', async () => {
+    const behavior: FakeToolBehavior = {
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'request 0 could not be prepared',
+        requestStageFacts: [{ requestIndex: 0, stage: 'preparation', outcome: 'failed' }],
+      },
+      stealthResult: { ok: true, data: { via: 'stealth' } },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('local-preparation', behavior, pathJoin(root, 'local', 'tool'));
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.attempts).toEqual([
+      expect.objectContaining({ backend: 'fetch', outcome: 'failed' }),
+    ]);
+    expect(behavior.calls).toEqual({ fetch: 1, stealth: 0 });
+  });
+
   it('escalates a 400 from one backend to a higher-trust rung that passes', async () => {
     // southwest's reality: cdp-replay's in-page POST 400s (no live Akamai sensor
     // headers) but stealth-fetch (mints them) returns 200 for the same request.
@@ -2068,8 +2937,16 @@ describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend diver
 
   it('returns the last 400 when every rung BAD_RESPONSEs (genuinely malformed)', async () => {
     const behavior: FakeToolBehavior = {
-      fetchResult: { ok: false, error: 'BAD_RESPONSE', message: '400 bad body' },
-      stealthResult: { ok: false, error: 'BAD_RESPONSE', message: '400 bad body' },
+      fetchResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'first backend reached request 1 and returned 400',
+      },
+      stealthResult: {
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: 'last backend refused top-level navigation',
+      },
       calls: { fetch: 0, stealth: 0 },
     };
     const tool = makeFakeTool('beta', behavior, pathJoin(root, 'beta', 'tool'));
@@ -2084,10 +2961,109 @@ describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend diver
       },
     );
     expect(r.result.ok).toBe(false);
-    if (!r.result.ok) expect(r.result.error).toBe('BAD_RESPONSE');
+    if (!r.result.ok) {
+      expect(r.result.error).toBe('BAD_RESPONSE');
+      expect(r.result.message).toContain('last backend refused top-level navigation');
+    }
+    expect(r.attempts.map(({ detail }) => detail).join('\n')).toContain(
+      'first backend reached request 1 and returned 400',
+    );
+    expect(r.attempts.map(({ detail }) => detail).join('\n')).toContain(
+      'last backend refused top-level navigation',
+    );
     expect(behavior.calls.fetch).toBe(1);
     expect(behavior.calls.stealth).toBe(1); // escalated through both before returning
   });
+});
+
+describe('compile pool overlapping calls', () => {
+  for (const callerOwnedSibling of [false, true]) {
+    it(`does not idle-close an active global call when a ${callerOwnedSibling ? 'caller-owned' : 'global'} sibling finishes`, async () => {
+      let release!: () => void;
+      let started!: () => void;
+      const pending = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const active = new Promise<void>((resolve) => {
+        started = resolve;
+      });
+      let closes = 0;
+      const idleTimers: ReturnType<typeof setTimeout>[] = [];
+      const originalSetTimeout = globalThis.setTimeout;
+      globalThis.setTimeout = ((
+        handler: (...args: unknown[]) => void,
+        delay?: number,
+        ...args: unknown[]
+      ) => {
+        const timer = originalSetTimeout(handler, delay, ...args);
+        if (delay === 15000) idleTimers.push(timer);
+        return timer;
+      }) as typeof setTimeout;
+      __setCdpBrowserFetchFactoryForTest(() => ({
+        fetchImpl: (async (url: string | URL | Request) => {
+          if (String(url).includes('/active')) {
+            started();
+            await pending;
+          }
+          return new Response('{"items":[{"id":"fixture-item"}]}');
+        }) as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: [],
+          html: '<html></html>',
+          ua: 'fixture-agent',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '0',
+        }),
+        close: async () => {
+          closes++;
+        },
+      }));
+      const workflowPath = (name: string) => {
+        const dir = pathJoin(root, name);
+        mkdirSync(dir, { recursive: true });
+        const file = pathJoin(dir, 'workflow.json');
+        writeFileSync(
+          file,
+          JSON.stringify({
+            site: 'fixture-overlap',
+            toolName: name,
+            intent: { description: 'Synthetic concurrent request.' },
+            parameters: [],
+            requests: [{ method: 'GET', url: `https://fixture.invalid/${name}`, headers: {} }],
+          }),
+        );
+        return file;
+      };
+      const callerPool = new Map();
+      const running = runWorkflowWithLadder({
+        workflowPath: workflowPath('active'),
+        params: {},
+        forceBackend: 'cdp-replay',
+      });
+      try {
+        await active;
+        const result = await runWorkflowWithLadder({
+          workflowPath: workflowPath('sibling'),
+          params: {},
+          forceBackend: 'cdp-replay',
+          ...(callerOwnedSibling ? { cdpPool: callerPool } : {}),
+        });
+        expect(result.result.ok).toBe(true);
+        expect(idleTimers).toHaveLength(0);
+        expect(closes).toBe(0);
+        release();
+        expect((await running).result.ok).toBe(true);
+        expect(idleTimers).toHaveLength(callerOwnedSibling ? 1 : 2);
+      } finally {
+        release();
+        await running;
+        __resetCompileCdpPoolForTest();
+        await Promise.all([...callerPool.values()].map((browser) => browser.close()));
+        globalThis.setTimeout = originalSetTimeout;
+      }
+    });
+  }
 });
 
 describe('runtime winner memo (latency Fix B)', () => {
@@ -2166,112 +3142,44 @@ describe('runtime winner memo (latency Fix B)', () => {
   });
 });
 
-describe('effectiveAutoLadder + prefersCdpReplayFirst (Fix 4 — cdp-replay rung)', () => {
-  function wf(partial: Partial<Workflow>): Workflow {
-    return {
-      toolName: 't',
-      intent: { description: 'd' },
-      parameters: [],
-      site: 's',
-      requests: [],
-      ...partial,
-    } as Workflow;
-  }
-
+describe('effectiveAutoLadder', () => {
   it('splices fetch-bootstrap then cdp-replay after fetch in auto mode', () => {
-    const out = effectiveAutoLadder(['fetch', 'stealth-fetch', 'playbook'], wf({}));
+    const out = effectiveAutoLadder(['fetch', 'stealth-fetch', 'playbook']);
     expect(out).toEqual(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']);
   });
 
   it('does not duplicate fetch-bootstrap/cdp-replay if already present', () => {
-    const out = effectiveAutoLadder(
-      ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'],
-      wf({}),
-    );
+    const out = effectiveAutoLadder(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch']);
     expect(out).toEqual(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch']);
   });
 
   it('leaves a single-rung ladder untouched', () => {
-    expect(effectiveAutoLadder(['stealth-fetch'], wf({}))).toEqual(['stealth-fetch']);
+    expect(effectiveAutoLadder(['stealth-fetch'])).toEqual(['stealth-fetch']);
   });
 
-  it('prefersCdpReplayFirst: true for ≥2 mutating requests + a bootstrap block', () => {
-    const w = wf({
-      bootstrap: { url: 'https://x/boot' },
-      requests: [
-        { method: 'POST', url: 'https://x/a.act', headers: {} },
-        { method: 'POST', url: 'https://x/b.act', headers: {} },
-      ],
-    });
-    expect(prefersCdpReplayFirst(w)).toBe(true);
-    // …and it is front-loaded so doomed fetch rungs don't pre-burn the IP budget.
-    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'], w)).toEqual([
-      'cdp-replay',
-      'fetch',
-      'fetch-bootstrap',
-      'stealth-fetch',
-    ]);
-  });
-
-  it('prefersCdpReplayFirst: true for ≥2 mutating requests that reference ${state.X} (no bootstrap)', () => {
-    const w = wf({
-      requests: [
-        { method: 'POST', url: 'https://x/a', headers: { 'X-Csrf': '${state.csrf}' } },
-        { method: 'POST', url: 'https://x/b', headers: {} },
-      ],
-    });
-    expect(prefersCdpReplayFirst(w)).toBe(true);
-  });
-
-  it('prefersCdpReplayFirst: false for a single state-changing request', () => {
-    const w = wf({
-      bootstrap: { url: 'https://x/boot' },
-      requests: [
-        { method: 'POST', url: 'https://x/a.act', headers: {} },
-        { method: 'GET', url: 'https://x/results', headers: {} },
-      ],
-    });
-    expect(prefersCdpReplayFirst(w)).toBe(false);
-    // normal fetch-first order (cdp-replay still available as a later escalation)
-    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'], w)).toEqual([
+  it('uses one fixed order without inspecting workflow semantics', () => {
+    expect(effectiveAutoLadder(['fetch', 'stealth-fetch'])).toEqual([
       'fetch',
       'fetch-bootstrap',
       'cdp-replay',
       'stealth-fetch',
     ]);
-  });
-
-  it('prefersCdpReplayFirst: false for a plain multi-POST REST API (no bootstrap, no ${state.X})', () => {
-    const w = wf({
-      requests: [
-        { method: 'POST', url: 'https://api/x', headers: {} },
-        { method: 'POST', url: 'https://api/y', headers: {} },
-      ],
-    });
-    expect(prefersCdpReplayFirst(w)).toBe(false);
   });
 
   it('splices fetch-bootstrap + cdp-replay before stealth-fetch when fetch is probed-out', () => {
-    const out = effectiveAutoLadder(['stealth-fetch', 'playbook'], wf({}));
+    const out = effectiveAutoLadder(['stealth-fetch', 'playbook']);
     expect(out).toEqual(['fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']);
   });
 
   it('does not splice fetch-bootstrap before cdp-replay when cdp-replay is explicitly in the ladder', () => {
-    const out = effectiveAutoLadder(['cdp-replay', 'stealth-fetch', 'playbook'], wf({}));
+    const out = effectiveAutoLadder(['cdp-replay', 'stealth-fetch', 'playbook']);
     expect(out).toEqual(['cdp-replay', 'stealth-fetch', 'playbook']);
   });
 
-  it('front-loads cdp-replay even when fetch is probed-out for multi-step anti-bot workflows', () => {
-    const w = wf({
-      bootstrap: { url: 'https://x/boot' },
-      requests: [
-        { method: 'POST', url: 'https://x/a.act', headers: {} },
-        { method: 'POST', url: 'https://x/b.act', headers: {} },
-      ],
-    });
-    expect(effectiveAutoLadder(['stealth-fetch', 'playbook'], w)).toEqual([
-      'cdp-replay',
+  it('keeps the declared ladder order when fetch is absent', () => {
+    expect(effectiveAutoLadder(['stealth-fetch', 'playbook'])).toEqual([
       'fetch-bootstrap',
+      'cdp-replay',
       'stealth-fetch',
       'playbook',
     ]);
@@ -2349,8 +3257,169 @@ describe('pickBaseUrl', () => {
     expect(pickBaseUrl(tool)).toBe('https://example.com');
   });
 
+  it('resolves parameters before deriving the bootstrap origin', () => {
+    const tool = toolWith([{ method: 'GET', url: '${param.search_url}' }]);
+    tool.workflow.parameters = [
+      {
+        name: 'search_url',
+        type: 'string',
+        description: 'Complete URL to load.',
+      },
+    ];
+
+    expect(
+      pickBaseUrl(tool, {
+        search_url: 'https://example.com/travel/search?q=one',
+      }),
+    ).toBe('https://example.com');
+  });
+
+  it('resolves parameters in a Referer before using it as the bootstrap page', () => {
+    const tool = toolWith([
+      {
+        method: 'GET',
+        url: 'https://example.com/api/search',
+        headers: { Referer: '${param.search_page}' },
+      },
+    ]);
+    tool.workflow.parameters = [
+      {
+        name: 'search_page',
+        type: 'string',
+        description: 'Page that initiated the request.',
+      },
+    ];
+
+    expect(
+      pickBaseUrl(tool, {
+        search_page: 'https://example.com/travel/search?q=one',
+      }),
+    ).toBe('https://example.com/travel/search');
+  });
+
   it('throws for empty requests', () => {
     const tool = toolWith([]);
     expect(() => pickBaseUrl(tool)).toThrow('has no requests');
+  });
+
+  it('honors explicit bootstrap before resolving state-dependent requests or Referers', () => {
+    const tool = toolWith([
+      {
+        method: 'GET',
+        url: 'https://api.example.com/items?session=${state.session_id}',
+        headers: { Referer: 'https://unrelated.example.com/' },
+      },
+    ]);
+    tool.workflow.parameters = [
+      { name: 'page', type: 'string', description: 'Bootstrap page.', default: 'start' },
+    ];
+    tool.workflow.bootstrap = { url: 'https://app.example.com/${param.page}' };
+
+    expect(pickBaseUrl(tool)).toBe('https://app.example.com');
+  });
+
+  it('does not silently replace an unresolved explicit bootstrap with a request origin', () => {
+    const tool = toolWith([{ method: 'GET', url: 'https://api.example.com/items' }]);
+    tool.workflow.bootstrap = { url: '${param.bootstrap_url}' };
+    expect(() => pickBaseUrl(tool)).toThrow();
+  });
+});
+
+describe('concurrent compile pacing', () => {
+  function fixture(url: string, name: string) {
+    const dir = pathJoin(root, name);
+    mkdirSync(dir, { recursive: true });
+    const workflowPath = pathJoin(dir, 'workflow.json');
+    writeFileSync(
+      workflowPath,
+      JSON.stringify({
+        toolName: name,
+        site: 'pacing-fixture',
+        intent: { description: 'Synthetic pacing evidence.' },
+        parameters: [],
+        requests: [{ method: 'GET', url, headers: {} }],
+      }),
+    );
+    return workflowPath;
+  }
+
+  it('reserves distinct start slots while earlier calls remain in flight', async () => {
+    const previousSpacing = process.env.IMPRINT_COMPILE_ACT_SPACING_MS;
+    __resetCompilePacingForTest();
+    process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '100';
+    const starts: number[] = [];
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const server = Bun.serve({
+      port: 0,
+      fetch: async () => {
+        starts.push(Date.now());
+        if (starts.length === 1) await gate;
+        return Response.json({ ok: true });
+      },
+    });
+    const calls = [0, 1, 2].map((i) =>
+      runWorkflowWithLadder({
+        workflowPath: fixture(`http://127.0.0.1:${server.port}/fixture`, `paced_${i}`),
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+      }),
+    );
+    try {
+      await Promise.all(calls.slice(1));
+      expect(starts).toHaveLength(3);
+      const [first = Number.NaN, second = Number.NaN, third = Number.NaN] = starts;
+      expect(second - first).toBeGreaterThanOrEqual(70);
+      expect(third - second).toBeGreaterThanOrEqual(70);
+    } finally {
+      release();
+      await Promise.allSettled(calls);
+      server.stop(true);
+      __resetCompilePacingForTest();
+      process.env.IMPRINT_COMPILE_ACT_SPACING_MS = previousSpacing;
+    }
+  });
+
+  it('cancels a pacing wait promptly without executing its request', async () => {
+    const previousSpacing = process.env.IMPRINT_COMPILE_ACT_SPACING_MS;
+    __resetCompilePacingForTest();
+    process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '1000';
+    let calls = 0;
+    const server = Bun.serve({
+      port: 0,
+      fetch: () => {
+        calls++;
+        return Response.json({ ok: true });
+      },
+    });
+    const workflowPath = fixture(`http://127.0.0.1:${server.port}/fixture`, 'cancel_pacing');
+    try {
+      await runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+      });
+      const abort = new AbortController();
+      const startedAt = Date.now();
+      const pending = runWorkflowWithLadder({
+        workflowPath,
+        params: {},
+        credentials: { site: 'pacing-fixture', cookies: [], values: {} },
+        forceBackend: 'fetch',
+        signal: abort.signal,
+      });
+      setTimeout(() => abort.abort(new Error('cancel paced request')), 20);
+      await expect(pending).rejects.toThrow('cancel paced request');
+      expect(Date.now() - startedAt).toBeLessThan(500);
+      expect(calls).toBe(1);
+    } finally {
+      server.stop(true);
+      __resetCompilePacingForTest();
+      process.env.IMPRINT_COMPILE_ACT_SPACING_MS = previousSpacing;
+    }
   });
 });

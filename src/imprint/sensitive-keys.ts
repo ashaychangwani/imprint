@@ -291,12 +291,6 @@ export function isLoginFieldKey(key: string): boolean {
   return PASSWORD_LIKE_KEYS.has(n) || USERNAME_LIKE_KEYS.has(n);
 }
 
-/** Raw password-like key strings (pre-normalization) for callers that need
- *  substring matching against raw body text rather than parsed key lookup. */
-export function passwordLikeTokens(): readonly string[] {
-  return PASSWORD_LIKE_ENTRIES;
-}
-
 export function isSensitiveHeader(header: string): boolean {
   return SENSITIVE_HEADER_SET.has(header.toLowerCase());
 }

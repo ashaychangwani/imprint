@@ -2,6 +2,33 @@
 
 Items deferred from the v0.1 design + eng review. Not blocking the 2-week sprint. Address these between launch (day 14) and "v0.2" if/when interest justifies it.
 
+## Current master-teach follow-ups
+
+- Sort original recordings by their recorded `startedAt`, not filename alone.
+  A prefixed older file can otherwise outrank a newer timestamp-named recording.
+  The next Hotels validation explicitly selects the newest timestamp to avoid it.
+
+- Distinguish an ordinary run deadline from provider unavailability in terminal
+  output. The Flights run on September 5 was actively compiling when its timer
+  expired, but compiler recovery reported provider unavailability. Keep real
+  capacity retry behavior and avoid blaming artifacts for the run deadline.
+
+- Add an explicit `finesse` command that reads the build-bound suggestions now
+  saved under a teach run's `finesse/` directory. It should show the master the
+  still-current advice, let the master accept or reject it, and freshly rebuild
+  only the affected tool and its consumers. The normal teach command already
+  ships the usable MVP without waiting for this optional pass.
+- A request-free browser fallback passes its direct teach check, but the normal
+  automatic runtime ladder currently tries the empty API shell first and stops
+  before playbook. Route an explicitly accepted request-free fallback directly
+  to its playbook and cover it with an end-to-end ladder test. This is deferred
+  while Google Hotels and Google Flights are being judged on API tools; a
+  playbook for either Google run is a teaching failure, not success.
+- Direct `imprint generate` does not carry the master strategy binding now
+  described by the shared compiler prompt. Either bind that legacy command to
+  API explicitly or make the prompt conditional. The master-driven `teach`
+  path already supplies the binding.
+
 ## v0.2 candidates (post-sprint, in priority order)
 
 ### 1. Auth refresh: detect cookie expiry and re-prompt without manual intervention

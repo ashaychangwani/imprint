@@ -75,12 +75,20 @@ function ensureTracingInitialized(): void {
   const url = validateTracingUrl(
     process.env.PHOENIX_COLLECTOR_ENDPOINT ?? process.env.PHOENIX_HOST,
   );
-  provider = register({
-    projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
-    url,
-    apiKey: process.env.PHOENIX_API_KEY,
-    batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
-  });
+  try {
+    provider = register({
+      projectName: process.env.IMPRINT_TRACE_PROJECT ?? 'imprint',
+      url,
+      apiKey: process.env.PHOENIX_API_KEY,
+      batch: traceBatchEnabled(process.env.IMPRINT_TRACE_BATCH),
+    });
+  } catch (err) {
+    provider = null;
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[imprint] warning: tracing initialization failed; tracing is disabled: ${sanitizeTraceErrorMessage(message)}\n`,
+    );
+  }
 }
 
 export function traceBatchEnabled(value: string | undefined): boolean {
@@ -209,7 +217,14 @@ export async function shutdownTracing(): Promise<void> {
   if (!provider) return;
   const activeProvider = provider;
   provider = null;
-  await activeProvider.shutdown();
+  try {
+    await activeProvider.shutdown();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    process.stderr.write(
+      `[imprint] warning: tracing export failed; command result is unaffected: ${sanitizeTraceErrorMessage(message)}\n`,
+    );
+  }
 }
 
 export async function traced<T>(
@@ -222,6 +237,7 @@ export async function traced<T>(
     return await fn(NOOP_SPAN);
   }
   ensureTracingInitialized();
+  if (!provider) return await fn(NOOP_SPAN);
   const tracer = trace.getTracer('imprint');
   return await tracer.startActiveSpan(
     name,
@@ -248,6 +264,7 @@ export function startTraceSpan(
 ): Span | null {
   if (!isTracingEnabled()) return null;
   ensureTracingInitialized();
+  if (!provider) return null;
   return trace.getTracer('imprint').startSpan(name, {
     attributes: openInferenceAttributes(kind, attributes),
   });

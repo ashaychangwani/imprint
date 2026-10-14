@@ -65,19 +65,9 @@ export function buildAuthCompileTools(
     buildReadResponseBodyTool(session),
     buildWriteFileTool(toolDir),
     buildReadFileTool(toolDir),
-    buildRunTestsTool(
-      toolDir,
-      sessionPath,
-      {
-        // Auth request/capture tests are offline and use synthetic credentials.
-        // Explicitly mask any inherited teach payload so agent-authored test
-        // output cannot expose real credentials to the compile model.
-        IMPRINT_TEACH_CREDENTIALS: '',
-      },
-      {
-        networkDisabled: session.requests.some(isIrreversibleRequest),
-      },
-    ),
+    buildRunTestsTool(toolDir, sessionPath, {
+      networkDisabled: session.requests.some(isIrreversibleRequest),
+    }),
   ];
 }
 
@@ -107,17 +97,19 @@ export async function authLivePreflightFailures(
   );
   if (!parsed.workflow) return parsed.failures;
   const requestTestPath = pathJoin(toolDir, 'request.test.ts');
+  const requestTestExists = existsSync(requestTestPath);
   failures.push(
     ...bodyEncodingContractFailures(parsed.workflow),
     ...requestEncodingTestContractFailures(
       parsed.workflow,
-      existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
-    ),
-    ...persistedCaptureTestContractFailures(
-      parsed.workflow,
-      existsSync(requestTestPath) ? readFileSync(requestTestPath, 'utf8') : undefined,
+      requestTestExists ? readFileSync(requestTestPath, 'utf8') : undefined,
     ),
   );
+  if ((parsed.workflow.authConfig?.persist.length ?? 0) > 0 && !requestTestExists) {
+    failures.push(
+      'request.test.ts is required to exercise auth workflows that persist captured credentials',
+    );
+  }
   if (session) {
     failures.push(
       ...irreversibleProvenanceFailures(session, parsed.workflow, {
@@ -128,8 +120,8 @@ export async function authLivePreflightFailures(
   if (workflowHasIrreversibleEffect(parsed.workflow)) {
     failures.push('auth live verification is disabled for workflows with irreversible requests');
   }
-  if (failures.length === 0 && existsSync(requestTestPath)) {
-    const testResult = await buildRunTestsTool(toolDir, sessionPath, undefined, {
+  if (failures.length === 0 && requestTestExists) {
+    const testResult = await buildRunTestsTool(toolDir, sessionPath, {
       networkDisabled: workflowHasIrreversibleEffect(parsed.workflow),
     }).handler({});
     if (testResult.isError) {
@@ -151,21 +143,20 @@ export function authExternalVerification(
   if (!parsed.workflow) return parsed.failures;
   const failures = [...parsed.failures];
   const workflow = parsed.workflow;
+  const requestTestPath = pathJoin(toolDir, 'request.test.ts');
+  const requestTestExists = existsSync(requestTestPath);
   failures.push(...bodyEncodingContractFailures(workflow));
   failures.push(
     ...requestEncodingTestContractFailures(
       workflow,
-      existsSync(pathJoin(toolDir, 'request.test.ts'))
-        ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
-        : undefined,
-    ),
-    ...persistedCaptureTestContractFailures(
-      workflow,
-      existsSync(pathJoin(toolDir, 'request.test.ts'))
-        ? readFileSync(pathJoin(toolDir, 'request.test.ts'), 'utf8')
-        : undefined,
+      requestTestExists ? readFileSync(requestTestPath, 'utf8') : undefined,
     ),
   );
+  if ((workflow.authConfig?.persist.length ?? 0) > 0 && !requestTestExists) {
+    failures.push(
+      'request.test.ts is required to exercise auth workflows that persist captured credentials',
+    );
+  }
   const persisted = new Set(workflow.authConfig?.persist ?? []);
 
   const missingContracts = requiredDurableCredentials.filter((capture) => {
@@ -189,25 +180,6 @@ export function authExternalVerification(
     failures.push(...liveAttemptFailures(toolDir, workflow));
   }
   return failures;
-}
-
-function persistedCaptureTestContractFailures(
-  workflow: Workflow,
-  source: string | undefined,
-): string[] {
-  const persisted = workflow.authConfig?.persist ?? [];
-  if (persisted.length === 0) return [];
-  if (source === undefined) {
-    return [
-      'request.test.ts is required to prove persisted auth captures against their exact recorded response fields',
-    ];
-  }
-  return persisted
-    .filter((name) => !source.includes(`persisted-capture:${name}`))
-    .map(
-      (name) =>
-        `request.test.ts must include a passing "persisted-capture:${name}" test that independently decodes the recorded producer response and asserts the compiled capture equals that exact structured value`,
-    );
 }
 
 function parseWorkflow(

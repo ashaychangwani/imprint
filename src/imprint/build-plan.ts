@@ -2,48 +2,37 @@
  * Build-plan generation for multi-tool `imprint teach`.
  *
  * After candidate detection + user selection, this single-shot LLM pass
- * produces a BuildPlan: the shared utility modules to create once under
- * `~/.imprint/<site>/_shared/` (so per-tool compile agents import vetted code
- * instead of independently re-deriving signing/parsing logic), plus per-tool
- * guidance and an auth recipe each agent replicates inline. The prereq builder
- * (prereq-builder.ts) writes + verifies the shared modules before the per-tool
- * compile fan-out. See prompts/build-planning.md for the system prompt.
+ * produces a BuildPlan: proposals for shared utility modules to create once
+ * under `~/.imprint/<site>/_shared/`, plus per-tool guidance and an auth recipe.
+ * The prereq builder (prereq-builder.ts) writes + verifies proposed modules so
+ * focused compilers can reuse them when the evidence supports doing so. A
+ * proposal does not bind a tool to an import. See prompts/build-planning.md for
+ * the system prompt.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
-import { TimeoutError } from './concurrency.ts';
 import { compactUrlForLlm } from './llm-url.ts';
-import {
-  type AnalyzeInvocationEvent,
-  type LLMOptions,
-  extractJsonObject,
-  resolveProvider,
-} from './llm.ts';
-import { createLog } from './log.ts';
 import { localSiteDir } from './paths.ts';
 import { detectPageMintedHeaders } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { type ClassifiedValue, looksLikeOpaqueToken, looksLikeToken } from './session-diff.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { setSpanAttributes, traced } from './tracing.ts';
 import type { Session } from './types.ts';
 
-const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const BODY_LIMIT = 800;
 const RESPONSE_PREVIEW_LIMIT = 500;
 const HEADER_LIMIT = 600;
 const MAX_PLANNER_EPHEMERAL_VALUES = 600;
-const log = createLog('build-plan');
 
 // ─── Schema ─────────────────────────────────────────────────────────────────
 
 const SharedModuleKindSchema = z.enum(['request-transform', 'parser-helper', 'types']);
 export type SharedModuleKind = z.infer<typeof SharedModuleKindSchema>;
 
-/** Shared modules live under `_shared/` and are imported by per-tool artifacts
- *  via the relative path `../_shared/<name>.ts` (the runtime resolves
+/** Shared modules live under `_shared/` and may be imported by per-tool
+ *  artifacts via the relative path `../_shared/<name>.ts` (the runtime resolves
  *  parserModule/requestTransformModule relative to each tool's workflow.json). */
 const SHARED_MODULE_PATH_RE = /^_shared\/[A-Za-z0-9._-]+\.ts$/;
 
@@ -185,6 +174,7 @@ const PerToolPlanSchema = z.object({
   toolName: z.string().regex(/^[a-z][a-z0-9_]*$/),
   /** Callable prerequisite tools chosen by candidate detection. */
   dependsOnTools: z.array(z.string().regex(/^[a-z][a-z0-9_]*$/)).default([]),
+  /** Planner-proposed reusable modules. These are choices, not required imports. */
   usesSharedModules: z.array(z.string()).default([]),
   loadBearingSeqs: z.array(z.number().int().nonnegative()).default([]),
   parserGuidance: z.string().default(''),
@@ -383,8 +373,8 @@ export const BuildPlanSchema = z
 export type BuildPlan = z.infer<typeof BuildPlanSchema>;
 
 /** Manifest entry persisted on WorkflowState after the prereq builder runs.
- *  `verified` is false when the builder could not produce a passing module
- *  (the orchestrator then prunes it from each tool's usesSharedModules). */
+ *  `verified` reports only whether the module passed its own mechanical checks;
+ *  it does not require any per-tool compiler to reuse the module. */
 export const SharedModuleManifestEntrySchema = z.object({
   path: z.string(),
   kind: SharedModuleKindSchema,
@@ -511,7 +501,7 @@ export function topoLevels(modules: SharedModuleSpec[]): SharedModuleSpec[][] {
 
 interface BuildPlanSlice {
   tool: PerToolPlan;
-  /** The shared modules this tool is assigned, resolved from usesSharedModules. */
+  /** Shared modules proposed for this tool, resolved from usesSharedModules. */
   sharedModules: SharedModuleSpec[];
   /** Planner-level dynamic value decisions relevant to this tool. */
   dynamicValueFindings: DynamicValueFinding[];
@@ -530,8 +520,9 @@ export function planSliceForTool(plan: BuildPlan, toolName: string): BuildPlanSl
   return { tool, sharedModules, dynamicValueFindings };
 }
 
-/** A shared module a tool must import, with the relative import path the tool
- *  uses (`../_shared/<name>.ts`) and whether the prereq builder verified it. */
+/** A built shared-module proposal, with the relative path a tool may use
+ *  (`../_shared/<name>.ts`) and the prereq builder's verification fact.
+ *  The historical type name is retained for caller compatibility. */
 export interface AssignedSharedModule {
   path: string;
   kind: SharedModuleKind;
@@ -547,9 +538,9 @@ export function sharedModuleImportPath(modulePath: string): string {
   return `../_shared/${modulePath.replace(/^_shared\//, '')}`;
 }
 
-/** Resolve the shared modules assigned to `toolName`, annotating each with its
+/** Resolve shared-module proposals for `toolName`, annotating each with its
  *  verified status from the build manifest. When `manifest` is omitted every
- *  module is treated as verified (best-effort). */
+ *  proposal is treated as verified (best-effort). */
 export function resolveAssignedModules(
   plan: BuildPlan,
   toolName: string,
@@ -568,9 +559,8 @@ export function resolveAssignedModules(
   }));
 }
 
-/** Human-readable block injected into each per-tool compile agent's initial
- *  prompt, listing the verified shared modules it must import. Shared by all
- *  three compile drivers. Returns '' when nothing is assigned. */
+/** Human-readable advisory block injected into each per-tool compiler. A built
+ * module is available for reuse, but is not an accepted per-tool binding. */
 export function describeAssignedModules(assigned: AssignedSharedModule[]): string {
   const verified = assigned.filter((m) => m.verified);
   if (verified.length === 0) return '';
@@ -580,15 +570,15 @@ export function describeAssignedModules(assigned: AssignedSharedModule[]): strin
   );
   return `
 
-Assigned shared modules — import these instead of re-implementing their logic (call read_build_plan for the full slice):
+Available shared-module proposals (call read_build_plan for their evidence and full source):
 ${lines.join('\n')}
 
-For a request-transform module, set "requestTransformModule": "<importPath>" in workflow.json. For a parser-helper/types module, import it in parser.ts. The verifier fails this tool if an assigned module is not imported.`;
+Decide whether each module actually fits this tool. If you accept one, use its exact importPath. The runtime does not require these imports; reuse a proposal only when its evidence supports the tool.`;
 }
 
-/** The producer→consumer token contracts the build plan declared for a tool
- *  (consumer side). Threaded into `externalVerification` so the gate requires a
- *  chained test and stamps `sourcedFrom`. Empty when the plan declared none. */
+/** The producer→consumer relationship proposed by the build plan for a tool.
+ * The focused compiler and later reviewers inspect exact evidence before
+ * accepting it. Empty when the plan proposed none. */
 export function resolveTokenParams(
   plan: BuildPlan,
   toolName: string,
@@ -618,10 +608,9 @@ function resolveConsumerTokenShapes(
   });
 }
 
-/** The fields a tool's parser MUST emit for sibling consumers (producer side).
- *  Threaded into `externalVerification` so the gate fails a producer that does
- *  not emit a declared field. Empty when the plan declared none. Internal —
- *  reached through `resolvePlanSliceFromFile`. */
+/** Fields the build plan proposes that a producer expose for sibling tools.
+ * These remain advisory until accepted from exact evidence. Empty when the
+ * plan proposed none. */
 function resolveEmittedTokens(
   plan: BuildPlan,
   toolName: string,
@@ -638,9 +627,9 @@ export function resolveRequiredInputs(plan: BuildPlan, toolName: string): Requir
   return plan.perTool.find((t) => t.toolName === toolName)?.requiredInputs ?? [];
 }
 
-/** Read a build-plan sidecar and project it to one tool's slice in the shape
- *  every compile driver needs: the shared modules it must import (with verified
- *  flags from `manifest`) plus the producer/consumer token-contract arrays.
+/** Read a build-plan sidecar and project it to one tool's advisory slice:
+ * reusable shared-module proposals (with build facts from `manifest`) plus the
+ * proposed producer/consumer relationships.
  *  Returns empty values when no plan path / tool name is supplied or the sidecar
  *  is missing/invalid — so a driver with no build plan behaves exactly as before.
  *  Shared by the in-process loop, the MCP compile server, and both CLI drivers. */
@@ -1629,7 +1618,7 @@ interface LooseRequiredInputPerTool {
   requiredInputs?: Array<Record<string, unknown>>;
 }
 
-export function looksLikePlannerPlaceholderLiteral(value: unknown): boolean {
+function looksLikePlannerPlaceholderLiteral(value: unknown): boolean {
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   if (!/^<[\s\S]{0,240}>$/.test(trimmed)) return false;
@@ -1953,289 +1942,10 @@ function buildPlanRequestGroupKey(request: BuildPlanRequestPayload): unknown[] {
   ];
 }
 
-// ─── Generation ─────────────────────────────────────────────────────────────
+// ─── Diagnostic path ────────────────────────────────────────────────────────
 
-interface GenerateBuildPlanResult extends BuildPlan {
-  inputTokens: number | null;
-  outputTokens: number | null;
-  durationMs: number;
-}
-
-type BuildPlanLogEvent = {
-  type: string;
-  timestamp: string;
-  elapsedMs: number;
-  [key: string]: unknown;
-};
-
-function createBuildPlanLog(site: string): {
-  path: string;
-  event: (event: { type: string; [key: string]: unknown }) => void;
-} {
-  const path = buildPlanLogPath(site);
-  mkdirSync(localSiteDir(site), { recursive: true });
-  const startedAt = Date.now();
-  const events: BuildPlanLogEvent[] = [];
-  const flush = (): void => {
-    try {
-      writeFileSync(path, `${JSON.stringify(events, null, 2)}\n`, 'utf8');
-    } catch {
-      // Diagnostic logging must never change planner behavior.
-    }
-  };
-  return {
-    path,
-    event(event) {
-      events.push({
-        timestamp: new Date().toISOString(),
-        elapsedMs: Date.now() - startedAt,
-        ...event,
-      });
-      flush();
-    },
-  };
-}
-
-export async function generateBuildPlan(opts: {
-  session: Session;
-  candidates: ToolCandidate[];
-  sharedContext?: SharedCompileContext;
-  classifications?: ClassifiedValue[];
-  llmConfig?: LLMOptions;
-  /** Wall-clock cap on the planner LLM call. On timeout the span is closed with
-   *  `imprint.plan.timed_out` + ERROR and a TimeoutError is thrown for the caller
-   *  to degrade. Omit/0 to wait indefinitely. */
-  timeoutMs?: number;
-  /** Optional sink for progress narration. When provided (e.g. the teach
-   *  spinner), planner progress flows here instead of raw stderr so it stays
-   *  inside the TUI; standalone/test callers fall back to the module logger. */
-  onProgress?: (msg: string) => void;
-}): Promise<GenerateBuildPlanResult> {
-  const narrate = (msg: string): void => {
-    (opts.onProgress ?? log)(msg);
-  };
-  return await traced(
-    'teach.plan_prereqs',
-    'AGENT',
-    {
-      'imprint.site': opts.session.site,
-      'imprint.provider': opts.llmConfig?.provider ?? 'auto',
-      'imprint.tool_count': opts.candidates.length,
-    },
-    async (span) => {
-      const planLog = createBuildPlanLog(opts.session.site);
-      planLog.event({
-        type: 'plan.started',
-        site: opts.session.site,
-        provider: opts.llmConfig?.provider ?? 'auto',
-        model: opts.llmConfig?.model ?? 'default',
-        toolCount: opts.candidates.length,
-        timeoutMs: opts.timeoutMs ?? null,
-      });
-      const promptPath = pathJoin(PROMPTS_DIR, 'build-planning.md');
-      if (!existsSync(promptPath)) {
-        planLog.event({ type: 'plan.failed', stage: 'load_prompt', error: 'prompt not found' });
-        throw new Error(
-          `Build-planning prompt not found at ${promptPath}\n→ this is an Imprint installation problem.`,
-        );
-      }
-      const systemPrompt = readFileSync(promptPath, 'utf8');
-      const payload = buildBuildPlanPayload(opts);
-      const payloadJson = JSON.stringify(payload);
-      planLog.event({
-        type: 'payload.ready',
-        promptChars: systemPrompt.length,
-        payloadChars: payloadJson.length,
-        requestCount: payload.requests.length,
-        ephemeralCount: payload.ephemeralValues.length,
-        ephemeralTotalCount: (opts.classifications ?? []).filter(
-          (c) => c.classification !== 'constant' || c.producerSeq != null,
-        ).length,
-        tokenEdgeCount: payload.tokenContractHints.length,
-        requiredInputHintCount: payload.requiredInputHints.length,
-        narrationCount: payload.narration.length,
-      });
-
-      // Record input size on the span BEFORE the call, so a timed-out or slow
-      // planning session is still debuggable on Phoenix (the success block below
-      // never runs on timeout). A large ephemeral_count is the usual bloat cause.
-      setSpanAttributes(span, {
-        'imprint.plan.request_count': payload.requests.length,
-        'imprint.plan.ephemeral_count': payload.ephemeralValues.length,
-        'imprint.plan.ephemeral_total_count': (opts.classifications ?? []).filter(
-          (c) => c.classification !== 'constant' || c.producerSeq != null,
-        ).length,
-        'imprint.plan.narration_count': payload.narration.length,
-        'imprint.plan.payload_chars': payloadJson.length,
-        'imprint.plan.prompt_chars': systemPrompt.length,
-        'imprint.plan.timeout_ms': opts.timeoutMs ?? 0,
-      });
-      narrate(
-        `planning ${opts.candidates.length} tool(s): ${payload.requests.length} request(s), ${payload.ephemeralValues.length}/${(opts.classifications ?? []).filter((c) => c.classification !== 'constant' || c.producerSeq != null).length} ephemeral value(s), ${payload.tokenContractHints.length} token edge(s), ${payload.requiredInputHints.length} required-input hint(s), ${payload.narration.length} narration line(s); ${Math.round(payloadJson.length / 1024)} KB payload + ${Math.round(systemPrompt.length / 1024)} KB prompt → ${opts.llmConfig?.provider ?? 'auto'}/${opts.llmConfig?.model ?? 'default'}${opts.timeoutMs ? ` (timeout ${Math.round(opts.timeoutMs / 1000)}s)` : ''}`,
-      );
-
-      const llm = resolveProvider(opts.llmConfig ?? {});
-      const llmStart = Date.now();
-      narrate('calling planner LLM');
-      let result: Awaited<ReturnType<typeof llm.analyze>>;
-      try {
-        planLog.event({ type: 'llm.started', provider: llm.name });
-        result = await llm.analyze(systemPrompt, payload, {
-          timeoutMs: opts.timeoutMs,
-          timeoutLabel: 'build planner',
-          onEvent: (event: AnalyzeInvocationEvent) => {
-            planLog.event({ type: 'llm.provider_event', event });
-          },
-        });
-        planLog.event({
-          type: 'llm.completed',
-          provider: llm.name,
-          durationMs: Date.now() - llmStart,
-          inputTokens: result.inputTokens ?? null,
-          outputTokens: result.outputTokens ?? null,
-          responseChars: result.text.length,
-          stopReason: result.stopReason,
-        });
-      } catch (err) {
-        const elapsedMs = Date.now() - llmStart;
-        const timedOut = err instanceof TimeoutError;
-        setSpanAttributes(span, {
-          'imprint.plan.timed_out': timedOut,
-          'imprint.plan.llm_elapsed_ms': elapsedMs,
-        });
-        planLog.event({
-          type: 'llm.failed',
-          provider: llm.name,
-          durationMs: elapsedMs,
-          timedOut,
-          errorName: err instanceof Error ? err.name : undefined,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        narrate(
-          `planner LLM ${timedOut ? 'timed out' : 'failed'} after ${Math.round(elapsedMs / 1000)}s: ${err instanceof Error ? err.message : String(err)}`,
-        );
-        throw err;
-      }
-      narrate(
-        `planner LLM returned in ${Math.round((Date.now() - llmStart) / 1000)}s (in=${result.inputTokens ?? '?'}, out=${result.outputTokens ?? '?'} tokens, ${result.text.length} chars)`,
-      );
-      const objectText = extractJsonObject(result.text);
-      if (!objectText) {
-        planLog.event({
-          type: 'plan.failed',
-          stage: 'extract_json',
-          responseChars: result.text.length,
-          responsePreview: truncate(result.text, 1000),
-        });
-        throw new Error(
-          `Build planner did not return a JSON object.\nRaw response:\n${result.text.slice(0, 1000)}`,
-        );
-      }
-
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(objectText);
-      } catch (err) {
-        planLog.event({
-          type: 'plan.failed',
-          stage: 'parse_json',
-          extractedChars: objectText.length,
-          extractedPreview: truncate(objectText, 1000),
-          error: err instanceof Error ? err.message : String(err),
-        });
-        throw new Error(
-          `Build planner response was not valid JSON: ${err instanceof Error ? err.message : String(err)}\nExtracted:\n${objectText.slice(0, 1000)}`,
-        );
-      }
-
-      // Deterministic safety net: reconcile the planner's plan against the
-      // grounded token edges before validation, so a planner shortcut can't drop
-      // or half-declare a cross-tool contract (the original defect this fixes).
-      const selectedNames = new Set(opts.candidates.map((c) => c.toolName));
-      const reconciled = reconcileTokenContracts(parsed, payload.tokenContractHints, selectedNames);
-      if (reconciled.injected > 0 || reconciled.repaired > 0) {
-        narrate(
-          `token contracts: ${payload.tokenContractHints.length} edge(s) detected → injected ${reconciled.injected}, repaired ${reconciled.repaired}`,
-        );
-      }
-      for (const w of reconciled.warnings) narrate(`token contract: ${w}`);
-
-      // Same safety net for the GENERAL dependency contract: re-inject any grounded
-      // requiredInput the planner dropped (auth / producer / browser_state /
-      // generated / static), and seed missing auth captures.
-      const reconciledInputs = reconcileRequiredInputs(
-        parsed,
-        payload.requiredInputHints,
-        selectedNames,
-      );
-      if (reconciledInputs.injected > 0 || reconciledInputs.repaired > 0) {
-        narrate(
-          `required inputs: ${payload.requiredInputHints.length} hint(s) → injected ${reconciledInputs.injected}, repaired ${reconciledInputs.repaired}`,
-        );
-      }
-      for (const w of reconciledInputs.warnings) narrate(`required input: ${w}`);
-      planLog.event({
-        type: 'plan.reconciled',
-        tokenInjected: reconciled.injected,
-        tokenRepaired: reconciled.repaired,
-        tokenWarnings: reconciled.warnings.length,
-        requiredInputInjected: reconciledInputs.injected,
-        requiredInputRepaired: reconciledInputs.repaired,
-        requiredInputWarnings: reconciledInputs.warnings.length,
-      });
-
-      const plan = validateBuildPlan(parsed, opts.candidates);
-      planLog.event({
-        type: 'plan.validated',
-        sharedModuleCount: plan.sharedModules.length,
-        toolCount: plan.perTool.length,
-        dynamicValueFindingCount: plan.dynamicValueFindings.length,
-        authTool: plan.authTool?.toolName ?? null,
-      });
-      setSpanAttributes(span, {
-        'imprint.plan.token_edge_count': payload.tokenContractHints.length,
-        'imprint.plan.token_injected': reconciled.injected,
-        'imprint.plan.token_repaired': reconciled.repaired,
-        'imprint.plan.required_input_hint_count': payload.requiredInputHints.length,
-        'imprint.plan.required_input_injected': reconciledInputs.injected,
-        'imprint.plan.required_input_repaired': reconciledInputs.repaired,
-        'imprint.plan.shared_module_count': plan.sharedModules.length,
-        'imprint.plan.tool_count': plan.perTool.length,
-        'imprint.plan.duration_ms': result.durationMs,
-        'imprint.plan.input_tokens': result.inputTokens,
-        'imprint.plan.output_tokens': result.outputTokens,
-      });
-      return {
-        ...plan,
-        inputTokens: result.inputTokens,
-        outputTokens: result.outputTokens,
-        durationMs: result.durationMs,
-      };
-    },
-  );
-}
-
-// ─── Sidecar persistence ────────────────────────────────────────────────────
-
-/** Site-level sidecar holding the full plan. Each compile driver loads it by
- *  path and reads only its tool's slice — far cheaper than threading a large
- *  plan through CLI spawn args. Modeled on the `.classifications.json` sidecar. */
-export function buildPlanSidecarPath(site: string): string {
-  return pathJoin(localSiteDir(site), '.build-plan.json');
-}
-
-/** Incremental diagnostic log for the build-planner LLM call. Unlike
- * `.build-plan.json`, this exists even when planning times out or returns
- * invalid JSON. */
 export function buildPlanLogPath(site: string): string {
   return pathJoin(localSiteDir(site), '.build-plan-log.json');
-}
-
-export function writeBuildPlanSidecar(site: string, plan: BuildPlan): string {
-  const path = buildPlanSidecarPath(site);
-  mkdirSync(localSiteDir(site), { recursive: true });
-  writeFileSync(path, `${JSON.stringify(plan, null, 2)}\n`, 'utf8');
-  return path;
 }
 
 // ─── Local helpers ──────────────────────────────────────────────────────────

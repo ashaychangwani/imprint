@@ -220,7 +220,6 @@ describe('detectedButUnemittedTools', () => {
             description: 'Search items',
             rationale: 'primary intent',
             confidence: 1,
-            primary: true,
             requestSeqs: [],
             representativeSeqs: [],
             eventSeqs: [],
@@ -248,7 +247,6 @@ describe('detectedButUnemittedTools', () => {
             description: 'Get details',
             rationale: 'consumer',
             confidence: 0.9,
-            primary: false,
             requestSeqs: [],
             representativeSeqs: [],
             eventSeqs: [],
@@ -268,7 +266,6 @@ describe('detectedButUnemittedTools', () => {
             description: 'Old tool',
             rationale: 'stale',
             confidence: 0.5,
-            primary: false,
             requestSeqs: [],
             representativeSeqs: [],
             eventSeqs: [],
@@ -307,7 +304,6 @@ describe('detectedButUnemittedTools', () => {
             description: 'Search items',
             rationale: 'primary intent',
             confidence: 1,
-            primary: true,
             requestSeqs: [],
             representativeSeqs: [],
             eventSeqs: [],
@@ -995,6 +991,10 @@ describe('audit prompt construction', () => {
     );
 
     expect(prompt).toContain('authenticate_password');
+    expect(prompt).toContain(
+      'The exact report tool names are: ["search_items","authenticate_password"]',
+    );
+    expect(prompt).toContain('do not include that prefix in the report name');
     expect(prompt).toContain('Eligible unattended authentication tool(s)');
     expect(prompt).toContain('at most one recovery authentication call');
   });
@@ -1049,6 +1049,9 @@ describe('audit prompt construction', () => {
     expect(prompt).toContain('A single unchanged comparison is not enough for conditional inputs');
     expect(prompt).toContain('An empty result is not automatically broken');
     expect(prompt).toContain('Preserve that ambiguity for the compiler or human reviewer');
+    expect(prompt).toContain('Echoed inputs, including fields labeled `applied` or `effective`');
+    expect(prompt).toContain('repeat the baseline as a control when useful');
+    expect(prompt).toContain('A changed list by itself is not proof of an unrelated parameter');
     expect(prompt).toContain('at most one recovery authentication call');
     expect(prompt).toContain('classify any later `AUTH_EXPIRED` result as `infra`');
   });
@@ -1101,4 +1104,61 @@ then revised:
     expect(extractReport('no json here at all')).toBeUndefined();
     expect(extractReport('')).toBeUndefined();
   });
+});
+
+describe('strict audit gate', () => {
+  it('rejects a real broken call even when a blended score exceeds the legacy threshold', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'fixture',
+          invocations: [
+            ...Array.from({ length: 30 }, () => ({ ok: true, verdict: 'correct' })),
+            { ok: false, verdict: 'tool_broken' },
+          ],
+        },
+      ],
+    });
+    const expected = [{ name: 'fixture', parameters: [] }];
+    expect(evaluateAuditReport(report, 95, expected).score.verdict).toBe('pass');
+    expect(evaluateAuditReport(report, 95, expected, false, true).score.verdict).toBe('fail');
+    expect(evaluateAuditReport(report, 95, expected, true, true).score.verdict).toBe('timeout');
+  });
+  it('keeps unavailable core evidence unverified', () => {
+    const report = AuditReportSchema.parse({
+      tools: [
+        {
+          name: 'fixture',
+          invocations: [
+            { ok: true, verdict: 'correct' },
+            { ok: false, verdict: 'infra' },
+          ],
+        },
+      ],
+    });
+    expect(
+      evaluateAuditReport(report, 95, [{ name: 'fixture', parameters: [] }], false, true).score
+        .verdict,
+    ).toBe('inconclusive');
+  });
+});
+
+it('requires each retained recording-backed case in a strict audit', () => {
+  const expected = [{ name: 'fixture', parameters: [], caseIds: ['baseline', 'recorded_variant'] }];
+  const report = AuditReportSchema.parse({
+    tools: [
+      { name: 'fixture', invocations: [{ ok: true, verdict: 'correct', caseId: 'baseline' }] },
+    ],
+  });
+  const incomplete = evaluateAuditReport(report, 95, expected, false, true);
+  expect(incomplete.score.verdict).toBe('inconclusive');
+  expect(incomplete.missingCases).toEqual([{ tool: 'fixture', caseId: 'recorded_variant' }]);
+  report.tools[0]?.invocations.push({
+    ok: true,
+    verdict: 'correct',
+    caseId: 'recorded_variant',
+    params: {},
+    reason: 'Matched recorded case',
+  });
+  expect(evaluateAuditReport(report, 95, expected, false, true).score.verdict).toBe('pass');
 });

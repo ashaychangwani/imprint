@@ -14,8 +14,9 @@
  *  - `playbook`        — DOM-walk LAST RESORT (needs a compiled playbook.yaml).
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, resolve as pathResolve } from 'node:path';
+import { basename, dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
 import { loadBackendsCacheStatus } from './backend-cache.ts';
 import {
@@ -32,12 +33,18 @@ import {
   seedJarFromRecording,
 } from './cdp-jar-cache.ts';
 import { proxyUrl } from './chromium.ts';
+import { abortSignalError, abortableDelay, withAbortSignal } from './concurrency.ts';
 import { RuntimeCookieJar } from './cookie-jar.ts';
+import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
 import {
   type BrowserNavigationTransport,
   type CredentialStore,
+  type PreparedRequestObservation,
+  RESPONSE_OBSERVATIONS_MAX,
+  type ResponseEvidence,
+  type ResponseObservation,
   executeWorkflow,
   loadCredentialStore,
   substituteString,
@@ -64,16 +71,63 @@ import type {
 
 type UsedBackend = ConcreteBackend;
 
+export interface BackendAttemptFact {
+  backend: UsedBackend;
+  /** `ok` means this runtime path completed. Independent semantic review may
+   * still reject the returned data. */
+  outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
+  detail: string;
+  durationMs: number;
+}
+
+export type BackendResponseEvidence = ResponseEvidence & { backend: ConcreteBackend };
+export type BackendResponseObservation = ResponseObservation & { backend: ConcreteBackend };
+export type BackendPreparedRequestObservation = PreparedRequestObservation & {
+  backend: ConcreteBackend;
+};
+
 interface LadderResult {
   result: ToolResult;
   usedBackend: UsedBackend;
   /** One entry per rung that was tried. */
-  attempts: Array<{
-    backend: UsedBackend;
-    outcome: 'ok' | 'escalate' | 'failed' | 'unavailable';
-    detail: string;
-    durationMs: number;
-  }>;
+  attempts: BackendAttemptFact[];
+  /** Present on compile/teach calls that request bounded response diagnostics. */
+  responseObservations?: BackendResponseObservation[];
+}
+
+const BACKEND_ATTEMPT_DETAIL_LIMIT = 500;
+
+function backendAttemptDetail(result: Exclude<ToolResult, { ok: true }>): string {
+  return `${result.error}: ${result.message.slice(0, BACKEND_ATTEMPT_DETAIL_LIMIT)}`;
+}
+
+/**
+ * Return a request-construction failure that happened before any earlier
+ * request was sent. That narrow case cannot depend on transport-produced
+ * response state, so callers can return it to the compiler without walking the
+ * expensive backend ladder. Later transforms may consume earlier responses and
+ * must remain eligible for another transport.
+ */
+export function backendInvariantProbeFailure(result: ToolResult): string | null {
+  if (result.ok || result.error !== 'BAD_RESPONSE') return null;
+  const facts = result.requestStageFacts ?? [];
+  const terminalFailure = [...facts]
+    .reverse()
+    .find(({ outcome }) => outcome === 'failed' || outcome === 'unavailable');
+  if (terminalFailure?.stage === 'preparation' || terminalFailure?.stage === 'transform') {
+    const priorSend = facts.some(
+      ({ requestIndex, stage }) => stage === 'send' && requestIndex < terminalFailure.requestIndex,
+    );
+    if (priorSend) return null;
+    return result.message;
+  }
+  // Compatibility for older generated runtimes that predate stage receipts.
+  if (facts.length > 0) return null;
+  const legacy =
+    /^request transform (?:failed for request|module was unavailable for request) (\d+)(?::|$)/i.exec(
+      result.message,
+    );
+  return legacy?.[1] === '0' ? result.message : null;
 }
 
 const log = createLog('backend');
@@ -108,49 +162,41 @@ export function __resetCompileWinningBackendForTest(): void {
   compileWinningBackend.clear();
 }
 
-let probeTimeoutMsForTest: number | null = null;
-export function __setProbeTimeoutMsForTest(ms: number | null): void {
-  probeTimeoutMsForTest = ms;
+/** Keep compile-time transport memory scoped to one request construction.
+ * Parser-only edits intentionally retain the preference; request, bootstrap,
+ * or request-transform edits get a fresh key and cannot inherit stale rung
+ * outcomes from an earlier candidate for the same public tool. */
+function compileExecutionMemoKey(workflow: Workflow, toolDir: string): string {
+  const { parserModule: _parserModule, ...transportWorkflow } = workflow;
+  const transformPath = workflow.requestTransformModule
+    ? pathResolve(toolDir, workflow.requestTransformModule)
+    : undefined;
+  const transformSource =
+    transformPath && existsSync(transformPath) ? readFileSync(transformPath, 'utf8') : null;
+  const fingerprint = createHash('sha256')
+    .update(JSON.stringify({ workflow: transportWorkflow, transformSource }))
+    .digest('hex')
+    .slice(0, 16);
+  return `${workflow.site ?? ''}::${workflow.toolName}::${fingerprint}`;
 }
 
-/** Backend preference for the compile parallel-probe winner, LOWER = preferred.
- *  `fetch` first (cheapest, no browser). Among the browser-backed rungs prefer
- *  `cdp-replay` over `stealth-fetch`: cdp-replay's cold start is a one-time cost
- *  (the pool keeps Chrome warm so later calls are ~2-5s) and it is the more
- *  anti-bot-robust path (real Chrome re-validating its sensor between calls), so
- *  it shouldn't lose the probe just because stealth's FIRST call clocked faster. */
-const BACKEND_PROBE_RANK: Record<string, number> = {
-  fetch: 0,
-  'cdp-replay': 1,
-  'stealth-fetch': 2,
-};
-
-/** Pick the parallel-probe winner among backends that returned real data: prefer
- *  by `BACKEND_PROBE_RANK` (fetch < cdp-replay < stealth-fetch), with first-call
- *  duration only as a tiebreak — so when both browser backends succeed, the
- *  warm-poolable cdp-replay wins instead of stealth's faster cold call. Pure +
- *  exported for unit testing. */
-export function pickProbeWinner<T extends { backend: ConcreteBackend; durationMs: number }>(
-  winners: T[],
-): T | undefined {
-  return [...winners].sort((a, b) => {
-    const ra = BACKEND_PROBE_RANK[a.backend] ?? 9;
-    const rb = BACKEND_PROBE_RANK[b.backend] ?? 9;
-    return ra !== rb ? ra - rb : a.durationMs - b.durationMs;
-  })[0];
+/** Record only a backend whose response an agent has explicitly judged to be
+ * the promised operation. A transport-level HTTP success is not semantic
+ * proof, especially for APIs that return application errors inside HTTP 200. */
+export function rememberProvenCompileBackend(workflowPath: string, backend: ConcreteBackend): void {
+  const tool = resolveWorkflowTool(workflowPath);
+  compileWinningBackend.set(compileExecutionMemoKey(tool.workflow, tool.dir), backend);
 }
 
 /** Process-global CDP pool for the compile/test path (`runWorkflowWithLadder`).
- *  cdp-replay stores its live Chrome here on success so subsequent calls within
- *  the same `bun test` process reuse it (~2-5s vs ~33s cold start) — the same
- *  mechanism as the runtime pool in mcp-server.ts. An idle timer (re)armed after
- *  every call closes each browser shortly after the LAST call, so the host
- *  process drains and exits cleanly (no leak, no hang) without a per-call drain.
- *  Per-process: concurrent compile lanes are separate `bun test` processes, so
- *  this is never shared across lanes; never consulted by production replay. */
+ *  Each tool and rendered bootstrap context has its own entry. Repeated checks
+ *  of that same construction stay warm, while concurrent tools and materially
+ *  different bootstrap contexts cannot inherit one another's page/session
+ *  state. An idle timer closes browsers shortly after the last call. */
 const compileCdpPool = new Map<string, CdpBrowserFetch>();
 const compileCdpIdleTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const COMPILE_CDP_IDLE_MS = 15_000;
+let compileCdpActiveCalls = 0;
 
 /** Cancel pending idle-closes — called when a new call is about to reuse the pool. */
 function clearCompileCdpIdle(): void {
@@ -167,8 +213,9 @@ function armCompileCdpIdleClose(): void {
   clearCompileCdpIdle();
   for (const [site, cf] of compileCdpPool) {
     const timer = setTimeout(() => {
-      compileCdpPool.delete(site);
       compileCdpIdleTimers.delete(site);
+      if (compileCdpPool.get(site) !== cf) return;
+      compileCdpPool.delete(site);
       // Close releases the websocket + Chrome child handles so the event loop
       // drains and the host process exits (mirrors mcp-server's idle close).
       void cf.close().catch(() => {});
@@ -205,41 +252,6 @@ function compileActSpacingMs(): number {
   return Number.isFinite(v) && v > 0 ? v : 0;
 }
 const compileLastRequestAt = new Map<string, number>();
-function sleepMs(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-async function settleProbeWithDeadline<T>(
-  inner: Promise<T>,
-  timeoutMs: number,
-  timeoutValue: T,
-): Promise<T> {
-  type Observed = { status: 'fulfilled'; value: T } | { status: 'rejected'; reason: unknown };
-  const observed: Promise<Observed> = inner.then(
-    (value) => ({ status: 'fulfilled', value }),
-    (reason) => ({ status: 'rejected', reason }),
-  );
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<'deadline'>((resolve) => {
-    timer = setTimeout(() => resolve('deadline'), timeoutMs);
-  });
-  const first = await Promise.race([observed, deadline]);
-  if (timer) clearTimeout(timer);
-  if (first === 'deadline') {
-    const pending = observed.then(() => undefined);
-    pendingProbeRuns.add(pending);
-    void pending.finally(() => pendingProbeRuns.delete(pending));
-    return timeoutValue;
-  }
-  if (first.status === 'rejected') throw first.reason;
-  return first.value;
-}
-
-const pendingProbeRuns = new Set<Promise<void>>();
-
-export async function __drainPendingProbeRunsForTest(): Promise<void> {
-  await Promise.allSettled([...pendingProbeRuns]);
-}
 
 function playbookBackendTimeoutMs(): number {
   return positiveEnvMs('IMPRINT_PLAYBOOK_BACKEND_TIMEOUT_MS', DEFAULT_PLAYBOOK_BACKEND_TIMEOUT_MS);
@@ -273,25 +285,30 @@ function withWorkflowDefaults(
 /** Await the per-origin min spacing before a compile-path live request. The
  *  first call to an origin never waits (last=0); subsequent ones within the
  *  window are delayed so the suite paces itself under the rate-flag. */
-async function paceCompileRequest(origin: string): Promise<void> {
+async function paceCompileRequest(origin: string, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw abortSignalError(signal);
   const spacing = compileActSpacingMs();
   if (spacing <= 0) return;
   const last = compileLastRequestAt.get(origin) ?? 0;
-  const waitMs = last + spacing - Date.now();
+  const now = Date.now();
+  const scheduledAt = Math.max(now, last + spacing);
+  // Reserve before awaiting so concurrent callers cannot take the same slot.
+  // Cancellation leaves a gap; later reservations keep their original order.
+  compileLastRequestAt.set(origin, scheduledAt);
+  const waitMs = scheduledAt - now;
   if (waitMs > 0) {
     log(
       `compile pacing: waiting ${Math.round(waitMs / 1000)}s before next live request to ${origin}`,
     );
-    await sleepMs(waitMs);
+    await abortableDelay(waitMs, signal);
   }
-  compileLastRequestAt.set(origin, Date.now());
 }
 export function __resetCompilePacingForTest(): void {
   compileLastRequestAt.clear();
 }
 
-export function cdpReplayPoolKey(site: string, _baseUrl: string): string {
-  return site;
+export function cdpReplayPoolKey(site: string, toolName: string, bootstrapUrl: string): string {
+  return `${site}\u0000${toolName}\u0000${bootstrapUrl}`;
 }
 
 /** Expand a replayBackend choice into a concrete ladder. 'auto' prefers
@@ -342,6 +359,11 @@ export async function runWithLadder(
     credentials?: CredentialStore;
     /** Caller cancellation for bounded verification work. */
     signal?: AbortSignal;
+    /** Bounded, value-free response observations for factual repair feedback. */
+    onResponse?: (observation: BackendResponseObservation) => void;
+    /** Host-internal artifact-prepared requests for advisory comparison. */
+    onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+    onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
   },
 ): Promise<LadderResult> {
   if (ladder.length === 0) {
@@ -365,7 +387,7 @@ export async function runWithLadder(
   }
   const baseLadder = options?.skipBootstrapSplice
     ? permittedLadder
-    : effectiveAutoLadder(permittedLadder, tool.workflow);
+    : effectiveAutoLadder(permittedLadder);
 
   // Runtime winner memo. Once a backend has served this tool in THIS session,
   // start there next time instead of re-walking the doomed early rungs (southwest
@@ -387,10 +409,12 @@ export async function runWithLadder(
     }
   }
   const attempts: LadderResult['attempts'] = [];
+  let lastPageDiagnostic: Extract<ToolResult, { ok: false }>['pageDiagnostic'];
   let lastResult: ToolResult | null = null;
   let lastResultBackend: ConcreteBackend | null = null;
   let skipUntilBackend: ConcreteBackend | null = null;
   for (const backend of effectiveLadder) {
+    if (options?.signal?.aborted) throw abortSignalError(options.signal);
     if (skipUntilBackend && backend !== skipUntilBackend) continue;
     if (skipUntilBackend === backend) skipUntilBackend = null;
 
@@ -411,6 +435,21 @@ export async function runWithLadder(
     const t0 = Date.now();
     log(`trying ${backend}…`);
     let result: ToolResult;
+    const onResponse = (observation: ResponseObservation): void =>
+      options?.onResponse?.({ ...observation, backend });
+    const onPreparedRequest = (observation: PreparedRequestObservation): void =>
+      options?.onPreparedRequest?.({ ...observation, backend });
+    const observedTool: ResolvedTool = options?.onResponseEvidence
+      ? {
+          ...tool,
+          toolFn: (parameters, opts) =>
+            tool.toolFn(parameters, {
+              ...opts,
+              onResponseEvidence: (evidence: ResponseEvidence) =>
+                options.onResponseEvidence?.({ ...evidence, backend }),
+            }),
+        }
+      : tool;
     try {
       switch (backend) {
         case 'fetch': {
@@ -421,25 +460,33 @@ export async function runWithLadder(
           if (proxyFetch) fetchOpts.fetchImpl = proxyFetch;
           if (options?.initialState) fetchOpts.initialState = options.initialState;
           if (options?.credentials) fetchOpts.credentials = options.credentials;
-          result = await tool.toolFn(params, fetchOpts);
+          if (options?.signal) fetchOpts.signal = options.signal;
+          if (options?.onResponse) fetchOpts.onResponse = onResponse;
+          if (options?.onPreparedRequest) fetchOpts.onPreparedRequest = onPreparedRequest;
+          result = await observedTool.toolFn(params, fetchOpts);
           break;
         }
         case 'fetch-bootstrap':
           result = await runFetchBootstrap(
-            tool,
+            observedTool,
             params,
             options?.initialState,
             options?.credentials,
+            options?.onResponse ? onResponse : undefined,
+            options?.onPreparedRequest ? onPreparedRequest : undefined,
+            options?.signal,
           );
           break;
         case 'cdp-replay':
           result = await runCdpReplay(
-            tool,
+            observedTool,
             params,
             options?.cdpPool,
             options?.initialState,
             options?.credentials,
             options?.signal,
+            options?.onResponse ? onResponse : undefined,
+            options?.onPreparedRequest ? onPreparedRequest : undefined,
           );
           break;
         case 'stealth-fetch': {
@@ -460,10 +507,14 @@ export async function runWithLadder(
             options?.initialState || bootstrapState
               ? { ...options?.initialState, ...bootstrapState }
               : undefined;
-          result = await tool.toolFn(paramsWithDefaults, {
+          if (options?.signal?.aborted) throw abortSignalError(options.signal);
+          result = await observedTool.toolFn(paramsWithDefaults, {
             fetchImpl: sf.fetchImpl,
             initialState,
             credentials: options?.credentials,
+            signal: options?.signal,
+            ...(options?.onResponse ? { onResponse } : {}),
+            ...(options?.onPreparedRequest ? { onPreparedRequest } : {}),
           });
           break;
         }
@@ -483,16 +534,29 @@ export async function runWithLadder(
         }
       }
     } catch (err) {
+      if (options?.signal?.aborted) throw abortSignalError(options.signal);
       const msg = err instanceof Error ? err.message : String(err);
       result = { ok: false, error: 'UNKNOWN', message: `${backend} threw: ${msg}` };
+    }
+    if (options?.signal?.aborted) throw abortSignalError(options.signal);
+    if (!result.ok) {
+      lastPageDiagnostic = result.pageDiagnostic ?? lastPageDiagnostic;
+      if (lastPageDiagnostic) result = { ...result, pageDiagnostic: lastPageDiagnostic };
     }
     const durationMs = Date.now() - t0;
     lastResult = result;
     lastResultBackend = backend;
 
     if (result.ok) {
-      attempts.push({ backend, outcome: 'ok', detail: `succeeded in ${durationMs}ms`, durationMs });
-      log(`${backend}: OK in ${durationMs}ms`);
+      attempts.push({
+        backend,
+        outcome: 'ok',
+        detail: `request completed in ${durationMs}ms; semantic verification is separate`,
+        durationMs,
+      });
+      log(
+        `${backend}: REQUEST COMPLETED in ${durationMs}ms (transport only; semantic verification is separate)`,
+      );
       options?.winnerCache?.set(memoKey, backend);
       return { result, usedBackend: backend, attempts };
     }
@@ -501,7 +565,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(`${backend}: FORBIDDEN in ${durationMs}ms — escalating`);
@@ -514,7 +578,7 @@ export async function runWithLadder(
         attempts.push({
           backend,
           outcome: 'escalate',
-          detail: `${result.error}: ${result.message.slice(0, 120)}`,
+          detail: backendAttemptDetail(result),
           durationMs,
         });
         log(`${backend}: STATE_MISSING in ${durationMs}ms — escalating to ${next}`);
@@ -533,28 +597,36 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(`${backend}: NETWORK in ${durationMs}ms — escalating to next rung`);
       continue;
     }
 
-    // BAD_RESPONSE (e.g. HTTP 400) is backend-specific on anti-bot sites, so it
-    // escalates rather than stopping. A cdp-replay in-page POST can be rejected
-    // because it lacks the live Akamai sensor headers the endpoint demands, while
-    // stealth-fetch — which MINTS those sensor headers during its bootstrap —
-    // returns 200 for the byte-identical request. Validated on southwest's
-    // low-fare-calendar (cdp-replay 400, stealth-fetch 200). Stopping at the first
-    // 400 stranded the working rung; escalate so a higher-trust backend gets a
-    // shot, and the winner memo then locks onto whatever passed. A genuinely
-    // malformed request 400s at every rung and the last 400 is still returned
-    // below — cost is bounded by the ladder length.
+    // A local preparation/transform failure is an artifact fact, not a
+    // transport result. Return it immediately so the retained compiler can
+    // repair the request instead of paying for the same failure in browsers.
+    const invariantFailure = backendInvariantProbeFailure(result);
+    if (invariantFailure) {
+      attempts.push({
+        backend,
+        outcome: 'failed',
+        detail: backendAttemptDetail(result),
+        durationMs,
+      });
+      log(`${backend}: request construction failed in ${durationMs}ms — returning to compiler`);
+      return { result, usedBackend: backend, attempts };
+    }
+
+    // A BAD_RESPONSE produced by a completed HTTP send can differ by transport,
+    // so leave the other rungs available. If they all fail, return the last
+    // concrete response below.
     if (result.error === 'BAD_RESPONSE') {
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(
@@ -573,7 +645,7 @@ export async function runWithLadder(
       attempts.push({
         backend,
         outcome: 'escalate',
-        detail: `${result.error}: ${result.message.slice(0, 120)}`,
+        detail: backendAttemptDetail(result),
         durationMs,
       });
       log(
@@ -587,7 +659,7 @@ export async function runWithLadder(
     attempts.push({
       backend,
       outcome: 'failed',
-      detail: `${result.error}: ${result.message.slice(0, 120)}`,
+      detail: backendAttemptDetail(result),
       durationMs,
     });
     log(`${backend}: ${result.error} in ${durationMs}ms — non-escalatable, returning`);
@@ -607,10 +679,8 @@ export async function runWithLadder(
     };
   }
   const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
-  // Be accurate about ladder size: the parallel probe calls this with SINGLE-rung
-  // ladders, so "every backend escalated" was misleading (it described one rung,
-  // e.g. fetch-only, as if the whole ladder gave up — and fooled the integration
-  // classifier). Only say "all rungs" when there really was more than one.
+  // Be accurate about ladder size: pinned callers use a single-rung ladder, so
+  // only say "all rungs" when there really was more than one.
   log(
     effectiveLadder.length === 1
       ? `${lastBackend}: exhausted (no fallback rung in this ladder); returning its error`
@@ -623,10 +693,7 @@ export async function runWithLadder(
   };
 }
 
-export function effectiveAutoLadder(
-  ladder: ConcreteBackend[],
-  workflow: Workflow,
-): ConcreteBackend[] {
+export function effectiveAutoLadder(ladder: ConcreteBackend[]): ConcreteBackend[] {
   if (ladder.length <= 1) return ladder;
   const next = [...ladder];
   // Splice fetch-bootstrap right after `fetch`. It is the plain-fetch API
@@ -660,42 +727,7 @@ export function effectiveAutoLadder(
     const fbIdx = next.indexOf('fetch-bootstrap');
     if (fbIdx !== -1) next.splice(fbIdx + 1, 0, 'cdp-replay');
   }
-  // For a MULTI-step state-changing anti-bot workflow, plain-fetch rungs are not
-  // just doomed — their tarpitted .act attempts BURN the per-IP rate budget
-  // before cdp-replay even runs, which can flag the IP and make cdp-replay tarpit
-  // too. Front-load cdp-replay for these so the live browser handles every
-  // protected POST from a clean slate.
-  if (prefersCdpReplayFirst(workflow)) {
-    const i = next.indexOf('cdp-replay');
-    if (i > 0) {
-      next.splice(i, 1);
-      next.unshift('cdp-replay');
-    }
-  }
   return next;
-}
-
-/** A multi-step, state-changing, anti-bot workflow: ≥2 mutating requests AND an
- *  anti-bot signal (a bootstrap block, or requests that depend on captured
- *  `${state.X}` tokens). Plain-fetch replay can't sustain its sequence of
- *  protected POSTs (each self-invalidates `_abck`); only the live-browser
- *  cdp-replay rung can — and it should run FIRST so the doomed fetch /
- *  fetch-bootstrap attempts don't pre-burn the per-IP .act budget. A plain
- *  multi-POST REST API (no bootstrap, no `${state.X}`) is NOT matched, so it
- *  keeps the cheap fetch-first order. */
-export function prefersCdpReplayFirst(workflow: Workflow): boolean {
-  const mutating = workflow.requests.filter((r) => {
-    const m = (r.method ?? 'GET').toUpperCase();
-    return r.effect === 'unsafe' || m === 'POST' || m === 'PUT' || m === 'PATCH' || m === 'DELETE';
-  });
-  if (mutating.length < 2) return false;
-  const hasStateRefs = workflow.requests.some(
-    (r) =>
-      /\$\{state\./.test(r.url ?? '') ||
-      /\$\{state\./.test(r.body ?? '') ||
-      Object.values(r.headers ?? {}).some((v) => /\$\{state\./.test(v)),
-  );
-  return Boolean(workflow.bootstrap) || hasStateRefs;
 }
 
 function nextStateMissingBackend(
@@ -763,26 +795,36 @@ export function __setCdpBrowserFetchFactoryForTest(
   cdpBrowserFetchFactoryForTest = fn;
 }
 
+/** Scope transient browser state to one tool and one execution rung without
+ * placing cache files inside the generated artifact directory. */
+export function compileBackendStateDir(
+  toolDir: string,
+  backend: 'fetch-bootstrap' | 'cdp-replay' | 'stealth-fetch',
+): string {
+  return pathResolve(toolDir, '..', '.imprint-backend-state', basename(toolDir), backend);
+}
+
 async function getOrMintCdpJar(
   baseUrl: string,
   bootstrapUrl: string | undefined,
-  siteDir: string,
+  cacheDir: string,
+  recordingDir: string,
   forceFresh: boolean,
 ): Promise<MintedJar | null> {
   if (cdpJarMinterForTest) return cdpJarMinterForTest(baseUrl, bootstrapUrl);
   if (!forceFresh) {
-    let cached = loadJar(siteDir);
+    let cached = loadJar(cacheDir);
     // A recording NEWER than the cached jar supersedes it — e.g. the user
     // re-recorded on a new IP, so the cached (old-IP) jar would tarpit. Drop the
     // stale cache and re-seed from the fresh recording below.
-    const rec = newestRecording(siteDir);
+    const rec = newestRecording(recordingDir);
     if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
     // No (usable) cached jar? Prefer seeding from the user's most recent
     // RECORDING — a real-browser session whose `_abck` is HIGH-TRUST (sustains
     // many sequential .act), strictly better than a synthetic cdp-browser mint
     // (low-trust → tarpitted even on a fresh IP). "The recording IS the
     // executable." Reuse the `rec` stat above so we don't re-glob.
-    if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+    if (!cached && seedJarFromRecording(cacheDir, rec, bootstrapUrl)) cached = loadJar(cacheDir);
     if (cached) {
       const provenance =
         cached.source === 'recording'
@@ -801,12 +843,12 @@ async function getOrMintCdpJar(
   }
   let cf: CdpBrowserFetch | undefined;
   try {
-    cf = createCdpBrowserFetch({ baseUrl, bootstrapUrl });
+    cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
     const jar = await cf.mintJar();
     if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
     }
-    saveJar(siteDir, jar);
+    saveJar(cacheDir, jar);
     return jar;
   } catch (err) {
     log(`cdp jar mint failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -901,19 +943,10 @@ async function runFetchBootstrap(
   params: Record<string, string | number | boolean>,
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
+  onResponse?: (observation: ResponseObservation) => void,
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void,
+  signal?: AbortSignal,
 ): Promise<ToolResult> {
-  let baseUrl: string;
-  try {
-    baseUrl = pickBaseUrl(tool);
-  } catch {
-    return {
-      ok: false,
-      error: 'STATE_MISSING',
-      message: 'fetch-bootstrap needs at least one request URL to bootstrap from.',
-      remediation: 'Regenerate workflow.json — it has no requests.',
-    };
-  }
-
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
       site: tool.site,
@@ -922,13 +955,31 @@ async function runFetchBootstrap(
       storage: [],
     };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  let baseUrl: string;
+  try {
+    baseUrl = pickBaseUrl(tool, paramsWithDefaults, credentials);
+  } catch {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: 'fetch-bootstrap needs a resolvable request URL to bootstrap from.',
+      remediation: 'Supply the workflow parameters required by its first request URL.',
+    };
+  }
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
-  const siteDir = pathResolve(tool.dir, '..');
+  const recordingDir = pathResolve(tool.dir, '..');
+  const cacheDir = pathResolve(
+    compileBackendStateDir(tool.dir, 'fetch-bootstrap'),
+    createHash('sha256')
+      .update(bootstrapUrl ?? baseUrl)
+      .digest('hex'),
+  );
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, siteDir, attempt > 0);
+    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, cacheDir, recordingDir, attempt > 0);
+    if (signal?.aborted) throw abortSignalError(signal);
     if (!jar) {
       // Couldn't even launch the bootstrap browser → let the ladder escalate.
       const stateMissing = bootstrapFailureStateMissingResult(
@@ -940,27 +991,6 @@ async function runFetchBootstrap(
         ok: false,
         error: 'NETWORK',
         message: 'fetch-bootstrap could not mint a session jar (browser launch failed).',
-      };
-    }
-
-    // Fast-fail an UNVALIDATED jar. A cdp-minted jar without `_abck~0~`/`bm_sv`
-    // (validated:false) is rejected by Akamai on plain-fetch replay, and a second
-    // mint just produces another unvalidated jar — so don't pay two doomed
-    // ~40s mint+replay cycles (the ~80s that made southwest's every call slow).
-    // Escalate straight to cdp-replay, which fetches INSIDE the live page (the
-    // bmak sensor re-validates `_abck` between calls) and is the only path that
-    // works once the recording is too old to seed a high-trust jar. A
-    // recording-seeded or cached jar is validated:true by construction, so the
-    // cheap plain-fetch path is untouched; `=== false` (not falsy) leaves jars
-    // without the field — older caches / test stubs — on the original path.
-    if (jar.validated === false) {
-      log(
-        'fetch-bootstrap: minted jar unvalidated (no _abck~0~/bm_sv) — plain-fetch replay doomed; escalating to cdp-replay',
-      );
-      return {
-        ok: false,
-        error: 'FORBIDDEN',
-        message: 'fetch-bootstrap: cdp-minted jar did not validate; cdp-replay (in-page) required.',
       };
     }
 
@@ -999,12 +1029,16 @@ async function runFetchBootstrap(
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: makeJarUaFetch(jar.ua),
+      signal,
+      ...(onResponse ? { onResponse } : {}),
+      ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
+    if (signal?.aborted) throw abortSignalError(signal);
     if (result.ok) return result;
     if (attempt === 0 && jarLikelyStale(result)) {
       log('fetch-bootstrap replay was rejected (403/auth) — clearing jar and re-minting once');
-      clearJar(siteDir);
+      clearJar(cacheDir);
       continue;
     }
     return result;
@@ -1040,19 +1074,9 @@ async function runCdpReplay(
   callerState?: Record<string, unknown>,
   credentialOverride?: CredentialStore,
   signal?: AbortSignal,
+  onResponse?: (observation: ResponseObservation) => void,
+  onPreparedRequest?: (observation: PreparedRequestObservation) => void,
 ): Promise<ToolResult> {
-  let baseUrl: string;
-  try {
-    baseUrl = pickBaseUrl(tool);
-  } catch {
-    return {
-      ok: false,
-      error: 'STATE_MISSING',
-      message: 'cdp-replay needs at least one request URL to bootstrap from.',
-      remediation: 'Regenerate workflow.json — it has no requests.',
-    };
-  }
-
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site)) ?? {
       site: tool.site,
@@ -1061,12 +1085,24 @@ async function runCdpReplay(
       storage: [],
     };
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  let baseUrl: string;
+  try {
+    baseUrl = pickBaseUrl(tool, paramsWithDefaults, credentials);
+  } catch {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message: 'cdp-replay needs a resolvable request URL to bootstrap from.',
+      remediation: 'Supply the workflow parameters required by its first request URL.',
+    };
+  }
   const bootstrapUrl = tool.workflow.bootstrap
     ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [])
     : undefined;
 
-  const siteDir = pathResolve(tool.dir, '..');
-  const poolKey = cdpReplayPoolKey(tool.site, baseUrl);
+  const recordingDir = pathResolve(tool.dir, '..');
+  const cacheDir = compileBackendStateDir(tool.dir, 'cdp-replay');
+  const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
   const pooled = cdpPool?.get(poolKey);
   const ownsSession = !pooled;
 
@@ -1082,10 +1118,11 @@ async function runCdpReplay(
     // available unless the caller intentionally supplies a clean credential store.
     if (tool.workflow.toolKind !== 'authenticate') {
       try {
-        const rec = newestRecording(siteDir);
-        let cached = loadJar(siteDir);
+        const rec = newestRecording(recordingDir);
+        let cached = loadJar(cacheDir);
         if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
-        if (!cached && seedJarFromRecording(siteDir, rec, bootstrapUrl)) cached = loadJar(siteDir);
+        if (!cached && seedJarFromRecording(cacheDir, rec, bootstrapUrl))
+          cached = loadJar(cacheDir);
         if (cached?.cookies.length) seeds.push(...cached.cookies);
       } catch {
         // best-effort
@@ -1116,6 +1153,7 @@ async function runCdpReplay(
 
   try {
     const jar = await cf.mintJar();
+    if (signal?.aborted) throw abortSignalError(signal);
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
       cookies: [
@@ -1144,7 +1182,7 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
-    const result = await tool.toolFn(paramsWithDefaults, {
+    let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
       fetchImpl: cf.fetchImpl,
@@ -1156,13 +1194,16 @@ async function runCdpReplay(
             }
           : undefined,
       signal,
+      ...(onResponse ? { onResponse } : {}),
+      ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
+    if (signal?.aborted) throw abortSignalError(signal);
     if (result.ok) {
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(siteDir, postJar);
+        saveJar(cacheDir, postJar);
       } catch {
         // best-effort
       } finally {
@@ -1174,19 +1215,47 @@ async function runCdpReplay(
       if (ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(siteDir, postJar);
+        saveJar(cacheDir, postJar);
       } catch {
         // best-effort
       }
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else if (cdpPool) {
       let sessionAlive = !cdpToolResultImpliesDeadSession(result);
-      if (!sessionAlive && cf.inspectPage) {
+      const inspectPage = cf.inspectPage;
+      if ((!sessionAlive || onResponse) && inspectPage) {
         try {
-          await cf.inspectPage();
+          // Reuse the liveness read for teaching diagnostics. Bound it by both
+          // the caller deadline and a short inspection budget; never navigate
+          // or choose a replacement response on behalf of the agent.
+          const inspectionSignal = AbortSignal.timeout(3_000);
+          const page = await withAbortSignal(
+            () => inspectPage.call(cf),
+            signal ? AbortSignal.any([signal, inspectionSignal]) : inspectionSignal,
+          );
           sessionAlive = true;
+          const knownValues = new Map(
+            Object.entries(credentials.values).map(([name, value]) => [
+              value,
+              `\${credential.${name}}`,
+            ]),
+          );
+          const clean = (value: string): string => redactFreeformText(value, knownValues).redacted;
+          const url = clean(page.url);
+          const title = clean(page.title);
+          const bodyText = clean(page.bodyText);
+          result = {
+            ...result,
+            pageDiagnostic: {
+              url: url.slice(0, 300),
+              title: title.slice(0, 300),
+              bodyText: bodyText.slice(0, 3_000),
+              truncated: url.length > 300 || title.length > 300 || bodyText.length > 3_000,
+            },
+          };
         } catch {
-          // A failed liveness probe confirms that the transport is unusable.
+          if (signal?.aborted) throw abortSignalError(signal);
+          // Inspection failure does not replace the original tool failure.
         }
       }
 
@@ -1209,11 +1278,12 @@ async function runCdpReplay(
     return result;
   } catch (err) {
     // Session is dead — evict from pool so the next call creates a fresh one.
-    if (cdpPool) {
+    if (cdpPool?.get(poolKey) === cf) {
       cdpPool.delete(poolKey);
       log('cdp-replay: evicted dead session from pool');
     }
     await cf.close();
+    if (signal?.aborted) throw abortSignalError(signal);
     const msg = err instanceof Error ? err.message : String(err);
     return { ok: false, error: 'NETWORK', message: `cdp-replay failed: ${msg}` };
   }
@@ -1485,14 +1555,15 @@ async function ensureStealthFetch(
     cookies: [],
     values: {},
   };
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   const bootstrapUrl = tool.workflow.bootstrap?.url
-    ? substituteString(tool.workflow.bootstrap.url, params, credentials, [], 'url')
+    ? substituteString(tool.workflow.bootstrap.url, paramsWithDefaults, credentials, [], 'url')
     : undefined;
   const cacheKey = bootstrapUrl ? `${tool.site}:${bootstrapUrl}` : tool.site;
   const cached = cache.get(cacheKey);
   if (cached) return cached;
   const sf = createStealthFetch({
-    baseUrl: pickBaseUrl(tool),
+    baseUrl: pickBaseUrl(tool, paramsWithDefaults, credentials),
     // When the workflow declares a bootstrap page, navigate IT during the
     // stealth bootstrap so the session-token cookies it sets (CSRF etc.) are
     // minted in the same session as the anti-bot cookies. Otherwise the
@@ -1504,21 +1575,31 @@ async function ensureStealthFetch(
   return sf;
 }
 
-/** Pick the URL to navigate when bootstrapping an anti-bot session.
- *  Akamai binds sensor tokens to the origin+path the browser navigated
- *  to, so we need an HTML page — not a JSON API endpoint.
- *
- *  Heuristic: skip leading requests whose path looks like a raw data
- *  endpoint (.json, .xml, /api/, /version) — those return JSON/XML
- *  without rendering an HTML page, so the anti-bot sensor JS never
- *  fires and the _abck cookie stays unvalidated. Fall back to
- *  requests[0] if every request looks like an API call. */
-export function pickBaseUrl(tool: ResolvedTool): string {
+/** Resolve the declared bootstrap origin before inspecting later request URLs.
+ * Those requests may depend on state that the bootstrap has yet to capture.
+ * Without an explicit bootstrap, retain the Referer/first-request fallback. */
+export function pickBaseUrl(
+  tool: ResolvedTool,
+  params: Record<string, string | number | boolean> = {},
+  credentials: CredentialStore = { site: tool.site, cookies: [], values: {} },
+): string {
   const requests = tool.workflow.requests;
   if (!requests.length) {
     throw new Error(
       `Workflow ${tool.workflow.toolName} has no requests — stealth-fetch needs at least one request URL.\n→ re-record the session; recording probably stopped before any XHR fired.`,
     );
+  }
+
+  const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
+  if (tool.workflow.bootstrap) {
+    const url = substituteString(
+      tool.workflow.bootstrap.url,
+      paramsWithDefaults,
+      credentials,
+      [],
+      'url',
+    );
+    return new URL(url).origin;
   }
 
   // Prefer the first request whose Referer is an HTML page — the Referer
@@ -1529,7 +1610,14 @@ export function pickBaseUrl(tool: ResolvedTool): string {
     const referer = req.headers?.Referer ?? req.headers?.referer;
     if (referer) {
       try {
-        const u = new URL(referer);
+        const resolvedReferer = substituteString(
+          referer,
+          paramsWithDefaults,
+          credentials,
+          [],
+          'url',
+        );
+        const u = new URL(resolvedReferer);
         return `${u.origin}${u.pathname}`;
       } catch {
         // malformed referer — skip
@@ -1550,7 +1638,8 @@ export function pickBaseUrl(tool: ResolvedTool): string {
     );
   }
   try {
-    const u = new URL(first.url);
+    const resolvedUrl = substituteString(first.url, paramsWithDefaults, credentials, [], 'url');
+    const u = new URL(resolvedUrl);
     return u.origin;
   } catch {
     throw new Error(
@@ -1602,54 +1691,66 @@ export async function runWorkflowWithLadder(opts: {
    *  it. AuthVerifier uses this to preserve one browser across action
    *  checkpoints. */
   cdpPool?: Map<string, CdpBrowserFetch>;
-  /** Pin execution to a single rung, bypassing the parallel probe AND the winner
-   *  memo. AuthVerifier pins `cdp-replay` so all actions share one browser. */
+  /** Pin execution to a single rung, bypassing the winner memo. AuthVerifier
+   *  pins `cdp-replay` so all actions share one browser. */
   forceBackend?: ConcreteBackend;
   /** Caller cancellation for bounded verification work. */
   signal?: AbortSignal;
+  /** Ephemeral host-only callback. Raw prepared requests are never retained by
+   * the ladder; callers must reduce them to bounded, value-free facts inline. */
+  onPreparedRequest?: (observation: BackendPreparedRequestObservation) => void;
+  onResponseEvidence?: (evidence: BackendResponseEvidence) => void;
+  /** Host-only complete response chain for offline research fixtures. */
+  onRawResponses?: (responses: unknown[]) => void;
 }): Promise<LadderResult> {
   if (!existsSync(opts.workflowPath)) {
     throw new Error(`runWorkflowWithLadder: workflow.json not found at ${opts.workflowPath}`);
   }
-  const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials);
+  const tool = resolveWorkflowTool(opts.workflowPath, opts.credentials, opts.onRawResponses);
   const workflow = tool.workflow;
   const toolDir = tool.dir;
+  const responseObservations: BackendResponseObservation[] = [];
+  const observeResponse = (observation: BackendResponseObservation): void => {
+    if (responseObservations.length >= RESPONSE_OBSERVATIONS_MAX) responseObservations.shift();
+    responseObservations.push(observation);
+  };
   // assetRoot only matters for playbook-rung path resolution, which this
   // ladder skips. Use a conventional value for completeness.
   const assetRoot = pathResolve(toolDir, '..', '..');
 
+  const memoKey = compileExecutionMemoKey(workflow, toolDir);
   const ladder: ConcreteBackend[] = ['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch'];
-
-  const memoKey = `${tool.site}::${workflow.toolName}`;
   let memoWinner = compileWinningBackend.get(memoKey);
 
-  // Share one stealth token across this site's compile-time test processes.
+  // Reuse stealth state only for repeated calls to this exact tool and rung.
   const stealthCache = new Map<string, StealthFetch>();
   try {
-    const siteDir = pathResolve(toolDir, '..');
-    const baseUrl = pickBaseUrl(tool);
+    const cacheDir = compileBackendStateDir(toolDir, 'stealth-fetch');
+    const compileCredentials = opts.credentials ?? { site: tool.site, cookies: [], values: {} };
+    const compileParams = withWorkflowDefaults(workflow, opts.params);
+    const baseUrl = pickBaseUrl(tool, compileParams, compileCredentials);
+    const bootstrapUrl = workflow.bootstrap?.url
+      ? substituteString(workflow.bootstrap.url, compileParams, compileCredentials, [], 'url')
+      : undefined;
     let fileCacheConsumed = false;
     const cachingBootstrap = async (args: BootstrapArgs): Promise<TokenCache> => {
       if (!fileCacheConsumed) {
-        const cached = loadCachedToken(siteDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
+        const cached = loadCachedToken(cacheDir, STEALTH_TOKEN_MAX_AGE_SECONDS);
         if (cached) {
           fileCacheConsumed = true;
-          log(`reusing cached stealth token for ${tool.site || siteDir}`);
+          log(`reusing cached stealth token for ${workflow.toolName}`);
           return cached;
         }
       }
-      clearCachedToken(siteDir);
+      clearCachedToken(cacheDir);
       const token = await bootstrapStealthToken(args);
-      saveCachedToken(siteDir, token);
+      saveCachedToken(cacheDir, token);
       fileCacheConsumed = true;
       return token;
     };
     stealthCache.set(
       tool.site,
-      createStealthFetch(
-        { baseUrl, bootstrapUrl: tool.workflow.bootstrap?.url },
-        { bootstrap: cachingBootstrap },
-      ),
+      createStealthFetch({ baseUrl, bootstrapUrl }, { bootstrap: cachingBootstrap }),
     );
   } catch {
     // No usable base URL → leave the cache empty; runWithLadder/ensureStealthFetch
@@ -1664,14 +1765,19 @@ export async function runWorkflowWithLadder(opts: {
   // caller keeps the session alive across the user-input gap and drains it itself.
   const usingCallerPool = opts.cdpPool !== undefined;
   const cdpPool = opts.cdpPool ?? compileCdpPool;
-  if (!usingCallerPool) clearCompileCdpIdle();
+  if (!usingCallerPool) {
+    compileCdpActiveCalls++;
+    clearCompileCdpIdle();
+  }
 
   try {
+    let origin: string | undefined;
     try {
-      await paceCompileRequest(new URL(pickBaseUrl(tool)).origin);
+      origin = new URL(pickBaseUrl(tool, opts.params, opts.credentials)).origin;
     } catch {
       // no parseable base URL → nothing to pace
     }
+    if (origin) await paceCompileRequest(origin, opts.signal);
 
     // ── Pinned rung: skip the probe + memo entirely ─────────────────────────
     // A caller that requires a specific rung (the 2FA auth verifier → cdp-replay
@@ -1679,13 +1785,24 @@ export async function runWorkflowWithLadder(opts: {
     // falling to another rung would lose the live session and defeat the pin.
     if (opts.forceBackend) {
       log(`forced backend: ${opts.forceBackend} (probe + memo skipped)`);
-      return await runWithLadder([opts.forceBackend], tool, opts.params, assetRoot, stealthCache, {
-        skipBootstrapSplice: true,
-        cdpPool,
-        initialState: opts.initialState,
-        credentials: opts.credentials,
-        signal: opts.signal,
-      });
+      const result = await runWithLadder(
+        [opts.forceBackend],
+        tool,
+        opts.params,
+        assetRoot,
+        stealthCache,
+        {
+          skipBootstrapSplice: true,
+          cdpPool,
+          initialState: opts.initialState,
+          credentials: opts.credentials,
+          signal: opts.signal,
+          onResponse: observeResponse,
+          onPreparedRequest: opts.onPreparedRequest,
+          onResponseEvidence: opts.onResponseEvidence,
+        },
+      );
+      return { ...result, responseObservations };
     }
 
     if (!memoWinner) {
@@ -1706,99 +1823,24 @@ export async function runWorkflowWithLadder(opts: {
       }
     }
 
-    // ── First call: parallel probe (45s deadline) ───────────────────────────
-    // Race non-overlapping backends so a tarpitted rung doesn't block a
-    // faster one. fetch-bootstrap is excluded: it launches Chrome to the
-    // same origin as cdp-replay, and two simultaneous Chromes trip Akamai's
-    // concurrent-session detection. cdp-replay is strictly better when both
-    // need Chrome; if fetch wins, fetch-bootstrap is unnecessary anyway.
-    //
-    // Uses Promise.allSettled (NOT Promise.any) deliberately: a fast OK from
-    // a lower rung (e.g. fetch returning a cached/stale 200) may not be the
-    // best result — we need all backends to settle so we can pick the
-    // fastest *correct* one. The tradeoff is wall-clock: the probe blocks
-    // until the slowest backend resolves (or hits the deadline). cdp-replay
-    // is slow on its first cold start (~33s) but subsequent calls reuse the
-    // CDP pool and complete in ~2-5s — so the first probe pays the cost but
-    // all later calls benefit from having discovered the right rung.
-    //
-    // The compile agent's integration tests MUST use a timeout >= 60s (the
-    // compile-agent.md prompt recommends this) so the test process survives
-    // the full probe duration. A 30s test timeout kills the probe before
-    // cdp-replay can finish its cold start.
-    //
-    // Each bun-test subprocess is a fresh process (memo empty), so the
-    // compile agent's iteration loop re-probes after every workflow change —
-    // no premature lock-in.
+    // First call: use the ordinary fixed ladder and stop at the first usable
+    // result. The former parallel probe waited for a cold Chrome even when
+    // plain fetch had already succeeded. It did not establish semantic
+    // correctness; it only repeated the same invocation over more transports.
+    // Preserve the facts for rungs that were actually needed and memoize the
+    // winner for the next call.
     if (!memoWinner) {
-      const PROBE_TIMEOUT_MS = probeTimeoutMsForTest ?? 45_000;
-      const probeBackends: ConcreteBackend[] = ['fetch', 'cdp-replay', 'stealth-fetch'];
-
-      const settled = await Promise.allSettled(
-        probeBackends.map(async (b) => {
-          const t0 = Date.now();
-          const inner = runWithLadder([b], tool, opts.params, assetRoot, stealthCache, {
-            skipBootstrapSplice: true,
-            cdpPool,
-            initialState: opts.initialState,
-            credentials: opts.credentials,
-            signal: opts.signal,
-          });
-          const r = await settleProbeWithDeadline(inner, PROBE_TIMEOUT_MS, {
-            result: { ok: false, error: 'NETWORK', message: 'probe deadline exceeded' },
-            usedBackend: b,
-            attempts: [],
-          });
-          return { backend: b, result: r, durationMs: Date.now() - t0 };
-        }),
-      );
-
-      const probeReachable = isProbeReachable;
-      const digest = settled.map((s, i) => {
-        const b = probeBackends[i];
-        if (s.status === 'rejected')
-          return `${b}: ${s.reason instanceof Error ? s.reason.message : String(s.reason)}`.slice(
-            0,
-            120,
-          );
-        const { result: lr, durationMs } = s.value;
-        const r = lr.result;
-        if (r.ok) return `${b}: OK in ${durationMs}ms`;
-        return probeReachable(r)
-          ? `${b}: ${r.error} in ${durationMs}ms`
-          : `${b}: ${r.error} — ${r.message.slice(0, 200)} (${durationMs}ms)`;
-      });
-
-      type ProbeEntry = { backend: ConcreteBackend; result: LadderResult; durationMs: number };
-      const winners = settled
-        .filter(
-          (s): s is PromiseFulfilledResult<ProbeEntry> =>
-            s.status === 'fulfilled' && probeReachable(s.value.result.result),
-        )
-        .map((s) => s.value);
-
-      const best = pickProbeWinner(winners);
-      if (best) {
-        compileWinningBackend.set(memoKey, best.backend);
-        log(
-          `parallel probe: winner=${best.backend} (${best.durationMs}ms)\n  ${digest.join('\n  ')}`,
-        );
-        return best.result;
-      }
-
-      log(
-        `parallel probe: all backends failed — falling through to sequential ladder\n  ${digest.join('\n  ')}`,
-      );
-      const seqResult = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
+      const result = await runWithLadder(ladder, tool, opts.params, assetRoot, stealthCache, {
         cdpPool,
         initialState: opts.initialState,
         credentials: opts.credentials,
         signal: opts.signal,
+        onResponse: observeResponse,
+        onPreparedRequest: opts.onPreparedRequest,
+        onResponseEvidence: opts.onResponseEvidence,
       });
-      if (probeReachable(seqResult.result)) {
-        compileWinningBackend.set(memoKey, seqResult.usedBackend);
-      }
-      return seqResult;
+      if (isProbeReachable(result.result)) compileWinningBackend.set(memoKey, result.usedBackend);
+      return { ...result, responseObservations };
     }
 
     // ── Memo hit: start at the memoized winner, keep all later rungs ─────
@@ -1810,7 +1852,7 @@ export async function runWorkflowWithLadder(opts: {
     const idx = ladder.indexOf(memoWinner);
     const memoLadder = idx > 0 ? [...ladder.slice(idx), ...ladder.slice(0, idx)] : ladder;
     log(
-      `compile memo: ${memoKey} previously succeeded via ${memoWinner}; ladder: ${memoLadder.join(' → ')}`,
+      `compile memo: ${memoKey} previously reached the site via ${memoWinner} (transport only); ladder: ${memoLadder.join(' → ')}`,
     );
     const result = await runWithLadder(memoLadder, tool, opts.params, assetRoot, stealthCache, {
       skipBootstrapSplice: true,
@@ -1818,18 +1860,21 @@ export async function runWorkflowWithLadder(opts: {
       initialState: opts.initialState,
       credentials: opts.credentials,
       signal: opts.signal,
+      onResponse: observeResponse,
+      onPreparedRequest: opts.onPreparedRequest,
+      onResponseEvidence: opts.onResponseEvidence,
     });
     if (isProbeReachable(result.result)) {
       compileWinningBackend.set(memoKey, result.usedBackend);
     } else {
       compileWinningBackend.delete(memoKey);
     }
-    return result;
+    return { ...result, responseObservations };
   } finally {
     // Keep the pool warm for the next call in this process; arm an idle-close so
     // it's torn down shortly after the LAST call — that lets a raw `bun probe.ts`
     // exit cleanly (no 30-min hang) and never leaks a browser.
-    armCompileCdpIdleClose();
+    if (!usingCallerPool && --compileCdpActiveCalls === 0) armCompileCdpIdleClose();
   }
 }
 
@@ -1839,6 +1884,7 @@ export async function runWorkflowWithLadder(opts: {
 export function resolveWorkflowTool(
   workflowPath: string,
   fallbackCredentials?: CredentialStore,
+  onRawResponses?: (responses: unknown[]) => void,
 ): ResolvedTool {
   if (!existsSync(workflowPath)) {
     throw new Error(`resolveWorkflowTool: workflow.json not found at ${workflowPath}`);
@@ -1864,6 +1910,9 @@ export function resolveWorkflowTool(
             initialState?: Record<string, unknown>;
             credentials?: CredentialStore;
             signal?: AbortSignal;
+            onResponse?: (observation: ResponseObservation) => void;
+            onPreparedRequest?: (observation: PreparedRequestObservation) => void;
+            onResponseEvidence?: (evidence: ResponseEvidence) => void;
           }
         | undefined;
       return executeWorkflow({
@@ -1875,6 +1924,10 @@ export function resolveWorkflowTool(
         browser: o?.browser,
         initialState: o?.initialState,
         signal: o?.signal,
+        onResponse: o?.onResponse,
+        onPreparedRequest: o?.onPreparedRequest,
+        onResponseEvidence: o?.onResponseEvidence,
+        onRawResponses,
       });
     },
   };
@@ -1890,12 +1943,25 @@ export interface RenderedRequest {
   body: string | null;
 }
 
+export interface RenderedRequestLookup {
+  /** Zero-based ordinal among requests that were actually sent. */
+  requestOrdinal: number;
+  /** Accepted artifact/recording identity for this request, when supplied. */
+  provenance?: {
+    artifactRequestIndex: number;
+    recordingRequestSeq: number;
+    /** Recorded request whose response is returned for an explicit page-network
+     * capture. The outgoing request is still compared with recordingRequestSeq. */
+    recordingResponseRequestSeq?: number;
+  };
+}
+
 /**
- * Render a workflow's outgoing requests OFFLINE — no network, no browser. Runs
- * the real `executeWorkflow` (so `${param}`/`${state}` substitution, captures,
- * and any `requestTransformModule` all execute) but with a `fetchImpl` that
- * returns the matching RECORDED response for each request and CAPTURES the final
- * outgoing request before returning it.
+ * Render a workflow's outgoing requests OFFLINE — no network and no live
+ * browser. Runs the real `executeWorkflow` (so `${param}`/`${state}`
+ * substitution, captures, and any `requestTransformModule` all execute) with
+ * synthetic fetch/navigation transports that return the matching RECORDED
+ * response and capture each prepared outgoing request.
  *
  * Purpose: verify a parameter actually reaches its field by diffing renders
  * across param overrides — WITHOUT firing a live `.act` per parameter (the burst
@@ -1903,9 +1969,13 @@ export interface RenderedRequest {
  * then needs only ONE baseline call to prove the workflow produces real data; the
  * per-parameter "does X reach field F" check becomes a deterministic offline diff.
  *
- * `recordedResponseFor(method, url)` supplies the recorded response so captures
- * (csrf via text_regex, etc.) resolve and the transform builds the real body;
- * return undefined to fall back to an empty `200`.
+ * `recordedResponseFor(method, url, lookup)` supplies the recorded response so
+ * captures (csrf via text_regex, etc.) resolve and the transform builds the real
+ * body. The lookup includes the outgoing request ordinal and, when provided,
+ * its accepted recording provenance. Callers should prefer that provenance to
+ * method+URL matching because parameters and transforms can change the URL and
+ * repeated requests can share the same method+URL. Return undefined to fall
+ * back to an empty `200`.
  */
 export async function renderWorkflowRequests(opts: {
   workflow: Workflow;
@@ -1914,12 +1984,64 @@ export async function renderWorkflowRequests(opts: {
   credentials?: CredentialStore;
   /** Synthetic captured state for offline request tests. */
   initialState?: Record<string, unknown>;
+  /** Exact accepted request order used to select recorded responses offline. */
+  requestProvenance?: readonly {
+    artifactRequestIndex: number;
+    recordingRequestSeq: number;
+    recordingResponseRequestSeq?: number;
+  }[];
   recordedResponseFor?: (
     method: string,
     url: string,
-  ) => { status: number; body: string; headers?: Record<string, string> } | undefined;
+    lookup: RenderedRequestLookup,
+  ) => { status: number; body: string; headers?: Record<string, string>; url?: string } | undefined;
 }): Promise<{ requests: RenderedRequest[]; result: ToolResult }> {
   const captured: RenderedRequest[] = [];
+  let preparedArtifactRequestIndex: number | undefined;
+  const capturePreparedRequest = (
+    method: string,
+    url: string,
+    inputHeaders: RequestInit['headers'],
+    body: string | null,
+  ): Response => {
+    const headers: Record<string, string> = {};
+    if (inputHeaders) {
+      const h = new Headers(inputHeaders);
+      h.forEach((v, k) => {
+        headers[k] = v;
+      });
+    }
+    const requestOrdinal = captured.length;
+    const artifactRequestIndex = preparedArtifactRequestIndex ?? requestOrdinal;
+    preparedArtifactRequestIndex = undefined;
+    const provenance = opts.requestProvenance?.find(
+      (accepted) => accepted.artifactRequestIndex === artifactRequestIndex,
+    );
+    captured.push({ method, url, headers, body });
+    const rec = opts.recordedResponseFor?.(method, url, {
+      requestOrdinal,
+      ...(provenance ? { provenance } : {}),
+    });
+    const recordedHeaders = new Headers();
+    for (const [name, rawValue] of Object.entries(rec?.headers ?? {})) {
+      // CDP can preserve literal line breaks in a combined response header
+      // (notably CSP), while the Fetch Headers implementation rejects that
+      // wire representation. Unfold it to ordinary HTTP whitespace for this
+      // offline response. A malformed response field must not erase every
+      // later prepared-request fact.
+      const value = rawValue.replace(/\r?\n[\t ]*/g, ' ');
+      try {
+        recordedHeaders.append(name, value);
+      } catch {
+        // Ignore only the unrepresentable response field.
+      }
+    }
+    if (rec?.url) recordedHeaders.set('x-imprint-network-response-url', rec.url);
+    return new Response(rec?.body ?? '{}', {
+      status: rec?.status ?? 200,
+      headers: recordedHeaders,
+    });
+  };
   const fetchImpl: typeof fetch = (async (
     input: string | URL | Request,
     init?: RequestInit,
@@ -1927,30 +2049,40 @@ export async function renderWorkflowRequests(opts: {
     const url =
       typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
     const method = (init?.method ?? 'GET').toUpperCase();
-    const headers: Record<string, string> = {};
-    if (init?.headers) {
-      const h = new Headers(init.headers as Record<string, string>);
-      h.forEach((v, k) => {
-        headers[k] = v;
-      });
-    }
     const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
-    captured.push({ method, url, headers, body });
-    const rec = opts.recordedResponseFor?.(method, url);
-    return new Response(rec?.body ?? '{}', {
-      status: rec?.status ?? 200,
-      headers: new Headers(rec?.headers ?? {}),
-    });
+    return capturePreparedRequest(method, url, init?.headers, body);
   }) as typeof fetch;
+  const browser: BrowserNavigationTransport = {
+    navigate: async (url, options = {}) =>
+      capturePreparedRequest(
+        (options.method ?? 'GET').toUpperCase(),
+        url,
+        options.headers,
+        options.body ?? null,
+      ),
+    snapshotCookies: async () => [],
+  };
 
   const result = await executeWorkflow({
     workflow: opts.workflow,
     params: opts.params,
-    credentials: opts.credentials,
+    // Offline rendering must not silently depend on whichever credentials are
+    // currently stored on this machine. Callers may inject an explicit store;
+    // otherwise use a deterministic empty one.
+    credentials: opts.credentials ?? {
+      site: opts.workflow.site,
+      cookies: [],
+      values: {},
+      storage: [],
+    },
     workflowPath: opts.workflowPath,
     initialState: opts.initialState,
     fetchImpl,
+    browser,
     persistAuthState: false,
+    onPreparedRequest: ({ requestIndex }) => {
+      preparedArtifactRequestIndex = requestIndex;
+    },
   });
   return { requests: captured, result };
 }

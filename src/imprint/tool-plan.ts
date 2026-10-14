@@ -13,32 +13,16 @@
  * IMPRINT_NO_TOOL_PLAN. Modeled on planSharedModule in prereq-builder.ts.
  */
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { join as pathJoin } from 'node:path';
 import {
   BuildPlanSchema,
   type SharedModuleManifestEntry,
   planSliceForTool,
   resolveAssignedModules,
 } from './build-plan.ts';
-import { withTimeout } from './concurrency.ts';
 import { compactUrlForLlm } from './llm-url.ts';
-import { type ProviderName, resolveProvider } from './llm.ts';
-import { loadJsonFile } from './load-json.ts';
-import { createLog } from './log.ts';
-import { localToolDir } from './paths.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
-import { setSpanAttributes, traced } from './tracing.ts';
-import { type Session, SessionSchema } from './types.ts';
-
-const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
-const log = createLog('tool-plan');
-
-/** Wall-clock cap on the per-tool planner LLM call. A throttled/hung provider
- *  must not block the tool's compile; on timeout we degrade to compiling without
- *  a plan (today's behavior). The shared-module plan is the 10-min one. */
-const TOOL_PLAN_TIMEOUT_MS = 5 * 60_000;
+import type { Session } from './types.ts';
 
 const BODY_LIMIT = 800;
 const RESPONSE_PREVIEW_LIMIT = 500;
@@ -196,109 +180,6 @@ function toolPlanRequestGroupKey(request: ToolPlanRequestPayload): unknown[] {
   ];
 }
 
-/** Derive a per-tool implementation plan from the recording. Best-effort: any
- *  error/timeout (or the IMPRINT_NO_TOOL_PLAN gate / a missing prompt) returns
- *  undefined so the caller compiles without a plan (today's behavior). Persists
- *  the plan to `~/.imprint/<site>/<toolName>/.tool-plan.md`. */
-export async function planToolCompile(opts: {
-  site: string;
-  toolName: string;
-  candidate: ToolCandidate;
-  sharedContext?: SharedCompileContext;
-  sessionPath: string;
-  buildPlanPath?: string;
-  sharedModules?: SharedModuleManifestEntry[];
-  providerName: ProviderName;
-  model?: string;
-}): Promise<string | undefined> {
-  if (toolPlanDisabled()) return undefined;
-  const promptPath = pathJoin(PROMPTS_DIR, 'tool-planning.md');
-  if (!existsSync(promptPath)) return undefined;
-
-  return await traced(
-    'teach.plan_tool',
-    'AGENT',
-    {
-      'imprint.site': opts.site,
-      'imprint.tool_name': opts.toolName,
-      'imprint.provider': opts.providerName,
-    },
-    async (span) => {
-      try {
-        const systemPrompt = readFileSync(promptPath, 'utf8');
-
-        const session = loadJsonFile(
-          opts.sessionPath,
-          SessionSchema,
-          {
-            notFound: 'session not found before tool planning',
-            badSchema: 'session file is malformed',
-          },
-          'session',
-        );
-
-        // Load the global build plan slice (if one exists) so the per-tool plan
-        // can carry the tool's parserGuidance/paramChecklist/authRecipe and the
-        // shared modules it was assigned.
-        let buildPlan: unknown;
-        if (opts.buildPlanPath && existsSync(opts.buildPlanPath)) {
-          try {
-            buildPlan = loadJsonFile(
-              opts.buildPlanPath,
-              BuildPlanSchema,
-              { notFound: 'build plan not found' },
-              'build plan',
-            );
-          } catch {
-            buildPlan = undefined;
-          }
-        }
-
-        const payload = buildToolPlanPayload({
-          session,
-          candidate: opts.candidate,
-          sharedContext: opts.sharedContext,
-          buildPlan,
-          sharedModules: opts.sharedModules,
-        });
-
-        const llm = resolveProvider({ provider: opts.providerName, model: opts.model });
-        const result = await withTimeout(
-          llm.analyze(systemPrompt, payload),
-          TOOL_PLAN_TIMEOUT_MS,
-          'tool planner',
-        );
-        const plan = stripCodeFences(result.text).trim();
-        const validation = validateToolPlan(plan);
-        if (!validation.valid) {
-          setSpanAttributes(span, { 'imprint.tool_plan.skipped': true });
-          log(
-            `tool planning skipped for ${opts.toolName} (${validation.reason}) — compiling without a plan`,
-          );
-          return undefined;
-        }
-
-        const toolDir = localToolDir(opts.site, opts.toolName);
-        mkdirSync(toolDir, { recursive: true });
-        writeFileSync(pathJoin(toolDir, '.tool-plan.md'), plan, 'utf8');
-
-        setSpanAttributes(span, {
-          'imprint.tool_plan.chars': plan.length,
-          'imprint.tool_plan.skipped': false,
-        });
-        log(`planned ${opts.toolName} (${plan.length} chars)`);
-        return plan;
-      } catch (err) {
-        setSpanAttributes(span, { 'imprint.tool_plan.skipped': true });
-        log(
-          `tool planning failed for ${opts.toolName} (${err instanceof Error ? err.message : String(err)}) — compiling without a plan`,
-        );
-        return undefined;
-      }
-    },
-  );
-}
-
 export function validateToolPlan(plan: string): { valid: true } | { valid: false; reason: string } {
   const trimmed = plan.trim();
   if (trimmed.length === 0) return { valid: false, reason: 'empty plan' };
@@ -318,20 +199,6 @@ export function validateToolPlan(plan: string): { valid: true } | { valid: false
     return { valid: false, reason: 'too short to be an implementation plan' };
 
   return { valid: true };
-}
-
-function toolPlanDisabled(): boolean {
-  const v = process.env.IMPRINT_NO_TOOL_PLAN;
-  return !!v && !['0', 'false', 'no', 'off'].includes(v.toLowerCase());
-}
-
-/** Unwrap a response whose entire body is a single Markdown code fence; leave
- *  inline fences (snippets within the plan) untouched. Mirrors the helper in
- *  prereq-builder.ts (not exported there). */
-function stripCodeFences(text: string): string {
-  const t = text.trim();
-  const m = /^```[a-zA-Z]*\n([\s\S]*?)\n```$/.exec(t);
-  return m?.[1] ?? t;
 }
 
 function truncate(s: string | undefined, limit: number): string | undefined {

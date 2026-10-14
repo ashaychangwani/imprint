@@ -109,6 +109,9 @@ import {
   executeWorkflow,
   type BrowserNavigationTransport,
   type CredentialStore,
+  type PreparedRequestObservation,
+  type ResponseObservation,
+  type ResponseEvidence,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
 
@@ -120,7 +123,16 @@ ${paramTypeFields}
 
 export async function ${camelCase(workflow.toolName)}(
   ${workflow.parameters.length === 0 ? '_input' : 'input'}: ${pascalCase(workflow.toolName)}Input,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
+  opts: {
+    credentials?: CredentialStore;
+    fetchImpl?: typeof fetch;
+    browser?: BrowserNavigationTransport;
+    initialState?: Record<string, unknown>;
+    signal?: AbortSignal;
+    onPreparedRequest?: (observation: PreparedRequestObservation) => void;
+    onResponse?: (observation: ResponseObservation) => void;
+    onResponseEvidence?: (evidence: ResponseEvidence) => void;
+  } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -134,6 +146,10 @@ ${defaultsBlock && requiredCopies ? requiredCopies : ''}
     fetchImpl: opts.fetchImpl,
     browser: opts.browser,
     initialState: opts.initialState,
+    signal: opts.signal,
+    onPreparedRequest: opts.onPreparedRequest,
+    onResponse: opts.onResponse,
+    onResponseEvidence: opts.onResponseEvidence,
     workflowPath: join(__dirname, 'workflow.json'),
   });
 }
@@ -213,7 +229,7 @@ function assertNoCredentialShapedParams(workflow: Workflow): void {
     '  3. Accept the "Save credentials for site to the credential manager?" prompt this time.',
     '  4. Let teach continue through generate → compile-playbook → emit.',
     '',
-    "If the prompt does NOT appear during step 3, the extractor still cannot pair this site's login fields — please file a bug attaching the (redacted!) session.",
+    "If the extractor cannot pair this site's login fields, report the field structure using synthetic values. Do not attach recordings: even redacted sessions retain cookies, tokens, and personal data.",
   );
   throw new Error(lines.join('\n'));
 }

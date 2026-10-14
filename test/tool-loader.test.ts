@@ -122,6 +122,17 @@ describe('discoverTools', () => {
     expect(out.map((t) => t.site)).toEqual(['good']);
   });
 
+  it('skips hidden promotion snapshots beside the active tool', async () => {
+    writeExample('good', goodSource);
+    const snapshot = pathResolve(root, 'good', '.good.before-run-id');
+    mkdirSync(snapshot, { recursive: true });
+    writeFileSync(pathResolve(snapshot, 'index.ts'), goodSource, 'utf8');
+
+    const out = await discoverTools(root);
+
+    expect(out.map((tool) => tool.dir)).toEqual([pathResolve(root, 'good', 'good')]);
+  });
+
   it('skips entries whose module is missing the WORKFLOW export', async () => {
     writeExample(
       'no-workflow',

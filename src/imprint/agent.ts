@@ -9,6 +9,15 @@
 
 import type { Anthropic } from '@anthropic-ai/sdk';
 import type { ToolUseProvider } from './llm.ts';
+import {
+  ProviderDeadlineError,
+  ProviderUnavailableError,
+  type RunDeadlineRef,
+  providerControlError,
+  providerReportedError,
+  resolvedRunDeadline,
+  retryTransientProviderFailure,
+} from './provider-retry.ts';
 import { setSpanAttributes, traceToolIoEnabled, traced } from './tracing.ts';
 
 export interface AgentTool {
@@ -76,6 +85,7 @@ interface AgentLoopOptions {
   tools: AgentTool[];
   /** wall-clock deadline in ms since epoch (Date.now()) */
   deadlineMs: number;
+  runDeadline?: RunDeadlineRef;
   /** soft cap on number of LLM turns; default 100 */
   softTurnCap?: number;
   llm: ToolUseProvider;
@@ -86,6 +96,8 @@ interface AgentLoopOptions {
   onConversationUpdate?: (log: ConversationLogEntry[]) => void;
   /** called when the wall-clock deadline is reached; return ms to extend or null to time out */
   onDeadlineReached?: OnDeadlineReached;
+  /** Optional cancellation for provider backoff waits. */
+  signal?: AbortSignal;
 }
 
 /** Helper: creates the standard 'done' tool */
@@ -114,7 +126,7 @@ export function giveUpTool(): AgentTool {
   return {
     name: 'give_up',
     description:
-      'Call this when you have encountered a categorical impossibility and cannot proceed.',
+      'Use for a categorical impossibility or an exact accepted-plan contradiction that only the master can revise.',
     input_schema: {
       type: 'object',
       properties: {
@@ -152,8 +164,8 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
   const startTime = Date.now();
   const softTurnCap = opts.softTurnCap ?? 100;
   const startMs = Date.now();
-  let deadlineMs = opts.deadlineMs;
-  let budgetMs = Math.max(0, deadlineMs - startMs);
+  const runDeadline = resolvedRunDeadline(opts.runDeadline, opts.deadlineMs);
+  let budgetMs = Math.max(0, (runDeadline?.deadlineMs ?? startMs) - startMs);
 
   // Convert AgentTools to Anthropic.Tool format (strip handlers)
   const anthropicTools: Anthropic.Tool[] = opts.tools.map((t) => ({
@@ -181,32 +193,12 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
 
   while (true) {
     // Check wall-clock deadline
+    const deadlineMs = runDeadline?.deadlineMs ?? opts.deadlineMs;
     if (Date.now() > deadlineMs) {
-      if (opts.onDeadlineReached) {
-        const extensionMs = await opts.onDeadlineReached();
-        if (extensionMs != null && extensionMs > 0) {
-          deadlineMs += extensionMs;
-          budgetMs += extensionMs;
-        } else {
-          return {
-            outcome: 'timeout',
-            turns: turn,
-            durationMs: Date.now() - startTime,
-            inputTokens,
-            outputTokens,
-            conversationLog,
-          };
-        }
-      } else {
-        return {
-          outcome: 'timeout',
-          turns: turn,
-          durationMs: Date.now() - startTime,
-          inputTokens,
-          outputTokens,
-          conversationLog,
-        };
-      }
+      const extended = (await runDeadline?.requestExtension?.(opts.onDeadlineReached)) ?? false;
+      if (!extended) throw new ProviderUnavailableError(new ProviderDeadlineError(deadlineMs));
+      budgetMs = Math.max(0, (runDeadline?.deadlineMs ?? deadlineMs) - startMs);
+      continue;
     }
 
     // Check soft turn cap
@@ -243,12 +235,30 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
         // Call LLM with tools — llm.message_with_tools span nests as child
         let response: Anthropic.Message;
         try {
-          response = await opts.llm.messageWithTools({
-            system: opts.systemPrompt,
-            messages,
-            tools: anthropicTools,
-          });
+          response = await retryTransientProviderFailure(
+            async (activeSignal) =>
+              await opts.llm.messageWithTools({
+                system: opts.systemPrompt,
+                messages,
+                tools: anthropicTools,
+                signal: activeSignal,
+              }),
+            {
+              runDeadline,
+              signal: opts.signal,
+              onDeadlineReached: opts.onDeadlineReached,
+            },
+          );
         } catch (err) {
+          if (opts.signal?.aborted) {
+            throw opts.signal.reason instanceof Error
+              ? opts.signal.reason
+              : new DOMException('Agent cancelled', 'AbortError');
+          }
+          const control = providerControlError(err);
+          if (control) throw control;
+          const reported = providerReportedError(err);
+          if (reported) throw reported;
           return {
             action: 'return',
             result: {
@@ -372,6 +382,10 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
                 try {
                   result = await tool.handler(block.input);
                 } catch (err) {
+                  const control = providerControlError(err);
+                  if (control) throw control;
+                  const reported = providerReportedError(err);
+                  if (reported) throw reported;
                   result = {
                     result: err instanceof Error ? err.message : String(err),
                     isError: true,

@@ -1,6 +1,7 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
   "entry": [
+    "src/imprint/refine-worker.ts",
     "examples/*/*/index.ts",
     "examples/*/*/parser.ts",
     "examples/*/*/request-transform.ts",

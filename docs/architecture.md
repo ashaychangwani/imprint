@@ -2,55 +2,272 @@
 
 ## The core idea
 
-Imprint records a real browser session, then compiles it into TWO deterministic artifacts:
+Imprint records a real browser session and turns every credible recorded
+operation into a deterministic tool. The preferred artifact is
+**`workflow.json`**, an API request chain that can use the fast replay backends.
+When the agent finds those paths incompatible with an operation, it can build a
+**`playbook.yaml`** DOM fallback instead.
 
-1. **`workflow.json`** — the captured API call chain, replayable via native `fetch()`. Fast (~200ms), with named captures for cookies, headers, body values, browser-minted state, and agent-declared body-placeholder encoding.
-2. **`playbook.yaml`** — the captured DOM script, replayable via Playwright. Slow (~9s), works everywhere a real browser does.
+Generated tools are discovered by the cron daemon and MCP server. At runtime,
+they use a **backend ladder** that escalates through the applicable replay
+strategies. The teaching agents choose the tool design; the runtime only
+executes and checks the artifacts.
 
-Both are auto-discovered by the cron daemon and the MCP server, which dispatch through a **backend ladder** that escalates through cheaper-to-costlier replay strategies on `FORBIDDEN` and satisfiable `STATE_MISSING` errors.
+Research remains reusable when planning rewrites auth or token explanations.
+The master requests fresh research for a real strategy change; note wording
+alone does not rerun a proven call.
+The completion reviewer also receives the original human guidance: explicit
+scope exclusions are valid, and a requested connected workflow needs compatible
+producer/consumer evidence, not just two standalone successes.
+Retained master revisions send only changed research handoffs, comparing exact
+content within the same run and analyzer conversation. Delivery fingerprints
+advance after a validated response. Stateless and self-contained calls retain
+the full input, and host validation always checks the complete current evidence.
+Prior research stays in the conversation; this does not reset agent history.
+Focused planners share the accepted plan and research, rather than consuming each
+other's output. Codex delegates their work within one native agent family;
+compilation and execution retain the master's dependency waves.
+
+Research follow-ups reuse the master’s accepted build waves, allowing independent
+repairs to overlap while consumers receive results from earlier producer waves.
+Semantic roles request execution by returning their typed JSON actions; compiler
+roles call their scoped MCP tools directly. Native task metadata distinguishes these
+interfaces. Agents cache unchanged task packets and exact candidate objects when
+possible; strict proof binding still rejects altered candidates.
+
+Codex teaches use one run-owned native coordinator and up to ten concurrent
+native children, which can themselves delegate. Imprint delivers typed role tasks
+through a local MCP bridge; the provider owns spawning, follow-ups, waiting and
+child concurrency. A stable conversation key is bound to the same native child
+for later evidence and schema repairs. Compiler keys use the public tool name within
+the run, so moving artifacts into a new revision directory retains the same compiler
+conversation. The runtime keeps accepted dependency
+waves, exact proof validation, execution, cancellation and the existing provider
+retry policy. It no longer has two admission queues, adaptive lease generations,
+worker yielding or a researcher-specific delegation schema. Other provider paths
+remain available with a static four-worker focused limit.
+
+The bridge exposes each compiler's existing MCP server in that tool's workspace;
+completion still requires its validated sentinel. Shared research exposes immutable
+run-local publish/list/read findings, including corrections and contradictions.
+The automatic feed contains only bounded summaries and references. Agents may
+publish detailed methods or failed approaches as separate immutable assets and
+read them in bounded excerpts when applicable. Recording inspections include the
+nearest preceding recorded action; if an agent tests a request outside the chosen
+tool references, the handoff must explain comparability and remaining uncertainty.
+The host validates reference identity and leaves purpose judgments to agents.
+Agents decide applicability and tool purposes; matching endpoints or parameter
+shapes do not force tool merging. The boundary advisor and master receive the same
+human guidance, kept separate from recording evidence. They account for distinct
+recorded purposes in their boundary rationales before narrowing optional inputs.
+The completion reviewer checks purposes within broad discovery rows as well as
+explicit exclusions; mapping a row alone is not semantic coverage. Each tool
+requires its own successful evidence.
+Role inputs are retained and paged with explicit truncation; selected recording
+request/response examples reach the master before contracts are chosen.
+
+`native-agents/events.jsonl` records assignments, bindings, calls and SDK lifecycle.
+`native-agents/usage.json` records root and descendant usage from their own provider
+rollouts, including counter resets after provider restarts, excluding forked ancestor history. Coordinator token totals alone omit
+children. Missing cache-write or other counts remain null, not invented zeroes.
+This is a reported snapshot when cancellation prevents a final terminal event.
+Site pacing and browser isolation remain separate from provider concurrency.
+Capture timeout summaries keep up to twelve distinct displayed response facts,
+ordered by latest occurrence. Identical facts are grouped with a count; differing
+matcher results or navigation scopes remain distinct. The total and omitted
+counts still count responses, and this never relaxes the selected matcher.
+Output repairs include the current validation metadata even in retained
+conversations. Identity mismatches name the exact field, expected value, and
+returned value so agents do not have to rediscover an opaque run identifier.
+Document provenance is not a destination allowlist. Recorded Referers, events,
+links, and request data may support a parameter-derived URL absent from Document
+rows; a live check must establish that it returns the intended response.
+Chain edges use executable result paths such as `items[1].id`, not schema
+notation such as `items[].id`. The agent selects a compatible record and uses
+that same record for related consumer inputs. The runtime does not choose a
+row or serialize objects implicitly. Binding failures report the bad path and
+explain that the consumer was not called; a wiring-only repair keeps working
+artifacts and reruns the chain check.
+Chain bindings optionally name a `consumerInvocationId` to distinguish repeated
+calls to one tool. `producerChainEdgeId` selects the exact result of an earlier
+chain invocation; omitting it selects the standalone live result. Bindings within
+one consumer/invocation pair execute together. The runtime validates an acyclic
+invocation graph, preserves exact source receipts, and invalidates transitive
+consumers when source results or bindings change. Self-use needs no self-dependency
+in the separate tool build graph. Agents choose the sequence and public boundaries.
+The planner, compiler and auditor compare actual producer record structures
+with the consumer's public contract. One selected record may have several members;
+a singular operation name or singleton fixture does not exclude that structure.
+Unless the public contract explicitly excludes it, agents choose an available
+fresh multi-member record and compare all identities and their order with the
+consumer result. A narrower scope needs an explicit decision across connected
+tools; a failed adapter does not redefine valid producer input. A singleton success does not prove preservation
+of multiple members. If a fixed planned example cannot exercise that distinction,
+the compiler reports the gap for a master decision. Selection and interpretation
+remain agent decisions; the runtime adds no group classifier or sampling rule.
+The compiler distinguishes group-level properties from member properties in
+validation, request construction and parsing. The first member does not define
+the entire group, and a group constraint need not hold for each member separately.
+Agents establish those relationships from the structure and declared contract.
+Parsers preserve alternatives and required components as distinct relationships.
+A parent can supply a combined total while only its children supply action links;
+missing child-only fields must not erase the parent. Reviewers check that outputs
+keep this relationship and the scope of each value clear, without requiring every
+component to cover the whole selected record. Compiler verification compares
+eligible source records with the parsed collection, including differently marked
+records. It checks each attribute against its own evidence, using a contrasting
+record when related attributes coincide in the baseline. Reviewers report concrete
+extraction loss or contradictions; unavailable source coverage remains a stated
+limit, not an invented failure or an assumed complete result. Optional-attribute
+conversion failures must not silently remove required members or produce summaries
+of a shortened record. Agents verify omitted defaults from evidence, preserve core
+identity, and check constructed selections against the complete consumer result;
+a useful first-member result does not prove the whole selected group.
+Semantic review also reports concrete rejection guards in supplied parser/request
+source that contradict the declared core input domain, even if the sampled
+baseline passes. This is evidence-based contract review, not an exhaustive
+parameter sweep. The master chooses repair or an explicit narrower contract;
+the runtime does not infer restrictions from the fixture's width or shape.
+Semantic result evidence includes the actual invocation inputs. A planned
+verification expectation applies only when its inputs match those actually
+sent. Otherwise the reviewer judges the tool's general promised output for
+the actual inputs, rather than borrowing another case's expected location,
+date, item, or price. This applies equally to research-baseline and chain calls.
+Value-bearing result evidence remains separate from factual check receipts.
+Baseline review requires a passed contract and the exact passed live or chain
+receipt being reviewed. A separate failed standalone call does not prevent
+reviewing a successful chain call. It remains a completion failure to repair;
+reviewing the chain does not overwrite or waive it.
+Compiler guidance asks agents to establish the meaning of unlabeled response
+values, not merely locate a matching value. Optional uncertain output fields
+can wait; required fields go back to the master for research. Audit prompts
+list exact public tool names so MCP display prefixes do not hide reported calls.
+Planning and final review consider required input acquisition as part of MVP
+usability: ordinary inputs, a demonstrated resolver or producer, or a supported
+documented caller prerequisite. A hidden research-baseline identifier is not
+proof of public usability. Agents choose the repair; no host ID classifier or
+mandatory resolver rule is added.
+The researcher tests one coherent contrasting set of core inputs before
+claiming those mappings proven, rather than waiting for a repair follow-up.
+It checks returned meaning, including unchanged core values, not just input
+echoes. This is agent guidance, not a host-enforced call count or an exhaustive
+parameter sweep. Rate-limited uncertainty remains explicit for the master.
+Research handoffs identify response paths or excerpts establishing what the core
+records are for; compilers preserve that evidence instead of substituting request
+scope. A demonstrated ignored input is a contract gap for the master, even if it
+is encoded or producer-supplied. Speculative request minimization can still wait.
+Auditors keep bound input pairs coherent while distinguishing joint behavior
+from individual parameter attribution; an unresolved member remains untestable.
+The contrast should distinguish each claimed core mapping from a default or
+coincidental match. One changed input does not prove all inputs. Researchers
+preserve the working request and identify unresolved mappings for focused
+follow-up rather than declaring an unsupported full contract proven.
+For unlabeled fields, a matching number alone does not identify its meaning.
+Research and review should distinguish plausible alternatives with a small
+contrast (for example, carton count versus total item count), reusing decisive
+evidence when available. The compiler must question unsupported research labels
+too. This does not add a runtime classifier or mandatory parameter sweep;
+the master can request missing proof or narrow the public contract.
+If a research response remains invalid after its repair turn, the runtime
+returns the exact validation error and retained observations through the
+existing blocked handoff. The master can resume that researcher; unrelated
+successful research is preserved. This does not accept invalid proof or turn
+provider failures, cancellation, or unexpected runtime exceptions into advice.
+The master treats the research status as a conclusion to review, not an
+automatic approval. Missing evidence inside one tool can trigger a focused
+follow-up just like a cross-tool contradiction, preserving the working request.
+The standalone live check executes the planner's first live case with its exact
+inputs and expectation. Research may supply the proven backend, but no longer
+overwrites that case's inputs. Additional planned live cases are not yet executed
+by this path; this remains a separate verification limitation.
+Planner guidance makes this limitation explicit and asks it to select a coherent
+first case that challenges weak core evidence, not simply repeat research inputs.
+Any remaining required gap stays explicit for the master; optional breadth waits.
+Research handoff validation reports independent missing fields before returning
+on an absent candidate. Its repair turn therefore sees missing candidate,
+observation reference and proof gaps together, not one newly revealed error per
+attempt. Exact tested-candidate matching remains unchanged.
+When the reviewed plan has no tools, the blocked terminal still counts its
+unresolved discovered operations; an empty build schedule does not mean zero gaps.
+Research stores each successful final result under its local `live-results/`
+directory with known typed credentials replaced. `inspect_result` reads a bounded
+slice or searches literal text in that saved result; no network call or candidate
+edit occurs. Initial prompts keep compact previews, while retained follow-ups can
+inspect HTML attributes, embedded state or JSON beyond those prefixes. This does
+not automatically expose intermediate responses or a page behind a captured XHR.
+Separately, successful research calls retain the completed chain's ordered raw
+response bodies for the compiler's offline fixtures. Only the selected
+observation's array is copied into its compiler directory; older evidence may
+lack it. The host takes a copy before parsing, replaces known typed login values
+when saving it, and keeps it out of ordinary tool output and prompt previews.
+An observer cannot mutate parser inputs or fail execution. Compilers preserve
+the real response slots and test joins against changed and unmatched identities;
+one researched record's literal values are not reusable join logic. This is
+offline parser evidence, not proof that another live input works.
+The baseline reviewer also receives a bounded copy of the parser referenced by
+the exact checked build, read from its immutable artifact manifest. This is
+evidence for tracing returned values, not a code-quality review or a host field
+classifier. The reviewer decides whether the actual result supports the core
+promise independently of copied inputs. Audit guidance distinguishes parameter
+effects from input echoes and ordinary variation between calls; an identical-input
+control may help, but the runtime does not mandate a new testing quota.
+Final review receives a compact history of baseline semantic reviews, including
+inputs, reasons, plan revisions and immutable build/receipt/review references.
+Transport success does not erase a rejected result. The reviewer decides whether
+new evidence repairs the contradiction or an explicit scope revision addresses
+it; historical failures are not automatic runtime vetoes.
+Baseline reviewers inspect visible values, not only recognizable names or a
+non-empty collection. Contradictory returned fields require repair; optional
+breadth does not excuse incorrect data. Compilers treat broad pattern searches
+as candidate locations, not established field meanings or record ownership.
+Input echoes and unseen portions of a truncated preview are not proof. These
+are agent instructions, not runtime semantic classifiers.
 
 ## Data flow
 
 ```
-                       ┌──────────────────┐
-                       │  imprint record  │   ← user drives a real Chrome,
-                       └─────────┬────────┘     narrates what they're doing
-                                 ▼
-                       session.json + .jsonl
-                                 │
-              ┌──────────────────┴──────────────────┐
-              ▼                                     ▼
-   ┌─────────────────────┐               ┌──────────────────────┐
-   │ imprint generate    │               │ imprint compile-     │
-   │  (LLM → workflow)   │               │   playbook (LLM)     │
-   └──────────┬──────────┘               └──────────┬───────────┘
-              ▼                                     ▼
-       workflow.json                          playbook.yaml
-              │                                     │
-       imprint emit                                 │
-              │                                     │
-              ▼                                     │
-   ~/.imprint/<site>/<toolName>/index.ts            │
-              │                                     │
-              ▼                                     ▼
-   ┌─────────────────────────────────────────────────────────┐
-   │  imprint cron <site>     ┌─►  backend ladder            │
-   │  imprint mcp-server      │      fetch ─STATE_MISSING→    │
-   │  imprint playbook        │      fetch-bootstrap ─→       │
-   │                          │      cdp-replay ─→            │
-   │                          │      stealth-fetch ─→         │
-   │                          │      playbook                 │
-   └──────────────────────────┴───────────────────────────────┘
+recording
+   │
+   ▼
+redact + summarize + discover the complete operation set
+   │
+   ▼
+tool-boundary advice ──► master-owned editable plan + dependency waves
+   │
+   ▼
+focused API research (smallest MVP for every tool)
+   │
+   ├── partial ──► master asks the retained researcher for missing proof
+   │                    using selected sibling/request evidence
+   ▼
+focused plan ──► focused compile ──► factual checks
+   │                                      │
+   │                        failed ────────┘
+   │                          master revises affected tools
+   ▼
+parameter advice ──► independent completion review
+   │
+   ▼
+verified tool directories ──► cron / MCP ──► runtime backend ladder
 ```
+
+`imprint teach` owns this entire teaching flow. It always creates a fresh run,
+stays in the foreground, and returns only after a terminal result. It never
+resumes an old run or exposes phase, primary-tool, or partial-selection modes.
 
 ## Module map
 
 ```
 src/imprint/
 │ ── Orchestration ──
-├── teach.ts             End-to-end pipeline: record → redact → effect-aware triage → [safe-recording replay-and-diff ‖ detect → dependency-aware select] → close replay edges → plan-prereqs → (per-tool: plan-tool → generate) → compile-playbook → emit → register
-├── teach-plan.ts        plan-prereqs step: build plan + level-parallel shared-module build before the per-tool fan-out (multi-tool only)
-├── tool-plan.ts         plan-tool step: per-tool implementation plan (param→field map, request/parse plan, module imports) injected into the compile agent
+├── teach.ts             Thin public entry for the one fresh master-led flow
+├── master-teach-controller.ts  Foreground sequencing, waves, repair loop, checks, and terminal result
+├── master-teach-plan.ts        Editable full tool plan, dependencies, and master-authored build waves
+├── master-teach-agents.ts      Focused advisor, planner, master, and completion-review calls
+├── master-teach-agent-contracts.ts  Exact inputs and outputs for those focused roles
+├── api-research-agent.ts       Retained per-tool MVP request tests and partial/proven/blocked handoffs
+├── master-teach-store.ts       Fresh run record, plan history, artifacts, and factual receipts
+├── master-teach-checks.ts      Contract, replay, live, and producer-consumer facts
 ├── integrations.ts      Platform registration (Claude Code, Codex, Claude Desktop, OpenClaw, Hermes)
 │
 │ ── Capture ──
@@ -61,8 +278,8 @@ src/imprint/
 ├── react-flight-limits.ts  Shared Flight row and JSON-node budgets
 ├── session-writer.ts    JSONL writer + Session assembler
 ├── inject-listener.ts   Sentinel-prefixed DOM event capture (injected)
-├── redact.ts            Credential / PII scrub
-├── freeform-redact.ts   Supplemental free-form PII/secret detection (requests plus framing-aware Flight responses; generic catch-alls excluded)
+├── redact.ts            Known login-credential substitution; other session data preserved
+├── freeform-redact.ts   Exact known credential values only; no PII or token classifiers
 ├── sensitive-keys.ts    Sensitive credential key lists for extraction + redaction
 ├── credential-extract.ts  Automatic login-pair detection + redaction mapping from sessions
 ├── check.ts             Sanity-check captured sessions
@@ -73,8 +290,6 @@ src/imprint/
 │
 │ ── Compile ──
 ├── compile.ts           LLM compiler entry points: generate() + compilePlaybook()
-├── build-plan.ts        Multi-tool build plan: BuildPlan schema + planner (shared modules, per-tool guidance, auth recipe)
-├── prereq-builder.ts    Builds + verifies shared `_shared/*.ts` modules (single-shot LLM → verifySharedModule loop)
 ├── compile-agent.ts     Agentic compile orchestrator (session → workflow.json + parser.ts)
 ├── compile-agent-types.ts  Shared types for compile agent (progress, result)
 ├── agent.ts             General-purpose tool-using agent loop + per-turn/per-tool tracing
@@ -82,7 +297,7 @@ src/imprint/
 ├── codex-cli-compile.ts   Codex CLI compile driver with JSONL per-turn tracing
 ├── compile-tools.ts     Compile-agent read/write/test tools + state hints
 ├── request-context.ts   Shared request metadata compaction for LLM context
-├── tool-candidates.ts   Multi-tool detection from a single recording session
+├── tool-candidates.ts   Operation evidence and initial candidate discovery from one recording
 ├── tool-selection.ts    Tool selection helpers for cron + probe
 ├── llm.ts               Provider wrappers + JSON extraction + trace spans
 ├── tracing.ts           OpenInference/Phoenix tracing helpers
@@ -142,15 +357,54 @@ src/imprint/
 
 `auto` mode walks the ladder. `fetch-bootstrap` is always spliced after `fetch` (it only **runs** when `fetch` escalates, so a healthy plain-API site never pays for it); `cdp-replay` is spliced after `fetch-bootstrap`. `stealth-fetch` supplies bot-defense cookies/headers to API replay, applies workflow parameter defaults before resolving its bootstrap URL, and can project supported bootstrap captures (`cookie`, `html_regex`, `response_header`) from the same stealth session.
 
-The **`cdp-replay`** rung is the record-faithful trusted-browser transport for the API path (`cdp-browser-fetch.ts`): a real Chrome launched as `imprint record` does (`launchChromium` + raw CDP, no automation flags) stays **open** for the whole workflow and runs each **same-origin** request *in-page* via `fetch(..., {credentials:'include'})`, while cross-origin requests (e.g. an `api.*` subdomain, which CORS would block in-page and which usually aren't behind the same wall) fall through to a plain fetch. This is the only transport that **sustains a sequence** of behavioral-anti-bot-protected POSTs: a sensitive `*.act` POST invalidates Akamai's `_abck` (`~0~`→`~0~-1~-1~`), and only the live page's bmak sensor re-posts the telemetry that re-validates it before the next call — so `fetch-bootstrap`'s plain-fetch replay dies after ~1–2 POSTs while cdp-replay carries the full search→agency→details chain. It runs **headless by default** — the only headless edge-tell, the `HeadlessChrome` UA token, is stripped via a CDP UA override before navigating — and validates the sensor cookie via synthetic mouse/scroll before replaying. Because the doomed cheaper rungs' tarpitted attempts themselves burn the per-IP rate budget, for workflows with **≥2 mutating requests behind an anti-bot signal** (a `bootstrap` block or `${state.X}`-referencing requests) `cdp-replay` is reordered to run **first** (`prefersCdpReplayFirst`). Headless needs no display; the `headed`+Xvfb path is a fallback for GPU-less Linux hosts where headless WebGL would report SwiftShader (see [troubleshooting](troubleshooting.md#running-on-a-headless-server-anti-bot-sites)). The same rung is also in the **compile-time** verification ladder, so anti-bot multi-step state-changing tools (whose live baseline `fetch`/`fetch-bootstrap`/`stealth-fetch` can't sustain) verify and ship instead of failing compile. The `playbook` rung is the DOM-walk last resort (needs a compiled `playbook.yaml`). The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders the ladder so cron + MCP start with the cheapest known-working backend; v2 caches include canonical workflow and capability hashes so stale caches are ignored by runtime but reported by `imprint mcp status`. For multi-tool sites, `cron` requires `--tool <toolName>` unless the provided `--config` path is inside the target tool directory; `probe-backends` can target one tool with `--tool` / `--out` or refresh every generated tool with `--all`. `probe-backends` probes each applicable backend individually (single-rung ladders) to build the full matrix of working/failed backends and ranks working rungs by observed runtime, keeping unusually slow successes behind faster working backends. CDP replay gets one extra warm-pool measurement after a successful cold run; `backends.json` records `coldDurationMs`, `warmDurationMs`, and `rankingDurationMs` so a timeout-safe cold CDP start can still rank by its fast warm runtime, while cold-too-slow CDP stays behind cold-safe backends in the durable order for the next process. MCP and cron persist the backend that actually succeeds at runtime so the next process starts from that known-good rung instead of rediscovering blocked earlier rungs, but they do not durable-frontload a cold-too-slow CDP success ahead of a known cold-safe backend. For workflows that need bootstrap, the probe includes `cdp-replay` alongside `fetch-bootstrap` so it appears in `preferredOrder` when it works — without probing it, runtime would always fall through `fetch-bootstrap` (~30–60s) before reaching `cdp-replay`, wasting time on every call. The stealth-fetch bootstrap state is shared across probe runs via a per-site cache to avoid re-bootstrapping per backend.
+The **`cdp-replay`** rung is the record-faithful trusted-browser transport for the API path (`cdp-browser-fetch.ts`): a real Chrome launched as `imprint record` does (`launchChromium` + raw CDP, no automation flags) stays **open** for the whole workflow and runs each **same-origin** request *in-page* via `fetch(..., {credentials:'include'})`, while cross-origin requests (e.g. an `api.*` subdomain, which CORS would block in-page and which usually aren't behind the same wall) fall through to a plain fetch. It can sustain sequences of protected requests that cheaper transports cannot, but the runtime does not inspect workflow semantics to move it ahead of those transports. A new `auto` run starts from the fixed ladder order above; later runs may start from a backend that factual probe or execution history already showed to work. It runs **headless by default** — the `HeadlessChrome` UA token is stripped via a CDP UA override before navigating — with a `headed`+Xvfb fallback for GPU-less Linux hosts (see [troubleshooting](troubleshooting.md#running-on-a-headless-server-anti-bot-sites)). The same rung is also available during compile-time verification. The `playbook` rung is the DOM-walk last resort and needs a compiled `playbook.yaml`. The probe-backends cache (`~/.imprint/<site>/<toolName>/backends.json`) reorders later cron and MCP calls from observed results; v2 caches include canonical workflow and capability hashes so stale caches are ignored by runtime but reported by `imprint mcp status`. For multi-tool sites, `cron` requires `--tool <toolName>` unless the provided `--config` path is inside the target tool directory; `probe-backends` can target one tool with `--tool` / `--out` or refresh every generated tool with `--all`. `probe-backends` tests each applicable backend individually, ranks working rungs by observed runtime, and keeps unusually slow successes behind faster working backends. CDP replay gets one extra warm-pool measurement after a successful cold run; `backends.json` records `coldDurationMs`, `warmDurationMs`, and `rankingDurationMs` so warm speed is visible without hiding cold-start cost. MCP and cron persist the backend that actually succeeds so the next process can start from that observed result. The stealth-fetch bootstrap state is shared across probe runs via a per-site cache to avoid re-bootstrapping per backend.
 
-**CDP pool.** At runtime, the `cdp-replay` backend supports a per-site `cdpPool` option that reuses a live Chrome instance across multiple tool calls instead of launching a fresh browser each time. This cuts per-call overhead from ~33–35s (cold launch + navigate + sensor validation) to ~2–5s (reuse existing page context). The pool is keyed by site and managed by the MCP server (`mcp-server.ts`); idle sessions are closed after 5 minutes (`CDP_IDLE_TIMEOUT_MS`). `probe-backends` also uses a temporary pool only to measure CDP warm reuse after a successful cold probe, then closes it before exiting. Compile uses its own process-global verification pool.
+A `mode: "navigate"` request normally returns the rendered document. When the
+page itself must create the load-bearing request, the workflow may instead set
+a `navigation.networkResponse` matcher and return the selected response body.
+The matcher is an explicit URL/method/resource-type/occurrence choice made from
+recorded evidence; occurrence follows request-start order within one navigation,
+and CDP observes the live page traffic and retrieves the chosen
+completed body. An optional `networkResponse.actionIndex` starts matching immediately
+before the specified zero-based navigation click. Earlier requests cannot satisfy
+that capture even if their responses arrive after the click. The agent chooses
+this boundary when the action triggers its result; omission preserves matching
+from navigation start. It does not silently replace a failed selected response.
+Each navigation click polls its exact selector at `pollIntervalMs` until the
+target is visible and hit-testable, using the remaining navigation deadline.
+The click is dispatched once; its capture boundary begins only at dispatch,
+not while waiting for the target. Invalid selector evaluation, CDP errors and
+browser closure fail rather than polling indefinitely. The final failed target
+evaluation is included in the error: match count, first target and parent tag/id/
+class/role, computed display/visibility/pointer-events, rectangle, and the actual
+center-hit element. Identifying strings are bounded and no page text is copied.
+These facts do not select another element or change click acceptance.
+The workflow keeps two exact recording origins: the outer
+`recordingRequestSeq` identifies the document navigation being sent, while
+`networkResponse.recordingResponseRequestSeq` identifies the background
+request whose recorded response supplies body, status, and headers during
+offline checks. That explicit example is independent of the live occurrence:
+it may come from a later navigation or another combined session. Offline checks
+validate the cited response and endpoint, without requiring its recorded order
+to match a fresh page load. It does not decide which background call is semantically
+meaningful, and the capability does not automatically change a tool's rung or
+share browser state with another tool.
+
+**CDP pool.** The `cdp-replay` pool keys each browser by site, tool, and rendered bootstrap URL. Repeated calls in that context can reuse the browser; measure warm execution separately from launch and navigation. The MCP server's `McpCdpSessions` closes a tool's browser contexts and clears its backend memo after five idle minutes or an audit-call timeout, preserving sibling tools. An active call suspends its idle timers. Timeout cancellation reaches request execution and prevents escalation into another rung. A cancelled setup cannot replace or remove a newer session. Shutdown drains the entire pool. `probe-backends` uses a temporary pool for cold/warm measurements; compile uses its own verification pool.
+
+An explicit `workflow.bootstrap.url` is resolved before inspecting later request URLs, which may depend on state captured by that bootstrap. Without an explicit bootstrap, the existing Referer/first-request fallback supplies the starting URL. The runtime follows the agent's declared URL and captures without inferring what the captured values mean.
 
 **Authenticate-tool execution.** Authentication never uses the DOM playbook rung. The live verifier runs the compiled workflow in one headed `cdp-replay` browser and keeps that browser open across checkpoints. The browser transport supplies ordinary fetch, top-level navigation, cookies, and page-owned state; it does not interpret the site's authentication protocol.
 
 **Auth is an agent-compiled action program.** Candidate detection supplies neutral credential-request and related-auth-request evidence. The auth compile agent reads the recording and defines `authConfig.entry` plus arbitrary named actions. Each action lists its scalar parameters and ordered request steps. A step can declare error handling and a recording-grounded `repeat.until` capture with its own interval and attempt bound. Outcomes may declare required capture evidence and are either `pause` (with the next action, exact carried state names, and a caller message) or `success`. `persist` names non-cookie captures that become durable credentials; cookies persist automatically. There are no runtime push/OTP types, phase boundaries, implicit delivery checks, cookie-based completion guesses, or site-shaped auth heuristics.
 
-**Compile and verification are separate stages.** Claude and Codex use the same recording tools and checkpoint protocol. The compile agent writes artifacts but cannot log in directly. For data tools, a separate semantic verifier prepares the live backend with the existing comprehensive probe, then owns execution of the compiler-written `integration.test.ts`. A valid backend preference is reused across compiler revisions; only a missing/invalid preference or a later transport, network, or browser-infrastructure failure invokes the probe. Semantic failures never trigger backend exploration. Final suite and targeted calls pin that preference rather than silently exploring the runtime ladder. The verifier can run discriminating follow-up calls, and its `changes_required` or `inconclusive` report returns to the compiler revision loop. For auth tools, `run_verification` sends one agent-selected action and its parameters to `AuthVerifier`, which reuses its browser and generic continuation by default and returns observed backend/status/body/next-action facts. When those facts show that the prior session is unusable, the agent can request a fresh verification session without changing runtime policy. The orchestrator resumes the same CLI session after each checkpoint. The agent decides from those facts whether to revise the program, prompt the user, wait, reset verification state, run another action, finish, or give up. `done` is accepted only after a live success action, and the verification receipt is bound to the canonical workflow hash so later edits invalidate it.
+**Compile and verification are separate jobs.** A focused compiler writes the
+artifacts for one tool. The foreground controller then runs the applicable
+contract, replay, live, and producer-consumer checks and records observed facts.
+The master decides whether those facts require a change to the tool,
+parameters, dependencies, or replay strategy. Receipts are tied to the exact
+plan and artifact, so an edit makes only the affected proof stale. The final
+reviewer cannot approve a tool without current passing receipts.
 
 **Body encoding is an agent-owned compile decision.** A newly compiled request body containing runtime placeholders must declare `bodyPlaceholderEncoding` as `raw`, `json-string`, or `form-urlencoded`. `Content-Type` is evidence for the compiler, not a runtime classifier. The compiler also writes `request.test.ts`, renders the actual workflow without network access, chooses synthetic edge cases appropriate to the recorded format, and proves round-trip equality. Mixed or nested encodings belong in an agent-authored `request-transform.ts`. The runtime retains its former inference only as a compatibility path for workflows emitted before this contract; re-teaching migrates them to explicit declarations.
 
@@ -180,6 +434,23 @@ type WorkflowRequest = {
   url: string;
   headers: Record<string, string>;
   body?: string;
+  mode?: 'fetch' | 'navigate';
+  navigation?: {
+    waitUntil?: 'domcontentloaded' | 'load';
+    timeoutMs?: number;
+    urlIncludes?: string;
+    selector?: string;
+    actions?: Array<{ action: 'click'; selector: string }>;
+    resultSelector?: string;
+    networkResponse?: {
+      urlIncludes: string;
+      recordingResponseRequestSeq: number;
+      method?: string;
+      resourceType?: string;
+      occurrence?: number;
+      actionIndex?: number; // zero-based action that starts response matching
+    };
+  };
   extract?: Record<string, string>; // legacy ${response[N].name}
   captures?: RequestCapture[];
   effect?: RequestEffect;
@@ -217,16 +488,10 @@ The ladder escalates only when every required missing item is satisfiable by the
 ├── workflow.json               output of `imprint generate`
 ├── parser.ts                   API-response → structured output
 ├── request-transform.ts        optional — URL signing / request mutation (may import ../_shared/*)
-├── playbook.yaml               output of `imprint compile-playbook`
+├── playbook.yaml               optional DOM fallback chosen during teaching
 ├── index.ts                    output of `imprint emit` (consumed by cron + MCP)
 ├── cron.json                   schedule + params + replayBackend + notifyWhen
 └── backends.json               output of `imprint probe-backends`
-
-~/.imprint/<site>/_shared/       (multi-tool only — shared modules reused across the site's tools)
-├── <name>.ts                   request-transform / parser-helper / types, imported via ../_shared/<name>.ts
-└── package.json + node_modules  toolchain for verifying the shared modules
-
-~/.imprint/<site>/.build-plan.json   plan sidecar (shared modules + per-tool guidance + auth recipe)
 
 ~/.imprint/<site>/sessions/      (local only — auth tokens / PII)
 ├── <ts>.jsonl                  raw streaming capture
@@ -248,34 +513,19 @@ LLM-facing overview payloads are intentionally compact. Candidate detection, req
 
 **Input-value provenance hints.** Some parameters carry an opaque id (entity handle, place id, category token) minted by an earlier response, not the user's text. The compile agent historically shipped these as the raw param text, which the backend silently ignored. `param-grounding.ts`'s `inputProvenance()` detects these by walking each candidate request's decoded body for id-like leaf values (no whitespace, ≥6 chars, mixes character classes or is a delimited handle) and searching prior responses for the same value. Each match produces an `InputProvenance` record (`path`, `valueSample`, `requestSeq`, `sourceSeq`, `sourceEndpoint`, `selfChain`). `selfChain: true` indicates a resolve-then-refine pattern: the tool's own endpoint minted the id (e.g. a text search returns a place id, which a refined search sends back). These hints are surfaced as `inputProvenanceHints` in the compile agent's session summary, so the compiler chains the minting request and captures the id rather than hardcoding or substituting raw text.
 
-Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. See [tracing.md](tracing.md) for the full setup and environment variable reference. The trace hierarchy drills into every stage of the compile pipeline:
+Set `IMPRINT_TRACE=1` with `PHOENIX_COLLECTOR_ENDPOINT=http://localhost:6006` to emit OpenInference spans to a local Phoenix server. See [tracing.md](tracing.md) for the full setup and environment variable reference. The trace shows the foreground teach and its focused jobs; exact children depend on the provider and any repairs the master requests:
 
 ```
 cli.teach (AGENT)
-├─ teach.combine_sessions (CHAIN)          ← from-scratch: merge sibling recordings (session/request/narration counts)
-├─ teach.record (CHAIN)                    ← live capture (event count)
-├─ teach.redact (CHAIN)                    ← credential/PII scrub (redaction stats)
-├─ compile.triage_requests (RETRIEVER)
-│   └─ llm.analyze (LLM)
-├─ teach.detect_tool_candidates (AGENT)
-│   └─ llm.analyze (LLM)
-├─ teach.plan_prereqs (AGENT)              ← multi-tool: build plan + shared modules
-│   ├─ llm.analyze (LLM)                       (planner)
-│   └─ teach.build_shared_module (AGENT)       (plan-first + verify cycles; independent modules concurrent)
-│       └─ llm.analyze (LLM)
-├─ teach.plan_tool (AGENT)                 ← per-tool implementation plan (sibling of that tool's compile.generate)
-│   └─ llm.analyze (LLM)
-├─ compile.generate (AGENT)
-│   ├─ agent.turn.1 (CHAIN)           ← per-turn token counts
-│   │   ├─ llm.message_with_tools (LLM)  ← model, tokens, stop reason
-│   │   ├─ agent.tool.read_session_summary (TOOL)
-│   │   └─ agent.tool.write_file (TOOL)
-│   ├─ agent.turn.2 (CHAIN)
-│   │   └─ ...
-│   └─ ...
-└─ compile.playbook (CHAIN)
-    ├─ compile.triage_requests (RETRIEVER)
-    └─ llm.analyze (LLM)
+├─ recording, redaction, triage, and candidate discovery
+├─ focused advisor and master decisions
+├─ focused planning and compilation for each planned tool
+│   ├─ agent.turn.N
+│   │   ├─ llm.message_with_tools
+│   │   └─ agent.tool.X
+│   └─ contract, replay, live, and chain checks
+├─ focused repairs and parameter advice when needed
+└─ independent completion review
 ```
 
 The `audit` verb traces its own tree, so a failing acceptance run is debuggable in isolation:
@@ -290,7 +540,9 @@ The `audit.session` span carries the audit result and, when supplied by the prov
 
 Each `agent.turn.N` span records per-turn input/output tokens and stop reason. Each `llm.message_with_tools` span records model, provider, token counts, and which tools the model called. Each `agent.tool.X` span records tool execution time, result size, and (when `IMPRINT_TRACE_TOOL_IO=1`) the input arguments and output.
 
-Stage spans carry their own end-attributes for fast triage: `teach.record` (`imprint.record.event_count`), `teach.redact` (`imprint.redact.*` counts), `teach.combine_sessions` (`imprint.combine.{session,request,narration}_count`), and `teach.plan_tool` (`imprint.tool_plan.chars` / `.skipped`). Opening the `cli.teach` trace lets you locate the failing stage by span status/attrs — a `teach.plan_prereqs` timeout, a `teach.build_shared_module` with `ok=false`, an empty `teach.plan_tool`, or a `compile.generate` that gave up.
+Open the `cli.teach` trace to find a slow or failing focused job. The fresh run
+directory remains the source of truth for the current plan, artifact history,
+factual receipts, and terminal result.
 
 Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts, responses, tool arguments, and tool results in the trace UI. Token counts come from the provider when available and fall back to estimates otherwise. Imprint emits the prompt-cache split (`cache_read`/`cache_creation`) using OpenInference attributes; Phoenix owns model pricing and rolls span costs up to trace and project levels. `scripts/analyze-phoenix.ts` requires Phoenix 11.4+, reads GraphQL `costSummary`, paginates complete traces, and distinguishes pending calculations from unpriced or partial costs rather than showing any of them as zero. See [tracing.md](tracing.md) for the full attribute reference.
 
@@ -302,53 +554,169 @@ Add `IMPRINT_TRACE_LLM_IO=1` and `IMPRINT_TRACE_TOOL_IO=1` when you need prompts
 - `.compile-log.json`, `.compile-done.json`, `.compile-give-up.json` — compile-agent transcript + sentinels (gitignored).
 - `.live-verifier-log.jsonl`, `.live-verification-evidence.json`, `.live-verification.json` — crash-safe verifier events, sanitized backend/suite/call receipts, and the final semantic report. A suite receipt is created before Bun starts and survives failure, timeout, or abort even when no individual call completes. Labels are diagnostic only; semantic reports do not cite evidence IDs.
 
-## Multi-tool shared modules (plan-prereqs)
+## Fresh master teach flow
 
-Candidate selection is graph-aware. The candidate agent declares direct
-callable prerequisites as `dependsOnTools`; unambiguous `dependencySeqs` add
-recording-grounded structural edges without inventing dependencies for shared,
-unowned, or self-owned request seqs. After replay finishes,
-`deriveTokenContractHints` runs against the full detected candidate set and adds
-grounded producer-token edges before candidate checkpoints are written. Every
-selection is then closed transitively over those dependencies. All candidates
-start selected, including non-interactive runs; `--primary-tool` selects the
-primary candidate plus its prerequisites. Dependency cycles are retained once
-and reported instead of recursing indefinitely.
+The public teaching path is one fresh foreground controller:
 
-When the resulting selection contains **two or more** tools, `imprint teach` inserts a `plan-prereqs` step between candidate selection and the per-tool compile fan-out. Single-tool recordings skip it entirely (the path is unchanged). Set `IMPRINT_NO_BUILD_PLAN=1` to disable it and compile every tool independently.
+1. It resolves the requested recording, or records a new one, then redacts it.
+   The complete redacted recording remains authoritative for the master,
+   focused planning, compilation, and replay checks. Teach does not replay the
+   whole session in a browser before planning; live execution happens only when
+   a compiled candidate is checked.
+2. The relevance pass from shipped semantic triage gives only the candidate
+   detector a narrower advisory view; the discarded effect-classification
+   passes are not run here. An ordinary relevance-triage failure falls back to
+   the complete view; cancellation and provider deadlines still stop the run.
+   The master receives a separate compact boundary index of every valid
+   XHR/Fetch across hosts, even when a telemetry heuristic would hide it. The
+   index keeps request identity, URL, timing, status, types, exact digests, and
+   lengths; full redacted request evidence is
+   supplied to focused planning after the master chooses a boundary. The
+   master may merge, split, rename, add, or remove detector proposals.
+3. A focused tool-boundary advisor reviews that complete proposal.
+4. The master writes the editable final tool plan. It may merge, split, rename,
+   add, or remove an unsupported duplicate, but it must account for every
+   credible discovered operation and explain its decisions.
+5. A retained focused researcher for each selected tool first proves the
+   smallest useful API call. Every tool gets this narrow first pass before
+   optional breadth. Required producer-consumer contracts are coordinated as
+   soon as research identifies their inputs and outputs.
+6. Research has three handoffs: `proven`, `partial`, and `blocked`. A blocked
+   handoff may request a master decision about a concrete contract gap; it does
+   not claim every API construction is impossible. Researchers need not exhaust
+   transport permutations before reporting that gap. The master revises affected
+   producer and consumer contracts together and orders their proof causally.
+   Partial/proven candidates still require their exact successful observations.
+   Researchers can invoke proven sibling requests with agent-selected parameters
+   through `call_producer`, inspect the fresh raw response, and then test their
+   consumer. This works before normalized tools exist. Producer observations are
+   labeled separately and cannot certify consumer success. Only current proven
+   siblings are offered; browser state remains separated by tool and rung.
+   Publication writes the exact reviewed successful backend to the existing
+   workflow-bound `backends.json` cache. A new MCP process therefore retains the
+   tested execution choice instead of losing the forced research backend when
+   staging ends. Failed or rejected results do not supply a preference. The
+   observed duration includes the call setup; it is not a separate warm benchmark.
+   MVP review includes the checked workflow and request transform, parser source,
+   the prior research explanation (labeled as such), and up to 32 KB of actual
+   result text. Truncation is explicit; request encoding alone is not evidence
+   that the server honored a setting. Cached browser snapshots no longer need
+   particular cookie names to qualify for reuse; age and actual failures still
+   determine when to refresh them.
+   Fetch-bootstrap also executes the request before escalating. It does not
+   manufacture a forbidden result or remember a rung as unavailable merely
+   because the minted jar lacks particular cookie markers.
+   Research preserves the input values and actual observations from its tests,
+   including response excerpts requested by the researcher. MVP review receives
+   up to eight successful contrasts from the proven request definition, plus
+   that request's source. The reviewer compares these facts with the current
+   implementation; prior summaries alone are not comparative proof. Raw test
+   history remains available in the research artifact across follow-ups.
+   For rendered extraction after navigation or actions, researchers establish
+   completion of the current collection and compilers preserve that condition.
+   Document load, a page shell, and updated controls do not prove that core
+   results finished rendering. When timing is uncertain, agents compare initial
+   setup with changed-input calls in the same tool's warm session; setup time
+   can conceal an incomplete result wait. Hidden stale HTML during
+   loading remains a missing-proof or failure case for semantic review.
+   Agents choose the evidence-backed condition using existing navigation
+   mechanics; the runtime adds no fixed delay or site-specific classifier.
+   An element present in one layout is not a universal completion requirement.
+   Researchers and compilers ground waits in core result content and use a
+   small contrasting case when observed layout variation makes the condition
+   uncertain. Optional presentation must not silently restrict the contract;
+   current-result freshness remains necessary.
+   One background response does not establish that later calls issue the same
+   request. Before accepting navigation capture, researchers repeat a valid
+   input and contrast one core input using the same candidate, preserving
+   constrained groups. They reuse decisive observations and distinguish actual
+   session reuse from setup. Compilers return missing or contradicted source
+   evidence to retained research; no runtime strategy or extra gate is added.
+   If a background capture is absent despite current results, agents inspect
+   their actual delivery source, including structured document data. A different
+   input that produces the request does not resolve the failed valid input;
+   researchers compare those delivery cases before accepting the strategy.
+   Baseline reviewers also trace ambiguous keyword or unit matches to their
+   source context. Matching strings alone cannot establish a field's meaning
+   or which nested record owns it; unsupported metadata returns to the master.
+   A proven independent tool can plan and compile a draft while another tool
+   continues researching. Native admission stays with Codex; other providers
+   retain the existing four-worker bound. Declared consumers wait for the normal producer-first
+   build waves. The final master review can replace an early proposal; a draft
+   is reused only when both its compile inputs and implementation plan match.
+   Verification and publication still follow master approval, not research alone.
+   `partial` preserves a tested working subset but names proof still required by
+   the selected MVP or one of its dependency edges. Optional parameter breadth
+   waits for the later best-effort pass. After all first passes finish, the
+   master may send the required gap back to the same researcher conversation
+   with a bounded set of relevant recorded requests and sibling research
+   results. The loop either closes the gap, revises the MVP, retains an honest
+   partial result for another revision, or establishes a blocker; the runtime
+   does not choose the answer.
+7. The master writes explicit build waves. Every planned tool appears exactly
+   once, and every producer is in an earlier wave than its consumers.
+8. A focused planner receives only one tool, its relevant recording evidence,
+   its dependencies, the completed research handoffs, and the exact artifact
+   contract. Recording response-body availability also reaches discovery before
+   the master selects a mode. If the focused planner still returns invalid output
+   after its local repair, exact diagnostics return to the master alongside valid
+   sibling proposals. The affected plan remains absent until a valid replacement
+   arrives from its retained conversation. Cancellation, provider failures and
+   host errors retain their existing handling.
+9. A fresh focused compiler builds that tool. Independent tools in the same
+   master-authored wave may compile in parallel. Each finished tool starts its checks
+   immediately; it does not wait for sibling compilation. The next dependency wave
+   still waits for verified producers. The selected research call's
+   input/observation file and full retained response are copied into its local
+   workspace for offline parser tests. These evidence files are not published
+   runtime dependencies; the compiler need not repeat the live call to read them.
+10. The controller records contract, replay, live, and producer-consumer results
+   as factual receipts. A playbook replay check is not applicable, not a
+    failure. A backend message that a request completed describes transport only;
+   it is not semantic approval.
+11. After a tool passes, a focused parameter advisor reviews the public parameter
+   choices. Its advice is not authoritative.
+12. A failed check or useful advisor suggestion returns to the master. A parser
+    repair can return directly to the retained compiler. If a failure disproves
+    a research claim, the master may explicitly send the unchanged tool back to
+    its retained researcher with the actual failure evidence. Requested research
+    follow-ups use the master's parallel/dependency waves, with updated handoffs, then
+    return for review and focused replanning. A changed tool
+    invalidates only itself and the consumers that depend on it. Unrelated
+    verified tools stay current.
+13. A fresh independent reviewer sees the current plan, result evidence, and
+    immutable check history. Completion is rejected while any planned tool is
+    missing a current verified build.
 
-The step does two things, once per teach, before the fan-out:
+The agents own semantic decisions: tool boundaries, parameters, request
+sequences, dependencies, authentication, and API-versus-playbook strategy. The
+review distinguishes applied settings from both caller-side and server-returned
+query echoes; a response can repeat a request without honoring it. The
+controller only performs mechanical work: validates the plan and wave ordering,
+runs focused jobs and checks, tracks what became stale after a revision, and
+reports the terminal outcome.
 
-1. **Plan** (`build-plan.ts`, single-shot `llm.analyze` against `prompts/build-planning.md`) — produces a `BuildPlan`: the shared modules to create (`request-transform` signing, `parser-helper` decoders, shared `types`), per-tool guidance (load-bearing seqs, parser guidance, parameter checklist), an `authRecipe` each tool replicates inline, and the cross-tool **opaque-token contract** (consumer `tokenParams` ⇄ producer `emitsTokens`). The contract is not left to the planner's discretion: `deriveTokenContractHints` first walks the dual-pass classifications **deterministically** — any value with recovered producer provenance sent by one tool but produced in a *different* tool's response (matched by `producerSeq`/`originalSeq` → owning tool via `requestSeqs`; `header:` session tokens and shared/ambiguous seqs skipped) — and feeds those grounded edges into the planner payload. Provenance covers two cases: a `server_derived` value (it *varied* across the two replay passes and was found in a prior response) and a stable `constant` whose **opaque** value also appears in a prior response. The latter matters because the dual-pass replays the *same* flow, so a per-entity token (same hotel → same id) is identical across passes and classified `constant` — its provenance is recovered by searching the recorded responses, since variance alone can't reveal it. (`producerSeq` is normalized to original-seq space: `searchPriorResponses` over the replay returns a replay seq, which is translated back via the alignment pairs so capture hints and token detection resolve the owning tool correctly.) After the planner returns, `reconcileTokenContracts` re-applies the same edges to the parsed plan: it injects any contract the planner dropped and repairs half-declared ones (a `tokenParam` whose producer forgot the matching `emitsTokens`, which `superRefine` would otherwise reject), so a planner shortcut can't silently lose a chain. The plan is persisted to `~/.imprint/<site>/.build-plan.json`.
+Each semantic-role request includes fresh `runTiming` facts: the observation
+time, shared deadline, and remaining milliseconds. Retained turns and output
+repairs refresh these facts without resetting conversation history. Agents
+choose how to use the remaining time; the host adds no attempt quotas or
+site-specific strategy. Compiler and nested-verifier deadline errors retain
+their deadline cause instead of being relabeled as provider capacity failures.
+The Codex SDK adapter consumes streamed turn events through `codex-sdk-turn.ts`,
+retaining typed terminal failure messages as provider evidence. The SDK's
+`run()` shortcut discards that origin by throwing a plain error. Capacity errors
+therefore reach the existing bounded retry policy on the same thread and prompt,
+while successful items and usage retain the SDK's normal aggregation. Ordinary
+agent/tool items and arbitrary thrown errors do not acquire provider status.
+Deterministic request/access failures and cancellation keep their existing handling.
+The compiler terminal adapter also recognizes the complete Codex model-capacity
+diagnostic in `turn.failed.error.message` when provider metadata is absent. It
+does not interpret embedded tool prose or stringified error objects.
 
-**General dependency contract (`requiredInputs`).** Cross-tool tokens are one of *several* input classes a tool's request needs, and the header-blind "keep headers minimal" heuristic used to drop the others (auth tokens, gateway/session headers, the page a request was issued from) and ship tools that fail at runtime. `deriveRequiredInputHints` generalizes the token detector to surface **every** non-param input deterministically, attributing each by source — purely from structural signals (the dual-pass taxonomy, `loginRequestSeqs`, producer ownership, value shape, page-minted detection), never a header name or URL literal:
-  - **`auth`** — a value minted by the login flow's response (`producerSeq ∈ loginRequestSeqs`) → wired `${credential.X}`; the deriver also seeds the matching `authTool.captures` entry, and `authExternalVerification` requires the auth workflow to name it in `authConfig.persist` so the data tool's header resolves at runtime.
-  - **`producer_tool`** — the same cross-tool edge as `tokenParams`/`emitsTokens` (kept in sync by `validateBuildPlan`), wired as a param.
-  - **`browser_state`** — a value an earlier response or the originating page mints; a reused-in-session value is captured as `${state.X}`, and a request that runs **cross-origin** from its originating page (`findOriginatingPage` = `Referer` or the last Document navigation) emits a `referer` input carrying a `bootstrap.url`.
-  - **`generated`** — a per-call value with no producer, its kind inferred by SHAPE (`uuid`/`epoch_ms`/`epoch_s`/`iso8601`/`nonce`) → wired `${generated.KIND}`, which `runtime.ts` mints fresh on every substitution.
-  - **`static`** — a high-entropy constant / page-minted app key → emitted as a verbatim literal (not a per-user secret).
-`reconcileRequiredInputs` re-injects any grounded input the planner dropped (mirroring `reconcileTokenContracts`). At compile time `externalVerification` **deterministically injects** a dropped contracted input (`injectContractedInputs` — credential/static/generated headers, plus `bootstrap.url` for a referer input), then **blocks** if a non-producer contracted input is still unwired (`contractedInputGate`); a live failure that coincides with an unresolved contracted input is classified `contract-gap` (a workflow-correctness error to fix), NOT `waived-bot`. Fan-out ordering (`topoLevelsForTools`) adds the producer→consumer and data→auth edges from the contract.
-
-**Redaction policy + emit-time secret guard.** To wire an auth/session/gateway header the compile agent must be able to *read* its value — so the compile-path redaction no longer scrubs sensitive-header values by default (credential placeholdering and free-form PII redaction still run; re-enable the legacy blanket scrub with `IMPRINT_REDACT_SENSITIVE_HEADERS=1`, and `imprint redact`'s shareable output always applies it). The agent reads real values on demand via the **`reveal_request`** tool (unredacted request+response straight from the recording). Two guards keep secrets out of shipped artifacts: `reveal_request`'s contract tells the agent to emit placeholders, and **`assertNoRawSecrets`** (run after injection) scans `workflow.json`/`parser.ts` for the recording's own sensitive-header + credential values — auto-rewriting a value that maps to a contracted placeholder, blocking any other. (See [security.md](security.md).)
-2. **Build prereqs** (`prereq-builder.ts`) — each shared module is built in two phases. First a **planning pass** (`prompts/prereq-planner.md`, one `llm.analyze`) decodes the recorded sources into a Markdown implementation plan — data shape, per-export algorithm, the exact `noUncheckedIndexedAccess` guards, test plan, risks — persisted to `_shared/<name>.plan.md`. That plan is then injected into an **implement → `verifySharedModule` → feedback loop** (up to 5 cycles, the same shape `compilePlaybook` uses, so it works on every provider) that writes `~/.imprint/<site>/_shared/<name>.ts` plus a test. Planning is best-effort (any failure degrades to implementing without a plan), skipped for `types` modules, and disabled by `IMPRINT_NO_PREREQ_PLAN=1`. Modules build **level-by-level**: those in the same dependency level (no `dependsOn` edge between them) build concurrently under a small cap, while a dependent waits for its dependency's level. `verifySharedModule` is the anti-cheat gate: the module must export what the plan declared, its test must pass with non-trivial assertions, it must typecheck (`tsc` under `strict` + `noUncheckedIndexedAccess`, a gate separate from the test), and a kind-specific ground-truth anchor must reproduce recorded behavior (e.g. a `request-transform` must re-sign a recorded URL to the captured value). Each failed cycle logs which gate blocked it (typecheck / test / anchor).
-
-Each per-tool compile agent then receives its plan slice via a new `read_build_plan` tool (threaded by file path through all three compile drivers — in-process, claude-cli, codex-cli) and **must import the assigned shared modules** rather than re-implementing them: `request-transform` → `workflow.json`'s `requestTransformModule: "../_shared/<name>.ts"`; `parser-helper`/`types` → an import in `parser.ts`. `externalVerification` enforces this — a tool that ignores an assigned (verified) module fails the gate. The same slice carries the opaque-token contract: a **producer** sees its `emitsTokens` (fields its parser must emit for siblings, in the exact consumable shape) and a **consumer** sees its `tokenParams` (`{param, sourceTool, sourceField}`) so it writes the chained `param:<param>` test up front. Both sides are enforced: `externalVerification` fails a producer whose `parser.ts` does not emit a declared `emitsTokens` field (so the contracted name can't silently diverge — e.g. the plan says `hotel_id` but the parser emits `propertyToken`), and fails a consumer whose token param lacks a chained test (`unchained`). The contract is surfaced to the agents, not just validated in the plan — without it the producer would emit its own field name and the chain would break at the consumer's gate where it can't be fixed.
-
-**Why auth is plan-carried, not a shared file.** Login is request data (request[0] + captures) embedded inline by `emit`, and the runtime has no sub-workflow include primitive, so a shared `_shared/auth.ts` cannot be composed. Instead the plan's `authRecipe` describes the exact login + `${state.X}` capture chain.
-
-Whenever neutral candidate evidence contains credential requests, related auth requests, or credential names, the planner emits one standalone **`authTool`** (`authenticate_<site>`). The plan carries only request-sequence evidence and durable credential names; it does not classify the protocol. The auth compile agent derives the action graph from the recording. Data tools set `dependsOnAuth: true` and reuse the stored session instead of replaying login inline. This is why the build planner (`plan-prereqs`) runs whenever auth evidence exists, not only for ≥2 selected tools. `authRecipe` remains the inline fallback for tools when no auth tool was built (for example, credentials unavailable).
-
-**Graceful degrade.** A shared module the builder cannot verify within its cycle budget is marked `verified: false` and pruned from every tool's `usesSharedModules` for that run; the import-assertion never fires on it, and those tools fall back to inlining the logic (today's behavior). A module's relative-path import (`../_shared/<name>.ts`) resolves at runtime because the runtime resolves `parserModule`/`requestTransformModule` relative to each tool's `workflow.json`, and the whole site directory (including `_shared/`) travels together on install/bundle.
-
-## Per-tool plan → execute (plan-tool)
-
-The overall shape is **plan + build shared modules once → for each tool, plan then execute**. After the global `plan-prereqs` step, each tool's compile is preceded by its own short planning pass (`tool-plan.ts`, one `llm.analyze` against `prompts/tool-planning.md`). Tools compile concurrently, but **producer-before-consumer**: when the build plan declares a token contract (a consumer's `tokenParams` sourced from a producer's `emitsTokens`), the producer compiles in an earlier level so the consumer's chained verification test can mint a fresh token from the producer's live `workflow.json` (`topoLevelsForTools`; with no contracts every tool lands in one level — unchanged). The plan→execute is sequential *within* a single tool.
-
-The per-tool plan is grounded in the recording for **that tool only**: the candidate (its parameters, request seqs, dependency seqs), its slice of the global build plan (`parserGuidance` / `paramChecklist` / `authRecipe` / assigned shared modules), and the compacted request/response context for the tool's seqs. The planner returns a concise Markdown plan covering param→recorded-field mapping, request construction (referencing the assigned `request-transform` module by import path), response parsing (exact JSON paths, referencing the assigned `parser-helper`), the shared modules to import, and edge cases. The plan is persisted to `~/.imprint/<site>/<toolName>/.tool-plan.md` and injected into the compile agent's initial message (via `formatToolPlan`, shared verbatim by all three drivers) so the compile follows it instead of re-deriving structure.
-
-It is **best-effort**: a 5-minute timeout, a missing prompt, or any error yields no plan and the compile proceeds exactly as before. Disable it with `IMPRINT_NO_TOOL_PLAN=1`. (The shared-module plan cap is the longer one — 10 minutes — since it analyzes the whole merged recording across all tools.)
-
-This replaced an earlier per-tool **contract-test feedback loop** (compile → run generated contract tests → feed `tool_broken` findings back → recompile). That loop did not measurably raise accuracy and added significant complexity, so it was removed in favor of the single plan→execute pass plus the post-hoc `imprint audit` gate (below). See [decisions.md](decisions.md).
+A teach command never resumes an earlier run. Old run directories are
+diagnostic evidence only. The command stays in the foreground until it reports
+completed, blocked, failed, cancelled, or provider unavailable. Only completed
+exits successfully.
 
 ## Acceptance gate (`imprint audit`)
 
@@ -407,6 +775,19 @@ export function transform(
 
 The runtime calls `transform` before each outgoing request. The `responses` array contains previous response bodies from the workflow chain, enabling dynamic URL construction (e.g. building a domain list from search results for a batch status check). Return `{ skip: true }` to skip a conditional follow-up request, such as a pagination/detail call that is only needed for some parameter values.
 
+Fresh module imports resolve filesystem symlinks before creating and importing
+a unique sibling copy. This avoids Bun's stale module cache and repeated-import
+resolution failures through symlinked directories while preserving sibling
+imports. The temporary copy is removed after evaluation.
+
+Request transforms can also return `navigation` overrides, including computed
+click actions, readiness selectors, and result selectors derived from current
+parameters or earlier responses. Literal selectors do not interpolate workflow
+placeholders. This same surface is available to the researcher and compiler.
+The declared `networkResponse` matcher cannot be overridden by a transform;
+computed actions can trigger it while live and offline response selection stay
+consistent. Agents choose the target and construction from evidence.
+
 The compile-agent writes this module when `stateHints` flag `query_param_changes_across_calls` — high-entropy query params that vary per call. It uses `search_response_body` to find the signing function in `.js` responses and replicates it.
 
 Example: a site that signs each request URL with a scheme computed in its `.js` (CRC32, HMAC, etc.) — the compile agent reads the signing function out of the bundle and replicates it in `request-transform.ts`.
@@ -423,3 +804,243 @@ extract(rawResponse: unknown, context?: { params: Record<string, string | number
 - `context.responses` — all response bodies from the workflow chain (index 0 = first request).
 
 Use `params` when the parser needs a value the API doesn't echo back (e.g. the search term for constructing domain names from a TLD catalog). Use `responses` when the parser merges data from multiple chained requests.
+
+
+MCP error replies preserve completed backend attempts in execution order,
+including their outcomes, bounded error details, and durations. The final error
+remains the final rung's result; the preceding facts let the caller distinguish
+a navigation timeout from a later transport's inability to navigate. Calls
+interrupted by the audit deadline may still lack completed ladder history.
+Agents define each field of a serialized producer selection from its actual
+source and consumer wire representation, preserving machine identifiers apart
+from display labels. The runtime does not infer or convert those meanings.
+
+
+For a declared outgoing link, the producer compiler receives
+`toolPlan.consumerResearch`: the current consumer's tested candidate (request,
+transform, and test inputs), its observation identity, and the declared links.
+The controller includes only consumers whose research still covers their current
+boundary; it omits unrelated tools, response bodies, and research history.
+This supplies construction evidence without interpreting field meaning or
+replacing final chain verification. Compatible draft reuse and master-directed
+recall remain unchanged; new evidence does not itself select a repair strategy.
+
+Research boundary coverage distinguishes recording context from execution.
+Adding request or dependency references does not invalidate an already tested
+workflow when its request origins, parameter names/types, and transport facts
+remain covered. The implementation must still match the exact proven request
+sequence and selected-response origins before compilation. New public inputs,
+changed transport facts, or removal of a proven origin still invalidate coverage.
+Parser-test guidance uses contrasting fixture records to distinguish field
+meanings and response shapes, preserve records whose optional fields are absent,
+and check summaries against their underlying data. Requested context and derived
+values cannot replace observed attributes or prove an input was applied. Small
+synthetic missing-field and input-mismatch cases complement existing fixtures
+without another live call or runtime rules for domain-specific values.
+For encoded selections, agents ground field boundaries and complete identities;
+printable framing bytes and shared prefixes do not establish identity. Repeated
+records remain grouped when the public contract requires them. The master
+distinguishes checking an input from applying it: fixed/default selection needs
+a distinguishing comparison or an explicit contract revision. These are agent
+evidence and artifact-construction requirements, not runtime semantic rules.
+Research-only corroboration is distinct from an execution dependency. Each
+additional request must contribute required output or necessary state; agents
+retain corroborating observations while testing a smaller workflow when the
+core response is sufficient. Optional parser metadata is omitted when its
+meaning is unsupported, rather than filled from an unrelated numeric pair or
+other matching shape. The runtime does not choose which requests or fields matter.
+Compiler evidence keeps the selected observation in its existing fixture files.
+An optional `api-research-history.json` indexes other observation IDs listed in
+that tool's research handoff, with relative paths to each available retained
+result and ordered response array. Bodies remain separate files, not inline
+prompt content. Missing bodies have no path and are not replaced by the selected
+result. Unlisted files are not copied. Agents match IDs to the complete research
+metadata and choose which earlier calls apply to the current plan; failed and
+changed-request observations are not automatically accepted parser fixtures.
+Before live validation, compilers test the complete supplied research response
+as well as relevant recording examples. They preserve response framing and
+determine which envelopes contain metadata, records, or updates; a successful
+parse of the older recording does not establish the current response shape.
+A small framed-protocol parser test must expose discarding records after an empty
+or metadata-only envelope. The agent derives valid framing and record-combination
+expectations from evidence; the runtime does not prescribe a first/last-frame or
+concatenation rule.
+When a failed CDP call triggers the existing browser inspection, its bounded URL,
+title and visible text are retained as `pageDiagnostic`, even outside teaching.
+It omits cookies, replaces known typed credentials, and takes at most three
+seconds within the caller deadline. Failed or unavailable inspection preserves
+the original failure. Later failed fallback rungs preserve the most recent inspected
+page, and MCP errors identify it as possibly preceding fallback. Successful results
+do not inherit failure evidence. Research observations, master repair feedback and
+auditors receive these facts as page evidence, never as the requested API response
+or a successful result. Auditors investigate missing captures and state uncertainty
+rather than automatically attributing every timeout to infrastructure. Agents choose
+any revised request strategy. Capture timeout messages also summarize the last
+12 observed responses that started after the navigation boundary: endpoint
+(origin/path, at most 240 characters with truncation flagged), method, CDP resource
+type, status and whether each response belongs to the known navigation scope.
+Counts report omitted responses and matching request starts. Query values,
+userinfo, fragments, headers, bodies and non-HTTP URL contents are excluded.
+This diagnostic is not an alternate API result or an automatic matcher revision;
+an absent entry in the bounded list does not prove absent traffic. Parser guidance
+also distinguishes unsupported missing fields from evidenced protocol defaults,
+with a focused omission case in existing parser tests.
+
+Research and the first planned live case distinguish parameter influence from
+the advertised meaning. For a range, changing its width can reveal whether
+returned records honor the bounds or only move a fixed result region. Agents
+choose that contrast and narrow or repair unsupported contracts; the runtime
+does not interpret domain-specific bounds.
+
+
+The compile/test CDP pool counts active calls before arming its idle cleanup.
+A completed sibling cannot schedule teardown of another call's active browser.
+Calls using caller-owned pools do not arm global cleanup. Each idle callback
+also checks the session identity before eviction. This changes lifecycle only;
+tool/bootstrap keys and separate execution-rung state remain unchanged.
+
+
+Generated baseline and dependency API checks receive a child cancellation signal
+bounded by the remaining shared teach deadline. They use the same host-side
+invocation guard as playbook checks: cancellation reaches the backend ladder,
+late results are rejected, and an uncooperative runner cannot hold the controller
+past the bounded browser-cleanup period. An already exhausted budget prevents a
+new API invocation. This guard does not choose backends, inputs, or repair strategy.
+
+
+Emitted workflow wrappers forward the caller's signal, prepared-request observer,
+and response observer to executeWorkflow, matching the native adapter. Ordinary
+fetch execution combines that signal with the per-request timeout and keeps it
+active through response reading. Already cancelled calls do not send requests;
+cancelled calls return a cancellation error instead of a timeout diagnosis or a
+late successful response. Browser transport cancellation remains owned by the
+backend ladder. Prepared-request observations are raw host-only diagnostics;
+response observations retain the existing bounded/redacted representation.
+Compiler parser examples and guidance distinguish a structurally valid empty
+collection from missing or unsupported result data. Agents establish protocol
+meaning and handle framing from evidence; there is no runtime envelope classifier.
+
+
+Semantic output repair feedback retains the expected type when schema validation
+finds an omitted required field. The same exact field path and original response
+return to the retained agent, alongside the current validation context. This is
+factual schema information, not coercion: strings do not become proof lists and
+invalid output still fails validation. Compact required/optional field lists come
+from the affected schema objects. Newly exposed errors return to the same role
+under the shared deadline, rather than exhausting a single repair allowance. An
+identical rejected response/error pair (including a cycle back to an earlier pair)
+stops repair. The last accepted plan remains authoritative; invalid replacements
+never execute. Retry events report the actual attempt number.
+
+
+### Recording-backed verification and refinement
+
+The focused planner chooses a small fixed set of recording examples. Master-directed research follow-ups reuse that set too; a missing contrast limits the claimed contract instead of authorizing invented live challenges. A verification case may carry `recordedCall.requestSeqs`, the exact ordered raw response chain, and `freshnessChanges`, describing only necessary date/state changes for its paired live call. This is distinct from broad evidence provenance. Multiple explicit recording fixtures are allowed; legacy replay diagnostic plans remain readable.
+
+The host executes all selected live cases, stores complete outputs and response chains under the draft's `.live-checks/`, and checks parser output against recorded responses offline. Each explicitly selected live case supplies only replay fixtures with the same ordered `recordedCall.requestSeqs`, so unrelated case bodies are not repeatedly parsed or reviewed. All selected live cases still run; an unbound chain invocation retains the full recorded evidence set for semantic comparison. An independent evidence reader sees raw responses before parser output, establishes source-cited expectations, then evaluates outputs in a separate conversation. Raw-only completion supplies expectations and comparability without claiming a parser verdict. Explicit evidence gaps remain unverified. Citation validation accepts literal substrings of each original response string as well as the serialized preview, avoiding an extra JSON-escaping requirement; invented or wrong-source quotations remain invalid. Its inspections only read existing bytes, are bounded to five minutes and six turns per phase, and make no network calls. A pure-data JavaScript projection can inspect an entire saved response with a one-second CPU bound, returning compact counts/identities without filesystem, network, or parser access. Expectations and failed reports persist in `.recording-verification/` and travel with same-run repair drafts. Unavailable or insufficient evidence is not a pass. Focused planning receives the available response-body sequences and repairs references to missing bodies before compilation. Same-run research boundary refreshes retain the full private observation history and the agent-selected recording inspection IDs even without a previous handoff. Follow-ups reconstruct that inspected evidence for downstream planning. Proven and partial handoffs forward their bounded observation history to the master; old-candidate observations cannot prove a changed request. Declared chain checks precede publication.
+
+Research and master guidance distinguish coverage limits from unsupported mappings. Recorded field meaning, actual input use across coupled request state, and returned records or independent effective settings can support a reusable input without another recorded contrast. Encoding alone, echoes, ambiguous values, and demonstrated no-ops remain insufficient. A working method may require reshaping public inputs; narrowing does not mean replacing grounded inputs with a table of recorded literals. MVP mode selection should start with comparable captured response bodies.
+
+Research may batch up to three agent-selected recording-backed inputs for one request candidate. Calls remain sequential and paced, with an observation for each. A caller-owned browser pool survives researcher thinking time, closes on exit/cancellation, and is discarded on changed authentication/setup context. Tools and execution rungs remain separate. Fetch-bootstrap caches minted snapshots under the tool/rung directory plus a hash of the rendered bootstrap URL (or resolved base URL). Repeated URL contexts reuse their snapshot; changed contexts mint or seed separately. Old cache files remain untouched. Capture timeout summaries expose per-response URL-substring, method, and resource-type predicate results, separately from navigation scope; omitted predicates are null. These facts do not select a different response or weaken the matcher. Cold-start sleeps and readiness behavior are unchanged. Navigation page URL, selector, and cookie predicates run before actions; `resultSelector` runs afterward. A failed initial predicate reports the pending action count so agents can distinguish an unstarted interaction from a failed click. Research schema diagnostics include the expected site id and exact request-transform module field/path; accepted-output and proof-binding rules are unchanged.
+
+Prepared-request research diagnostics reuse the bounded body decoder/comparator
+to compare the cited recording (left) with the prepared body (right). Optional
+`bodyStructureComparison` reports paths, types, lengths, encodings and value-change
+locations without scalar values. It exposes later structural differences even
+when an earlier dynamic value accounts for the first differing byte. Unsupported
+or incomplete decoding omits this comparison; comparison limits remain explicit.
+These are advisory construction facts, not wire-equivalence or semantic proof.
+Agents decide which differences are intentional and how to repair the request.
+
+`refine` stages installed tools in a separate IMPRINT_HOME and lets an agent select the target and necessary existing dependencies. It does not enter discovery or seed a fresh teach. Publication follows independent recording/live verification and a strict staged audit, checks for concurrent original-artifact changes, and keeps recoverable backups. See refinement.md for current limits.
+
+Per-request research evidence is written immediately after reading each body,
+before cancellation checks, status handling, captures or parsing. Every entry has
+an execution attempt ID, backend, request index, optional recording sequence and
+read timestamp. A body-read failure records unavailable-body metadata. Known login
+values are redacted before retention. `responses.jsonl` and immutable body files
+survive even when an invocation never reaches its final research observation.
+`inspect_result` accepts an observation-bound `evidenceRef` for bounded reads;
+unknown references and out-of-range offsets are rejected. Failed observations
+cannot prove a candidate. Compiler history copies only explicitly listed bodies.
+The existing completed-chain callback remains compatible. Evidence-hook failures
+cannot change tool execution; research reports failed persistence explicitly.
+
+
+Research response inspection shares the verifier's pure-data projection helper.
+An `inspect_result` query can supply a function over the full saved text, with
+a one-second CPU limit and no filesystem/network/parser access. The response
+keeps at most 2000 output characters, labels the projection and its full output
+size, and returns errors to the retained researcher. Failed response bodies use
+the same observation/evidence-reference validation. Inspections do not change
+test outcomes, candidate hashes, or proof bindings. Raw excerpt reads remain
+compatible; projection reads omit search and nonzero offsets.
+
+Native draft work no longer holds the first research pass open. Completed handoffs
+reach master review while compatible drafts finish under provider-owned admission.
+All started drafts settle before final planning reuses or replaces their artifacts,
+including when master review fails. Non-native providers retain their existing
+four-worker path. This does not publish drafts early or weaken producer ordering.
+
+
+### Persistent native research passes
+
+A native researcher receives one `assignment_tools` task for a complete research
+pass. Its `respond` call supplies the existing JSON action and receives the next
+observation, schema repair, shared-memory result or requested evidence directly.
+Large inputs reuse the bridge's explicit paging through `read_context`. The parent
+routes the pass once instead of routing each test and inspection. Genuine master
+follow-ups reuse the same child and start another pass.
+
+The adapter implements the existing analyzer interface; the research executor,
+validators, exact observation bindings and shared-findings exchange are unchanged.
+A pass-local step number rejects delayed duplicates and simultaneous responses.
+Host completion settles the outstanding tool call before child acknowledgement.
+Early acknowledgement cannot supply proof, and cancellation settles owned work.
+Per-step inputs, outputs and timestamps remain in private `native-research-*.jsonl`
+files; provider usage remains accounted once through the native family. No new
+scheduler, provider policy or site-specific interpretation is introduced.
+
+
+### Independent research execution
+
+Each research pass already serializes its own actions and owns its browser pool.
+Independent tools no longer hold a shared site file lock during research calls.
+The existing process-local origin pacing reserves a distinct start before waiting;
+slow requests may overlap without causing all queued starts to wake together.
+Pacing waits honor cancellation and leave cancelled slots unused. Default spacing
+and the explicit zero-spacing setting are unchanged. This is invocation pacing,
+not a global or cross-process request limit; fallback rungs stay inside an invocation.
+Integration verification and authentication-refresh file locks remain unchanged.
+
+Flights 18 confirmed that the old polling lock could starve one researcher for ten
+minutes and terminate the whole teach. Synthetic regressions fail before this
+correction and pass afterward for sibling overlap, distinct reservations and prompt
+cancellation. Fresh-teach reliability and resource use still require measurement.
+
+
+### Shared native role channel
+
+`native-agent-pass.ts` provides one request/response channel for researchers and
+semantic roles. Schema repair and shared-memory queries stay within that assignment
+and return directly to its retained child. Research wraps its complete action loop;
+other roles wrap their existing validation loop. An injected analyzer bypasses the
+wrapper, so research does not recursively create assignments and synthetic tests
+retain their injected execution. Initial input and later frames use the same bounded
+`read_context` mechanism. Complete private frames remain in pass JSONL files.
+
+The host submits each accepted native dependency wave directly and drains all
+started work; Codex owns child admission. Non-native providers keep the existing
+bounded executor. The lightweight routing agent remains separate from the semantic
+master so dispatch can continue during master reasoning. Reusable early drafts and
+exact proof bindings remain. Repeated premature root finals resume the same thread
+under the existing deadline; repeated text alone is not a failure when work progresses.
+Assignment creation/completion log failures settle callers, and owned family and
+caller cancellation signals are composed. Cleanup telemetry cannot override the
+primary result. These changes consolidate coordination, not semantic verification.
+
+Callable research producers use the same existing boundary-coverage check as
+planning after compatible recording-scope changes. The retained result must match
+the proven handoff's exact candidate and observation; the original hashes/history
+are preserved. Consumer research executes that producer again for fresh values.
+A sibling summary or compatible endpoint alone never becomes execution proof.

@@ -134,6 +134,102 @@ describe('trace error diagnostics', () => {
     expect(sanitizeTraceErrorMessage('abcdef', 4)).toBe('abcd\n...[truncated 2 chars]');
     expect(sanitizeTraceErrorMessage('abcdef', 0)).toBe('...[truncated 6 chars]');
   });
+
+  it('does not let an unreachable collector change command success or failure', async () => {
+    const tracingUrl = new URL('../src/imprint/tracing.ts', import.meta.url).href;
+    const run = async (mode: 'success' | 'failure') => {
+      const env = { ...process.env, PHOENIX_HOST: undefined };
+      Object.assign(env, {
+        IMPRINT_TRACE: '1',
+        IMPRINT_TRACE_BATCH: '1',
+        PHOENIX_COLLECTOR_ENDPOINT: 'http://127.0.0.1:1',
+      });
+      const script = `
+        import { shutdownTracing, traced } from ${JSON.stringify(tracingUrl)};
+        const mode = ${JSON.stringify(mode)};
+        try {
+          await traced('trace-shutdown-fixture', 'CHAIN', {}, async () => {
+            if (mode === 'failure') throw new Error('APPLICATION_FAILURE');
+          });
+          await shutdownTracing();
+          console.log('COMMAND_SUCCESS');
+        } catch (error) {
+          console.error('COMMAND_FAILURE:', error.message);
+          await shutdownTracing();
+          process.exitCode = 23;
+        }
+      `;
+      const child = Bun.spawn([process.execPath, '-e', script], {
+        env,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      });
+      const [exitCode, stdout, stderr] = await Promise.all([
+        child.exited,
+        new Response(child.stdout).text(),
+        new Response(child.stderr).text(),
+      ]);
+      return { exitCode, stdout, stderr };
+    };
+
+    const success = await run('success');
+    expect(success.exitCode).toBe(0);
+    expect(success.stdout).toContain('COMMAND_SUCCESS');
+    expect(success.stderr).toContain(
+      'warning: tracing export failed; command result is unaffected',
+    );
+    expect(success.stderr).not.toContain('error: ECONNREFUSED');
+
+    const failure = await run('failure');
+    expect(failure.exitCode).toBe(23);
+    expect(failure.stderr).toContain('COMMAND_FAILURE: APPLICATION_FAILURE');
+    expect(failure.stderr).toContain(
+      'warning: tracing export failed; command result is unaffected',
+    );
+    expect(failure.stderr).not.toContain('error: ECONNREFUSED');
+  });
+
+  it('runs application work when tracing initialization fails', async () => {
+    const tracingUrl = new URL('../src/imprint/tracing.ts', import.meta.url).href;
+    const env = { ...process.env, IMPRINT_TRACE: '1' };
+    const script = `
+      import { mock } from 'bun:test';
+      const actual = await import('@arizeai/phoenix-otel');
+      mock.module('@arizeai/phoenix-otel', () => ({
+        ...actual,
+        register() { throw new Error('REGISTER_FAILURE'); },
+      }));
+      const { shutdownTracing, traced } = await import(${JSON.stringify(`${tracingUrl}?register-failure`)});
+      await traced('trace-init-success', 'CHAIN', {}, async () => {
+        console.log('SUCCESS_WORK_RAN');
+      });
+      try {
+        await traced('trace-init-failure', 'CHAIN', {}, async () => {
+          throw new Error('APPLICATION_FAILURE');
+        });
+      } catch (error) {
+        console.error('COMMAND_FAILURE:', error.message);
+        process.exitCode = 23;
+      }
+      await shutdownTracing();
+    `;
+    const child = Bun.spawn([process.execPath, '-e', script], {
+      env,
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [exitCode, stdout, stderr] = await Promise.all([
+      child.exited,
+      new Response(child.stdout).text(),
+      new Response(child.stderr).text(),
+    ]);
+
+    expect(exitCode).toBe(23);
+    expect(stdout).toContain('SUCCESS_WORK_RAN');
+    expect(stderr).toContain('warning: tracing initialization failed; tracing is disabled');
+    expect(stderr).toContain('REGISTER_FAILURE');
+    expect(stderr).toContain('COMMAND_FAILURE: APPLICATION_FAILURE');
+  });
 });
 
 describe('LLM trace usage attributes', () => {

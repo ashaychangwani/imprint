@@ -10,6 +10,11 @@ import type { Anthropic } from '@anthropic-ai/sdk';
 import type { AgentTool } from '../src/imprint/agent.ts';
 import { doneTool, giveUpTool, runAgentLoop } from '../src/imprint/agent.ts';
 import type { ProviderName, ToolUseProvider } from '../src/imprint/llm.ts';
+import {
+  ProviderDeadlineError,
+  ProviderReportedError,
+  ProviderUnavailableError,
+} from '../src/imprint/provider-retry.ts';
 
 // ─── Mock Provider ───────────────────────────────────────────────────────────
 
@@ -360,21 +365,21 @@ describe('runAgentLoop — termination', () => {
     expect(result.giveUpDetail).toBe('tried A, B, C');
   });
 
-  it('returns outcome: timeout before making any LLM call if deadline already passed', async () => {
+  it('throws provider-unavailable before any LLM call if deadline already passed', async () => {
     const llm = new MockProvider([
       // Should never be called
       assistantToolUse([{ name: 'done', input: { summary: 'should not reach' } }]),
     ]);
 
-    const result = await runAgentLoop({
-      systemPrompt: 'test',
-      initialUserMessage: 'start',
-      tools: [doneTool(), giveUpTool()],
-      deadlineMs: Date.now() - 1000, // already expired
-      llm: llm as ToolUseProvider,
-    });
-
-    expect(result.outcome).toBe('timeout');
+    await expect(
+      runAgentLoop({
+        systemPrompt: 'test',
+        initialUserMessage: 'start',
+        tools: [doneTool(), giveUpTool()],
+        deadlineMs: Date.now() - 1000,
+        llm: llm as ToolUseProvider,
+      }),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
     expect(llm.callCount).toBe(0);
   });
 
@@ -401,26 +406,155 @@ describe('runAgentLoop — termination', () => {
     expect(llm.callCount).toBe(1);
   });
 
-  it('times out when onDeadlineReached returns null', async () => {
+  it('keeps a capacity-interrupted tool-use turn alive across one deadline extension', async () => {
+    const deadlineMs = Date.now() + 15;
+    let calls = 0;
+    let extensionCalls = 0;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async () => {
+        calls++;
+        if (calls === 1) {
+          await new Promise((resolve) => setTimeout(resolve, 20));
+          throw new ProviderReportedError('fixture', { statuses: [529] });
+        }
+        return assistantToolUse([{ name: 'done', input: { summary: 'recovered' } }]);
+      },
+    };
+
+    const result = await runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs,
+      llm,
+      onDeadlineReached: async () => {
+        extensionCalls++;
+        return 5_000;
+      },
+    });
+
+    expect(result.outcome).toBe('done');
+    expect(calls).toBe(2);
+    expect(extensionCalls).toBe(1);
+  });
+
+  it('cancels a capacity backoff through the agent-loop signal', async () => {
+    const controller = new AbortController();
+    let calls = 0;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async () => {
+        calls++;
+        throw new ProviderReportedError('fixture', { statuses: [429] });
+      },
+    };
+    setTimeout(() => controller.abort(new Error('cancelled by user')), 5);
+
+    await expect(
+      runAgentLoop({
+        systemPrompt: 'test',
+        initialUserMessage: 'start',
+        tools: [doneTool(), giveUpTool()],
+        deadlineMs: Date.now() + 60_000,
+        llm,
+        signal: controller.signal,
+      }),
+    ).rejects.toThrow('cancelled by user');
+    expect(calls).toBe(1);
+  });
+
+  it('passes cancellation into an active ToolUse request so it settles directly', async () => {
+    const controller = new AbortController();
+    let receivedSignal: AbortSignal | undefined;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async (opts) => {
+        receivedSignal = opts.signal;
+        return await new Promise((_, reject) => {
+          opts.signal?.addEventListener(
+            'abort',
+            () => reject(opts.signal?.reason ?? new Error('aborted')),
+            { once: true },
+          );
+        });
+      },
+    };
+    setTimeout(() => controller.abort(new Error('active call cancelled')), 5);
+
+    const running = runAgentLoop({
+      systemPrompt: 'test',
+      initialUserMessage: 'start',
+      tools: [doneTool(), giveUpTool()],
+      deadlineMs: Date.now() + 60_000,
+      llm,
+      signal: controller.signal,
+    });
+
+    await expect(running).rejects.toThrow('active call cancelled');
+    expect(receivedSignal).not.toBe(controller.signal);
+    expect(receivedSignal?.aborted).toBe(true);
+    expect(receivedSignal?.reason).toBe(controller.signal.reason);
+  });
+
+  it('aborts an active ToolUse request with the typed agent deadline', async () => {
+    let activeSignal: AbortSignal | undefined;
+    const llm: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('not used');
+      },
+      messageWithTools: async (opts) => {
+        activeSignal = opts.signal;
+        return await new Promise((_, reject) => {
+          opts.signal?.addEventListener('abort', () => reject(opts.signal?.reason), { once: true });
+        });
+      },
+    };
+
+    await expect(
+      runAgentLoop({
+        systemPrompt: 'test',
+        initialUserMessage: 'start',
+        tools: [doneTool(), giveUpTool()],
+        deadlineMs: Date.now() + 10,
+        llm,
+      }),
+    ).rejects.toBeInstanceOf(ProviderDeadlineError);
+
+    expect(activeSignal?.aborted).toBe(true);
+  });
+
+  it('throws provider-unavailable when deadline extension is declined', async () => {
     const llm = new MockProvider([
       assistantToolUse([{ name: 'done', input: { summary: 'should not reach' } }]),
     ]);
 
     let callbackCalled = false;
-    const result = await runAgentLoop({
-      systemPrompt: 'test',
-      initialUserMessage: 'start',
-      tools: [doneTool(), giveUpTool()],
-      deadlineMs: Date.now() - 1000, // already expired
-      llm: llm as ToolUseProvider,
-      onDeadlineReached: async () => {
-        callbackCalled = true;
-        return null;
-      },
-    });
+    await expect(
+      runAgentLoop({
+        systemPrompt: 'test',
+        initialUserMessage: 'start',
+        tools: [doneTool(), giveUpTool()],
+        deadlineMs: Date.now() - 1000,
+        llm: llm as ToolUseProvider,
+        onDeadlineReached: async () => {
+          callbackCalled = true;
+          return null;
+        },
+      }),
+    ).rejects.toBeInstanceOf(ProviderUnavailableError);
 
     expect(callbackCalled).toBe(true);
-    expect(result.outcome).toBe('timeout');
     expect(llm.callCount).toBe(0);
   });
 

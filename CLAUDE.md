@@ -51,11 +51,61 @@ After website changes, run `bun install` only from `web/` if dependencies are mi
 
 ## Teach and compile-agent guidance
 
-When improving `imprint teach`, prefer giving the planner and compile agents better evidence over adding broad deterministic classifiers. For new ambiguity, first ask what a thinking compile agent could decide at compile time with the right context, then expose that context through the build plan, prompts, diffs, browser-minted state, and targeted tests. Ambiguous dynamic values should be handled by LLM reasoning backed by concrete artifacts: session diffs, producer/consumer traces, recorded requests and responses, browser-minted state, and targeted tests the compile agent can run.
+When improving `imprint teach`, give each focused agent the smallest useful
+evidence package and a complete prompt. Agents decide which tools exist, which
+parameters they expose, which requests belong together, how response-produced
+state is used, whether API or browser execution fits, and how authentication
+should work. The master may revise those decisions at any stage.
 
-Use deterministic code for narrow, contract-level invariants only, such as "a producer-sourced token parameter must not default to one recorded opaque value" or "a declared browser_state capture must reproduce the value sent by the recorded request." Do not encode site-specific conclusions as universal rules. If the right choice depends on whether a token is static app metadata, browser/CDP-supplied state, generated per call, auth, or a producer-tool output, expose the evidence in the build plan and let the planner/compile agent decide and verify it.
+The runtime owns only small mechanical jobs: ordinary recording redaction,
+basic file and schema validation, exact request replay and execution,
+cancellation and deadlines, provider retry, and factual check history. Do not
+grow production-grade security machinery around this local development tool.
+It may decode nested representations and report paths, lengths, changes,
+matches, and mismatches. It must not turn those facts into universal labels
+such as browser-minted, server-derived, authentication state, or user input,
+and it must not add site-specific strategy rules.
 
-For browser-minted tokens, make the compile path cheaper to reason about: surface where the value appeared, what changed across the diff, whether a response/header/body/cookie producer exists, and what small probe would prove the classification. Avoid trying to pre-classify every possible web edge case in runtime code. If repeated re-teaches reveal tiny edge cases, update the evidence contract or compile-agent test harness instead of stacking site-shaped runtime rules.
+Teaching covers the complete discovered operation set. There is no primary
+tool, single-tool mode, or partial selection. The master decides the build
+waves and places dependencies before their consumers; the runtime executes
+that complete schedule without choosing a subset.
+
+Prompts should prefer compatible API execution over browser playbooks, with the
+playbook as the final fallback. This is guidance for the agents, not a runtime
+classifier. When a teach exposes ambiguity or a new failure, improve the
+evidence, prompt, or focused test harness before considering another runtime
+rule. After any code or prompt change, validate with a fresh teach run rather
+than resuming the older run.
+
+### Evidence and task handoff
+
+Keep strategic decisions with agents and mechanical execution in the runtime.
+A returned value's location or equality with an input does not prove its
+meaning. Where plausible meanings coincide, ask for a small distinguishing
+comparison; reuse decisive evidence instead of requiring exhaustive tests.
+Keep an MVP narrow rather than advertising guessed parameters or output fields.
+
+Separate agent-reporting errors from API failures. Preserve actual observations
+and return a repairable advisory handoff to the master; do not silently accept
+invalid proof or discard unrelated successful work. Cancellation and provider
+failures retain their own handling.
+
+Teach completion proves only its selected baseline. Use an independent audit
+and fresh repeated teaches before claiming repeatability. Report actual graded
+counts and supported scope, not just an agent's prose or a percentage.
+
+For long work, keep `timeline.md` and checkpoint commits current. At handoff,
+record the branch, tested commit, unfinished validation, local evidence paths,
+and next command in a repo-scoped document. Stop task-owned monitors and
+processes when the user ends the task. Do not commit recordings, credentials,
+opaque live values, or private transcripts. See
+[`docs/teach-handoff-2026-09-07.md`](docs/teach-handoff-2026-09-07.md) for the
+current handoff and `.agents/skills/imprint-reteach-audit/SKILL.md` for validation.
+
+### Transient provider failures (retry policy)
+
+During `imprint teach`, treat provider capacity, overload, and temporary rate-limit failures as interruptions to the same compile—not as artifact failures. Retry with capped exponential backoff and jitter until the provider recovers, the user cancels, or the existing run deadline ends. Do not retry deterministic schema, authentication, authorization, or invalid-request failures. After a code or prompt change, start a fresh teach instead of resuming the failed pre-change run.
 
 ## CI/CD & releases
 

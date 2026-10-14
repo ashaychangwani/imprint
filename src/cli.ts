@@ -7,6 +7,7 @@ import { parseArgs } from 'node:util';
 import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
 import { isDebug } from './imprint/log.ts';
+import type { FreshTeachTerminalResult } from './imprint/master-teach-controller.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
 
@@ -40,43 +41,26 @@ export function parseDuration(dur: string): number | null {
   return num;
 }
 
-export type TeachSelectionMode =
-  | 'tool'
-  | 'primary'
-  | 'all-explicit'
-  | 'all-default'
-  | 'interactive-default-all';
+export function formatFreshTeachSummary(
+  result: Pick<FreshTeachTerminalResult, 'status' | 'readyTools' | 'nonReadyTools' | 'runRoot'>,
+): string {
+  const nonReadyLabel =
+    result.status === 'cancelled' || result.status === 'provider_unavailable'
+      ? 'unfinished'
+      : result.status === 'partial'
+        ? 'unresolved'
+        : result.status === 'blocked'
+          ? 'blocked'
+          : result.status === 'failed'
+            ? 'not ready'
+            : 'failed';
+  return `[imprint] teach ${result.status}: ${result.readyTools} ready, ${result.nonReadyTools} ${nonReadyLabel} — ${result.runRoot}`;
+}
 
-/** Pure CLI selection-mode resolver shared by validation and telemetry. */
-export function resolveTeachSelectionMode(opts: {
-  tool?: string;
-  primaryTool?: boolean;
-  allTools?: boolean;
-  noInteractive?: boolean;
-}): { mode: TeachSelectionMode; error?: string } {
-  if (opts.tool && opts.allTools) {
-    return { mode: 'tool', error: 'error: --tool cannot be combined with --all-tools' };
-  }
-  if (opts.tool && opts.primaryTool) {
-    return { mode: 'tool', error: 'error: --tool cannot be combined with --primary-tool' };
-  }
-  if (opts.allTools && opts.primaryTool) {
-    return {
-      mode: 'primary',
-      error: 'error: --all-tools cannot be combined with --primary-tool',
-    };
-  }
-  return {
-    mode: opts.tool
-      ? 'tool'
-      : opts.primaryTool
-        ? 'primary'
-        : opts.allTools
-          ? 'all-explicit'
-          : opts.noInteractive
-            ? 'all-default'
-            : 'interactive-default-all',
-  };
+export function freshTeachExitCode(status: FreshTeachTerminalResult['status']): number {
+  if (status === 'completed') return 0;
+  if (status === 'cancelled') return 130;
+  return 1;
 }
 
 const HELP = `imprint v${VERSION} — teach an AI agent to use any website. Once.
@@ -88,7 +72,7 @@ USAGE
 CAPTURE
   record <site>            Drive a workflow in Chromium, capture session.
   teach <site>             Record + compile + emit in one flow. <site> is a label you pick.
-  redact <session.json>    Scrub credentials + PII before LLM analysis.
+  redact <session.json>    Replace known login credentials only; not share-safe.
 
 COMPILE
   generate <session>       Session → workflow.json (API replay).
@@ -149,72 +133,60 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   teach: {
     summary:
-      'Record a workflow, compile both artifacts, emit the tool, and connect to your AI platform — all in one interactive flow. Supports resuming incomplete runs and multiple workflows per site.',
+      'Record or load a session, then let the master discover, plan, compile, verify, and emit every supported tool.',
     usage: [
-      'imprint teach <site> [--url <url>] [--from-session <path>] [--persist-profile] [--no-interactive] [--primary-tool | --all-tools] [--tool <toolName>] [--provider <name>] [--model <name>] [--timeout <duration>] [--keep-test] [--skip-replay] [--from-step <step>] [--to-step <step>] [--only <step>]',
+      'imprint teach <site> [--url <url>] [--from-session <path> ...] [--from-candidates <run-id>] [--guidance <text>] [--persist-profile] [--no-interactive] [--agent codex] [--provider <name>] [--model <name>] [--timeout <duration> | --unbounded] [--keep-test]',
     ],
     flags: [
       { name: '--url <url>', description: 'Starting URL (else about:blank).' },
       {
         name: '--from-session <path>',
-        description: 'Skip recording; use an existing session file to compile from.',
+        description:
+          'Use one exact recording. Repeat the flag to explicitly combine selected recordings. Without it, the newest raw recording is used.',
+      },
+      {
+        name: '--from-candidates <run-id>',
+        description:
+          'Reuse only candidate selection from an earlier run of this same recording; planning and compilation start fresh.',
+      },
+      {
+        name: '--guidance <text>',
+        description:
+          'Give the master explicit human scope or priorities. This guides agent decisions and is not recording evidence.',
       },
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description: 'Run without prompts; compile all detected tools by default.',
+        description: 'Run without prompts. Every tool in the master plan is still built.',
       },
       {
-        name: '--all-tools',
-        description: 'Explicitly compile all detected tools (the default).',
-      },
-      {
-        name: '--primary-tool',
-        description: 'Compile only the primary detected tool and its upstream dependencies.',
-      },
-      {
-        name: '--tool <toolName>',
+        name: '--agent codex',
         description:
-          'With --from-step/--only, resume exactly one persisted tool from the retained recording.',
+          'Select the master-agent flow explicitly and default every teaching agent to codex-cli. This never narrows the tool set; --provider still overrides it.',
       },
       {
         name: '--provider <name>',
         description:
-          'Compile-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
+          'Teaching-agent provider: anthropic-api, claude-cli, codex-cli (auto-detected if omitted).',
       },
       {
         name: '--model <name>',
         description:
-          'Override the compile-agent model (e.g. claude-sonnet-4-6). Default is prompted interactively or auto-selected per provider.',
+          'Override the teaching-agent model (e.g. claude-sonnet-4-6). Otherwise the provider default is used.',
       },
       {
         name: '--timeout <duration>',
-        description: 'Per-tool compile timeout. Accepts 20m, 1h, 300s, or plain ms. Default 20m.',
+        description: 'Foreground teach deadline. Accepts 20m, 12h, 300s, or plain ms. Default 12h.',
+      },
+      {
+        name: '--unbounded',
+        description:
+          'Run teach without a whole-run deadline; individual action timeouts and cancellation remain.',
       },
       {
         name: '--keep-test',
         description:
           'Retain the agent-generated parser.test.ts and request.test.ts after compile (debug). Default deletes them; parser tests read the gitignored redacted session via $IMPRINT_SESSION_PATH and are not portable. Also settable via IMPRINT_KEEP_TEST=1.',
-      },
-      {
-        name: '--skip-replay',
-        description:
-          "Skip the replay-and-diff stage. Faster, but the compile agent won't be able to distinguish browser-minted values from constants, which may reduce workflow accuracy. By default, the preceding effect-aware triage suppresses replay entirely when the recording contains an irreversible request.",
-      },
-      {
-        name: '--from-step <step>',
-        description:
-          'Resume a prior run starting at <step> (record, redact, triage, replay-and-diff, detect-candidates, plan-prereqs, generate, compile-playbook, emit, register). Only allowed if a prior run reached/crossed that point — earlier phase outputs are reused. Not combinable with --from-session.',
-      },
-      {
-        name: '--to-step <step>',
-        description:
-          'Stop after <step> instead of running to the end. Combine with --from-step (or --from-session) to run a window of phases. Note: the per-tool compile (generate→compile-playbook→emit) is atomic, so a --to-step inside it runs the whole compile and stops before register.',
-      },
-      {
-        name: '--only <step>',
-        description:
-          'Run a single phase: shorthand for --from-step <step> --to-step <step> (not combinable with either). For a compile phase the whole atomic compile unit runs (see --to-step).',
       },
     ],
     example: 'imprint teach google-flights --url https://flights.google.com',
@@ -235,7 +207,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     example: 'imprint check ~/.imprint/acmecorp/sessions/2026-05-03T22-00-00Z.json',
   },
   redact: {
-    summary: 'Scrub credentials + PII; write <session>.redacted.json.',
+    summary: 'Replace known login values; other sensitive data remains in <session>.redacted.json.',
     usage: ['imprint redact <session.json> [--keep-header <name>]…'],
     flags: [
       {
@@ -245,6 +217,28 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       },
     ],
     example: 'imprint redact ~/.imprint/acmecorp/sessions/<ts>.json',
+  },
+  refine: {
+    summary: 'Repair or extend installed tools using a recording, with staged verification.',
+    usage: [
+      'imprint refine <site> --tool <name> --issue <text> [--from-session <path>] [--provider <name>] [--model <name>] [--timeout <duration>] [--json]',
+    ],
+    flags: [
+      { name: '--tool <name>', description: 'Installed tool to repair or extend (required).' },
+      { name: '--issue <text>', description: 'Defect or requested extension (required).' },
+      {
+        name: '--from-session <path>',
+        description: 'Recording evidence; otherwise use the newest retained recording.',
+      },
+      { name: '--provider <name>', description: 'codex-cli or claude-cli.' },
+      { name: '--model <name>', description: 'Override the selected provider model.' },
+      {
+        name: '--timeout <duration>',
+        description: 'Shared refinement and audit deadline (default 30m).',
+      },
+      { name: '--json', description: 'Print the result and evidence directory as JSON.' },
+    ],
+    example: 'imprint refine my-site --tool search --issue "Repair missing result entries"',
   },
   generate: {
     summary: 'LLM-compile a session into workflow.json (API replay artifact).',
@@ -466,9 +460,13 @@ export const VERB_HELP: Record<string, VerbHelp> = {
     summary:
       "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint.",
     usage: [
-      'imprint audit <site> [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
+      'imprint audit <site> [--strict] [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
     ],
     flags: [
+      {
+        name: '--strict',
+        description: 'Require zero broken calls or parameters and complete verified coverage.',
+      },
       {
         name: '--min-score <n>',
         description: 'Pass threshold as a percentage of gradeable invocations (default 95).',
@@ -739,14 +737,14 @@ async function main(argv: string[]): Promise<number> {
     case 'redact': {
       const sessionPath = requirePositional(argv, 'redact', 'a <session.json> argument');
       if (sessionPath === null) return 2;
-      const { values } = parseArgs({
+      parseArgs({
         args: argv.slice(2),
         options: { 'keep-header': { type: 'string', multiple: true } },
         allowPositionals: false,
       });
-      const { writeFileSync } = await import('node:fs');
       const { SessionSchema } = await import('./imprint/types.ts');
       const { redactSession } = await import('./imprint/redact.ts');
+      const { writePrivateFile } = await import('./imprint/private-file.ts');
       const { loadJsonFile } = await import('./imprint/load-json.ts');
       let session: ReturnType<typeof SessionSchema.parse>;
       try {
@@ -764,16 +762,10 @@ async function main(argv: string[]): Promise<number> {
         console.error(`error: ${err instanceof Error ? err.message : String(err)}`);
         return 2;
       }
-      const keepHeaders = values['keep-header'] ?? [];
-      // `imprint redact` produces a file to SHARE (bug reports, fixtures), so it
-      // applies the strongest scrub including sensitive headers — unlike the
-      // compile path, which keeps headers visible to the agent by default.
-      const { session: scrubbed, stats } = redactSession(session, {
-        keepHeaders,
-        redactSensitiveHeaders: true,
-      });
+      // --keep-header remains accepted for CLI compatibility; all headers are kept.
+      const { session: scrubbed, stats } = redactSession(session);
       const outPath = sessionPath.replace(/\.json$/, '.redacted.json');
-      writeFileSync(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`, 'utf8');
+      writePrivateFile(outPath, `${JSON.stringify(scrubbed, null, 2)}\n`);
       console.log(`[imprint] redacted → ${outPath}`);
       const freeformNote =
         stats.freeformRedactions > 0
@@ -782,9 +774,9 @@ async function main(argv: string[]): Promise<number> {
       console.log(
         `[imprint] ${stats.totalRedactions} value${stats.totalRedactions === 1 ? '' : 's'} replaced across ${stats.requestsRedacted} request${stats.requestsRedacted === 1 ? '' : 's'} and ${stats.cookiesRedacted} cookie${stats.cookiesRedacted === 1 ? '' : 's'}${freeformNote}`,
       );
-      if (keepHeaders.length > 0) {
-        console.log(`[imprint] kept (not redacted): ${keepHeaders.join(', ')}`);
-      }
+      console.log(
+        '[imprint] Only login credentials are replaced. Cookies, tokens and personal data remain; this file is not safe to share.',
+      );
       for (const w of stats.warnings) {
         console.log(`[imprint]   ⚠ ${w}`);
       }
@@ -1191,6 +1183,7 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(2),
         options: {
           'min-score': { type: 'string' },
+          strict: { type: 'boolean' },
           out: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
@@ -1244,6 +1237,7 @@ async function main(argv: string[]): Promise<number> {
           runAudit({
             site,
             minScore,
+            strict: values.strict,
             outPath,
             provider,
             model: values.model,
@@ -1443,6 +1437,58 @@ async function main(argv: string[]): Promise<number> {
       return 1;
     }
 
+    case 'refine': {
+      const site = requirePositional(argv, 'refine', 'a <site> argument');
+      if (site === null) return 2;
+      const { values } = parseArgs({
+        args: argv.slice(2),
+        options: {
+          tool: { type: 'string' },
+          issue: { type: 'string' },
+          'from-session': { type: 'string' },
+          provider: { type: 'string' },
+          model: { type: 'string' },
+          timeout: { type: 'string' },
+          json: { type: 'boolean' },
+        },
+        allowPositionals: false,
+      });
+      if (!values.tool || !values.issue?.trim()) {
+        console.error('error: refine requires --tool and --issue');
+        return 2;
+      }
+      const { detectTeachProvider } = await import('./imprint/llm.ts');
+      const provider = values.provider ?? detectTeachProvider();
+      if (provider !== 'codex-cli' && provider !== 'claude-cli') {
+        console.error(
+          'error: refine requires codex-cli or claude-cli for staged independent audit',
+        );
+        return 2;
+      }
+      const timeoutMs = values.timeout ? parseDuration(values.timeout) : undefined;
+      if (values.timeout && (timeoutMs === null || timeoutMs === undefined || timeoutMs <= 0)) {
+        console.error('error: invalid --timeout');
+        return 2;
+      }
+      const { runRefine } = await import('./imprint/refine.ts');
+      const result = await runRefine({
+        site,
+        tool: values.tool,
+        issue: values.issue,
+        fromSession: values['from-session'],
+        provider,
+        model: values.model,
+        timeoutMs: timeoutMs ?? undefined,
+        json: values.json,
+      });
+      console.log(
+        values.json
+          ? JSON.stringify(result)
+          : `[imprint] refine ${result.status}: ${result.reason ?? 'verified replacements installed'}\nEvidence: ${result.runRoot}`,
+      );
+      return result.status === 'completed' ? 0 : 1;
+    }
+
     case 'teach': {
       const rawSite = argv[1];
       let site: string | undefined;
@@ -1460,66 +1506,29 @@ async function main(argv: string[]): Promise<number> {
         args: argv.slice(rawSite ? 2 : 1),
         options: {
           url: { type: 'string' },
-          'from-session': { type: 'string' },
+          'from-session': { type: 'string', multiple: true },
+          'from-candidates': { type: 'string' },
+          guidance: { type: 'string' },
           'persist-profile': { type: 'boolean' },
           'no-interactive': { type: 'boolean' },
-          'all-tools': { type: 'boolean' },
-          'primary-tool': { type: 'boolean' },
-          tool: { type: 'string' },
+          agent: { type: 'string' },
           provider: { type: 'string' },
           model: { type: 'string' },
           timeout: { type: 'string' },
+          unbounded: { type: 'boolean' },
           'keep-test': { type: 'boolean' },
-          'skip-replay': { type: 'boolean' },
-          'from-step': { type: 'string' },
-          'to-step': { type: 'string' },
-          only: { type: 'string' },
         },
         allowPositionals: false,
       });
 
-      // ── Phase-window flags: run only specific steps of the teach chain ──
-      // `--only X` = `--from-step X --to-step X`. resolveTeachPhaseWindow validates
-      // step names against the canonical list and the flag combinations (ordering,
-      // mutual exclusion with --from-session, and --to-step ≥ redact when
-      // --from-session enters the chain at redact), returning the resolved window
-      // or the exact error message to print. Extracted for unit-testing.
-      const { resolveTeachPhaseWindow, validateToolScopedResumeStep } = await import(
-        './imprint/teach-state.ts'
-      );
-      const phaseWindow = resolveTeachPhaseWindow(values);
-      if ('error' in phaseWindow) {
-        console.error(phaseWindow.error);
-        return 2;
-      }
-      const fromStepArg = phaseWindow.fromStep;
-      const toStepArg = phaseWindow.toStep;
-
-      if (values.tool && !fromStepArg) {
-        console.error('error: --tool requires --from-step or --only');
-        return 2;
-      }
-      if (values.tool) {
-        const toolWindowError = validateToolScopedResumeStep(fromStepArg);
-        if (toolWindowError) {
-          console.error(toolWindowError);
-          return 2;
-        }
-      }
-      const selection = resolveTeachSelectionMode({
-        tool: values.tool,
-        primaryTool: values['primary-tool'],
-        allTools: values['all-tools'],
-        noInteractive: values['no-interactive'],
-      });
-      if (selection.error) {
-        console.error(selection.error);
+      if (values.agent && values.agent !== 'codex') {
+        console.error('error: --agent currently accepts only "codex"');
         return 2;
       }
 
-      if (!site && values['no-interactive']) {
+      if (!site) {
         console.error(
-          'error: `imprint teach` requires a <site> argument in --no-interactive mode.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
+          'error: `imprint teach` requires a <site> argument.\n  <site> is a label you choose — it names the output folder under ~/.imprint/.\n\n  example: imprint teach google-flights --url https://flights.google.com\n→ run `imprint teach --help` for usage.',
         );
         return 2;
       }
@@ -1535,6 +1544,10 @@ async function main(argv: string[]): Promise<number> {
       }
 
       let teachTimeoutMs: number | undefined;
+      if (values.unbounded && values.timeout) {
+        console.error('error: --unbounded and --timeout cannot be combined');
+        return 2;
+      }
       if (values.timeout) {
         teachTimeoutMs = parseDuration(values.timeout) ?? undefined;
         if (teachTimeoutMs === undefined) {
@@ -1548,51 +1561,57 @@ async function main(argv: string[]): Promise<number> {
       const ctrl = new AbortController();
       const onSigint = (): void => ctrl.abort();
       process.once('SIGINT', onSigint);
-      const teachSelectionMode = selection.mode;
 
       try {
         const { teach } = await import('./imprint/teach.ts');
-        await traced(
+        const result = await traced(
           'cli.teach',
           'AGENT',
           {
             'imprint.site': site,
             'imprint.url': values.url,
-            'imprint.from_session': values['from-session'],
-            'imprint.provider': values.provider ?? 'auto',
+            'imprint.from_session': values['from-session']?.join(','),
+            'imprint.from_candidates': values['from-candidates'],
+            'imprint.user_guidance': values.guidance,
+            'imprint.provider':
+              values.provider ?? (values.agent === 'codex' ? 'codex-cli' : 'auto'),
             'imprint.model': values.model ?? 'auto',
             'imprint.timeout_ms': teachTimeoutMs ?? 'default',
-            'imprint.all_tools':
-              teachSelectionMode === 'all-explicit' || teachSelectionMode === 'all-default',
-            'imprint.selection_mode': teachSelectionMode,
-            'imprint.primary_tool': values['primary-tool'] ?? false,
-            'imprint.tool': values.tool,
+            'imprint.unbounded': values.unbounded ?? false,
+            'imprint.agent': values.agent ?? 'master',
             'imprint.no_interactive': values['no-interactive'] ?? false,
-            'imprint.skip_replay': values['skip-replay'] ?? false,
           },
           () =>
             teach({
               site,
               url: values.url,
               fromSession: values['from-session'],
+              fromCandidates: values['from-candidates'],
+              userGuidance: values.guidance,
               persistProfile: values['persist-profile'],
               signal: ctrl.signal,
               noInteractive: values['no-interactive'],
               provider: values.provider as ProviderName | undefined,
               model: values.model,
               maxDurationMs: teachTimeoutMs,
+              unbounded: values.unbounded,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
-              primaryTool: values['primary-tool'],
-              tool: values.tool,
-              skipReplay: values['skip-replay'],
-              fromStep: fromStepArg,
-              toStep: toStepArg,
+              agent: values.agent === 'codex' ? 'codex' : undefined,
+              onProgress: (message) => console.error(`[imprint teach] ${message}`),
             }),
         );
+        const summary = formatFreshTeachSummary(result);
+        if (result.status === 'completed' || result.status === 'partial') {
+          console.log(summary);
+          console.log(`[imprint] ${result.message}`);
+        } else {
+          console.error(summary);
+          console.error(`[imprint] ${result.message}`);
+        }
+        return freshTeachExitCode(result.status);
       } finally {
         process.removeListener('SIGINT', onSigint);
       }
-      return 0;
     }
 
     case 'credential': {
@@ -1618,8 +1637,10 @@ async function main(argv: string[]): Promise<number> {
           'shared-context-json': { type: 'string' },
           'build-plan-path': { type: 'string' },
           'shared-modules-json': { type: 'string' },
+          'strategy-kind': { type: 'string' },
           'auth-plan-json': { type: 'string' },
           'revision-mode': { type: 'boolean' },
+          'verification-mode': { type: 'string' },
           provider: { type: 'string' },
           site: { type: 'string' },
           'shared-triage-json': { type: 'string' },
@@ -1641,6 +1662,7 @@ async function main(argv: string[]): Promise<number> {
         './imprint/build-plan.ts'
       );
       const { SharedTriageSelectionSchema } = await import('./imprint/triage-selection.ts');
+      const { CompileStrategyKindSchema } = await import('./imprint/compile-strategy.ts');
       const candidate = values['candidate-json']
         ? ToolCandidateSchema.parse(JSON.parse(values['candidate-json']))
         : undefined;
@@ -1656,6 +1678,18 @@ async function main(argv: string[]): Promise<number> {
       const sharedTriageSelection = values['shared-triage-json']
         ? SharedTriageSelectionSchema.parse(JSON.parse(values['shared-triage-json']))
         : undefined;
+      const strategyKind = values['strategy-kind']
+        ? CompileStrategyKindSchema.parse(values['strategy-kind'])
+        : undefined;
+      const verificationMode = values['verification-mode'];
+      if (
+        verificationMode !== undefined &&
+        verificationMode !== 'full' &&
+        verificationMode !== 'master_mvp'
+      ) {
+        console.error('error: __mcp-compile-server --verification-mode must be full or master_mvp');
+        return 2;
+      }
       await runCompileMcpServer({
         sessionPath: values['session-path'],
         toolDir,
@@ -1663,8 +1697,10 @@ async function main(argv: string[]): Promise<number> {
         sharedContext,
         buildPlanPath: values['build-plan-path'],
         sharedModules,
+        strategyKind,
         authToolPlan: authToolPlan ?? undefined,
         revisionMode: values['revision-mode'],
+        verificationMode,
         provider: values.provider as
           | 'anthropic-api'
           | 'claude-cli'
@@ -1836,6 +1872,10 @@ if (import.meta.main) {
       process.exit(code);
     })
     .catch(async (err) => {
+      if (err instanceof DOMException && err.name === 'AbortError') {
+        await shutdownTracing();
+        process.exit(130);
+      }
       console.error('imprint: fatal:', err instanceof Error ? err.message : String(err));
       if (isDebug()) {
         console.error(err);

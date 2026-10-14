@@ -54,6 +54,9 @@ export async function discoverTools(
 
     // Tool layout: <assetRoot>/<site>/<toolName>/index.ts
     for (const sub of readdirSync(dir)) {
+      // Teach promotion keeps recoverable, dot-prefixed snapshots beside the
+      // active tool. They are history, not additional MCP tools.
+      if (sub.startsWith('.')) continue;
       const subDir = pathResolve(dir, sub);
       try {
         if (!statSync(subDir).isDirectory()) continue;

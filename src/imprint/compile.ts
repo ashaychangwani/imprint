@@ -20,7 +20,10 @@ import { dirname, join as pathJoin } from 'node:path';
 import type { OnDeadlineReached } from './agent.ts';
 import { inferAppApiHosts } from './app-api-hosts.ts';
 import type { SharedModuleManifestEntry } from './build-plan.ts';
+import type { CompileVerificationMode, CompileVerificationSummary } from './compile-agent-types.ts';
 import { type CompileAgentProgress, compileAgent } from './compile-agent.ts';
+import type { CompilerResume } from './compile-provider-recovery.ts';
+import type { CompileStrategyKind } from './compile-strategy.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { type LLMOptions, extractJsonArray, extractJsonObject, resolveProvider } from './llm.ts';
@@ -28,10 +31,10 @@ import { loadJsonFile } from './load-json.ts';
 import { createLog } from './log.ts';
 import { imprintHomeDir, localSiteDir, localToolDir } from './paths.ts';
 import { parsePlaybook } from './playbook-parser.ts';
+import type { RunDeadlineRef } from './provider-retry.ts';
 import { redactSession } from './redact.ts';
 import { compactRequestContexts, requestContextDigest } from './request-context.ts';
 import { ensureImprintRuntimeLink } from './runtime-link.ts';
-import type { ClassifiedValue } from './session-diff.ts';
 import { isTelemetryRequest } from './telemetry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import { setSpanAttributes, traced } from './tracing.ts';
@@ -44,13 +47,11 @@ import {
   WorkflowSchema,
 } from './types.ts';
 
-export type { CompileAgentProgress } from './compile-agent.ts';
-
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const log = createLog('compile');
 
 interface CompileOptions {
-  /** Path to session.json or session.redacted.json */
+  /** Path to session.json or session.redacted.json. */
   sessionPath: string;
   /** Where to write the artifact. Defaults to the generated tool directory. */
   outPath?: string;
@@ -71,6 +72,10 @@ interface CompileOptions {
    *  uses this instead of re-inferring the public parameter surface from the
    *  recording candidate. */
   workflow?: Workflow;
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  deadlineMs?: number;
+  runDeadline?: RunDeadlineRef;
 }
 
 // ─── generate (workflow.json) ────────────────────────────────────────────────
@@ -86,8 +91,6 @@ interface GenerateOptions extends CompileOptions {
   keepTest?: boolean;
   /** Directory where workflow.json/parser.ts/parser.test.ts are written. */
   outDir?: string;
-  /** Dual-pass value classifications from replay-and-diff. */
-  classifications?: ClassifiedValue[];
   /** Credential values extracted during teach, passed to integration tests via env var. */
   teachCredentials?: { site: string; values: Record<string, string> };
   /** Absolute path to the multi-tool build plan sidecar (.build-plan.json). */
@@ -98,13 +101,25 @@ interface GenerateOptions extends CompileOptions {
    *  response parsing, shared-module imports). Injected into the agent's initial
    *  message so the compile follows it. */
   toolPlan?: string;
+  /** Master-accepted execution strategy for this focused compile. */
+  strategyKind?: CompileStrategyKind;
   /** Bounded teach resume: revise the current artifact from durable feedback. */
   revisionMode?: boolean;
+  /** Master-only fast boundary. Omit for standalone generate's full live
+   * semantic verification. */
+  verificationMode?: CompileVerificationMode;
+  /** Continue an existing tool compiler conversation for an ordinary repair. */
+  initialResume?: CompilerResume;
+  onSessionId?: (sessionId: string) => void;
 }
 
 interface GenerateResult {
   workflow: Workflow;
   workflowPath: string;
+  /** The compiler's final factual account, including any request comparisons
+   * it chose to report through done(). Teach carries this into the next repair
+   * turn instead of making the master rediscover it. */
+  compilerSummary: string;
   /** Number of requests the LLM saw (after shrinking). */
   requestsSent: number;
   /** Original count before shrinking. */
@@ -112,6 +127,8 @@ interface GenerateResult {
   inputTokens: number | null;
   outputTokens: number | null;
   durationMs: number;
+  verification?: CompileVerificationSummary;
+  sessionId?: string;
 }
 
 export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
@@ -119,7 +136,6 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
     'compile.generate',
     'AGENT',
     {
-      'imprint.session_path': opts.sessionPath,
       'imprint.provider': opts.llmConfig?.provider ?? 'auto',
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.out_path': opts.outPath,
@@ -131,20 +147,26 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       const result = await compileAgent({
         sessionPath: opts.sessionPath,
         maxDurationMs: opts.maxDurationMs,
+        deadlineMs: opts.deadlineMs,
+        runDeadline: opts.runDeadline,
         llmConfig: opts.llmConfig,
         onProgress: opts.onProgress,
+        signal: opts.signal,
         onDeadlineReached: opts.onDeadlineReached,
         keepTest: opts.keepTest,
         outDir,
         candidate: opts.candidate,
         sharedContext: opts.sharedContext,
-        classifications: opts.classifications,
         teachCredentials: opts.teachCredentials,
         buildPlanPath: opts.buildPlanPath,
         sharedModules: opts.sharedModules,
         toolPlan: opts.toolPlan,
+        strategyKind: opts.strategyKind,
         revisionMode: opts.revisionMode,
         preTriagedSession: opts.preTriagedSession,
+        verificationMode: opts.verificationMode,
+        initialResume: opts.initialResume,
+        onSessionId: opts.onSessionId,
       });
 
       setSpanAttributes(span, {
@@ -194,7 +216,6 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       if (opts.outPath && opts.outPath !== result.workflowPath) {
         writeFileSync(opts.outPath, `${JSON.stringify(workflow, null, 2)}\n`, 'utf8');
       }
-
       setSpanAttributes(span, {
         'imprint.workflow_path': workflowPath,
         'imprint.workflow_tool_name': workflow.toolName,
@@ -203,11 +224,14 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       return {
         workflow,
         workflowPath,
+        compilerSummary: result.message,
         requestsSent: 0, // legacy field — no longer meaningful for agentic compile
         requestsOriginal: 0, // legacy field
         inputTokens: result.inputTokens,
         outputTokens: result.outputTokens,
         durationMs: result.durationMs,
+        verification: result.verification,
+        sessionId: result.sessionId,
       };
     },
   );
@@ -220,6 +244,7 @@ function relocateGeneratedWorkflow(workflowPath: string, workflow: Workflow): st
   mkdirSync(finalDir, { recursive: true });
   for (const artifact of [
     'workflow.json',
+    'playbook.yaml',
     'parser.ts',
     'parser.test.ts',
     '.compile-log.json',
@@ -312,7 +337,7 @@ export function findCredentialBearingSeqs(session: Session): number[] {
 
 const AUTH_ADJACENT_WINDOW_MS = 120_000;
 const MFA_PATTERN =
-  /mfa|2fa|two.?factor|otp|verify|verification|challenge|push.?notification|authenticate|oauth|token|trusted.?device|security.?code/i;
+  /mfa|2fa|two.?factor|otp|verify|verification|challenge|push.?notification|authenticate|oauth|trusted.?device|security.?code/i;
 
 /** Find requests that are temporally and semantically adjacent to credential-
  *  bearing login POSTs — 2FA triggers, status polls, OTP submits, OAuth
@@ -474,15 +499,29 @@ export function parseTriageSelectionResponse(text: string): {
   );
 }
 
+interface TriageRequestsOptions {
+  /** Compiler callers classify effects by default. Master candidate discovery
+   * skips those LLM batches because their effect result is not authoritative. */
+  effectClassification?: 'classify' | 'skip';
+  /** Focused test seam; production resolves the configured provider. */
+  analyzer?: Pick<ReturnType<typeof resolveProvider>, 'analyze'>;
+}
+
 export async function triageRequests(
   session: Session,
   llmConfig?: LLMOptions,
-  context: Pick<CompileOptions, 'candidate' | 'sharedContext'> = {},
+  context: Pick<
+    CompileOptions,
+    'candidate' | 'sharedContext' | 'signal' | 'timeoutMs' | 'deadlineMs' | 'runDeadline'
+  > = {},
+  options: TriageRequestsOptions = {},
 ): Promise<TriageResult> {
+  const classifyEffects = options.effectClassification !== 'skip';
   const preserveSeqs = new Set([
     ...(context.candidate?.requestSeqs ?? []),
     ...(context.candidate?.dependencySeqs ?? []),
     ...(context.sharedContext?.loginRequestSeqs ?? []),
+    ...(context.sharedContext?.authRequestSeqs ?? []),
   ]);
   const candidates = selectTriageCandidateRequests(session, preserveSeqs);
   const keepEligibleSeqs = new Set(candidates.map((request) => request.seq));
@@ -555,7 +594,7 @@ export async function triageRequests(
         );
       }
       const systemPrompt = readFileSync(promptPath, 'utf8');
-      const llm = resolveProvider(llmConfig ?? {});
+      const llm = options.analyzer ?? resolveProvider(llmConfig ?? {});
       const contextEvents = buildTriageEventContexts(session).filter(
         (event) => event.type !== 'ws-sent',
       );
@@ -576,7 +615,13 @@ export async function triageRequests(
       log(
         `triaging ${relevanceCompacted.length} relevance candidates; ${Math.round(JSON.stringify(relevancePayload).length / 1024)} KB payload…`,
       );
-      const relevanceResult = await llm.analyze(systemPrompt, relevancePayload);
+      const relevanceResult = await llm.analyze(systemPrompt, relevancePayload, {
+        signal: context.signal,
+        deadlineMs: context.deadlineMs,
+        runDeadline: context.runDeadline,
+        timeoutMs: context.timeoutMs,
+        timeoutLabel: 'request triage',
+      });
       const { keepSeqs } = parseTriageSelectionResponse(relevanceResult.text);
       const candidateSet = new Set(
         expandCompactedTriageSeqs(
@@ -595,7 +640,9 @@ export async function triageRequests(
         ...metadata.map((request) => ({ kind: 'request' as const, value: request })),
         ...outboundEvents.map((event) => ({ kind: 'websocket' as const, value: event })),
       ];
-      const safetyBatches = chunkTriageItems(safetyItems, EFFECT_TRIAGE_BATCH_CHARS);
+      const safetyBatches = classifyEffects
+        ? chunkTriageItems(safetyItems, EFFECT_TRIAGE_BATCH_CHARS)
+        : [];
       const irreversibleSeqs: number[] = [];
       const irreversibleEventSeqs: number[] = [];
       let inputTokens = relevanceResult.inputTokens;
@@ -620,7 +667,13 @@ export async function triageRequests(
           outboundWebSockets: batchWebSockets,
         };
         safetyPayloadChars += JSON.stringify(safetyPayload).length;
-        const result = await llm.analyze(systemPrompt, safetyPayload);
+        const result = await llm.analyze(systemPrompt, safetyPayload, {
+          signal: context.signal,
+          deadlineMs: context.deadlineMs,
+          runDeadline: context.runDeadline,
+          timeoutMs: context.timeoutMs,
+          timeoutLabel: 'request safety triage',
+        });
         const parsed = parseTriageSelectionResponse(result.text);
         const batchRequestSeqs = new Set(
           batchRequests.flatMap((request) => compactedRequestSeqs(request)),
@@ -654,28 +707,37 @@ export async function triageRequests(
       const selectedSet = new Set([...keepSeqs, ...rescuedSeqs, ...preserveSeqs]);
       const irreversibleSet = new Set(expandCompactedTriageSeqs(irreversibleSeqs, compacted));
       const irreversibleEventSet = new Set(irreversibleEventSeqs);
-      const replaySafeSeqs = coveredSeqs.filter((seq) => !irreversibleSet.has(seq));
+      const replaySafeSeqs = classifyEffects
+        ? coveredSeqs.filter((seq) => !irreversibleSet.has(seq))
+        : [];
       const triaged: Session = {
         ...session,
-        triage: {
-          effectSchemaVersion: 2,
-          coveredSeqs,
-          irreversibleSeqs: [...irreversibleSet].sort((a, b) => a - b),
-          coveredOutboundEventSeqs,
-          irreversibleEventSeqs: [...irreversibleEventSet].sort((a, b) => a - b),
-        },
+        ...(classifyEffects
+          ? {
+              triage: {
+                effectSchemaVersion: 2 as const,
+                coveredSeqs,
+                irreversibleSeqs: [...irreversibleSet].sort((a, b) => a - b),
+                coveredOutboundEventSeqs,
+                irreversibleEventSeqs: [...irreversibleEventSet].sort((a, b) => a - b),
+              },
+            }
+          : {}),
         requests: session.requests
           .filter((r) => selectedSet.has(r.seq))
           .map((r) => (irreversibleSet.has(r.seq) ? { ...r, effect: 'irreversible' as const } : r)),
       };
 
       log(
-        `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates (${irreversibleSet.size} irreversible requests and ${irreversibleEventSet.size} irreversible outbound WebSocket events across ${safetyBatches.length} bounded safety batch(es))`,
+        classifyEffects
+          ? `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates (${irreversibleSet.size} irreversible requests and ${irreversibleEventSet.size} irreversible outbound WebSocket events across ${safetyBatches.length} bounded safety batch(es))`
+          : `triage selected ${selectedSet.size} requests out of ${candidates.length} relevance candidates; effect classification skipped`,
       );
 
       setSpanAttributes(span, {
         'imprint.requests_compacted': metadata.length,
         'imprint.requests_selected': selectedSet.size,
+        'imprint.triage.effect_classification': classifyEffects,
         'imprint.triage.payload_chars':
           JSON.stringify(relevancePayload).length + safetyPayloadChars,
         'imprint.requests_irreversible': irreversibleSet.size,
@@ -690,7 +752,7 @@ export async function triageRequests(
         selectedSeqs: [...selectedSet],
         replaySafeSeqs,
         irreversibleSeqs: [...irreversibleSet],
-        coveredOutboundEventSeqs,
+        coveredOutboundEventSeqs: classifyEffects ? coveredOutboundEventSeqs : [],
         irreversibleEventSeqs: [...irreversibleEventSet],
         consideredCount: candidates.length,
         inputTokens,
@@ -934,7 +996,6 @@ export async function compilePlaybook(opts: CompileOptions): Promise<CompilePlay
     'compile.playbook',
     'CHAIN',
     {
-      'imprint.session_path': opts.sessionPath,
       'imprint.provider': opts.llmConfig?.provider ?? 'auto',
       'imprint.tool_name': opts.candidate?.toolName,
       'imprint.out_path': opts.outPath,
@@ -1002,6 +1063,10 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
     const triage = await triageRequests(session, opts.llmConfig, {
       candidate: opts.candidate,
       sharedContext: opts.sharedContext,
+      signal: opts.signal,
+      deadlineMs: opts.deadlineMs,
+      runDeadline: opts.runDeadline,
+      timeoutMs: opts.timeoutMs,
     });
     session = triage.session;
     triageTokens = {
@@ -1069,7 +1134,13 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
   const llm = resolveProvider(opts.llmConfig ?? {});
 
   let playbook: Playbook | undefined;
-  let lastResult = await llm.analyze(systemPrompt, slimmed);
+  let lastResult = await llm.analyze(systemPrompt, slimmed, {
+    signal: opts.signal,
+    deadlineMs: opts.deadlineMs,
+    runDeadline: opts.runDeadline,
+    timeoutMs: opts.timeoutMs,
+    timeoutLabel: 'playbook compiler',
+  });
   let llmInputTokens = lastResult.inputTokens;
   let llmOutputTokens = lastResult.outputTokens;
   let llmDurationMs = lastResult.durationMs;
@@ -1092,7 +1163,13 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
       if (attempt === 0) {
         log('playbook failed validation, retrying with error feedback…');
         const fixPrompt = `Your previous playbook was invalid. The validation error was:\n\n${err instanceof Error ? err.message : String(err)}\n\nReason about the verified workflow contract, fix the YAML, and return the corrected playbook. Output ONLY valid YAML, no prose.`;
-        lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`);
+        lastResult = await llm.analyze(systemPrompt, `${JSON.stringify(slimmed)}\n\n${fixPrompt}`, {
+          signal: opts.signal,
+          deadlineMs: opts.deadlineMs,
+          runDeadline: opts.runDeadline,
+          timeoutMs: opts.timeoutMs,
+          timeoutLabel: 'playbook compiler repair',
+        });
         llmInputTokens = addNullable(llmInputTokens, lastResult.inputTokens);
         llmOutputTokens = addNullable(llmOutputTokens, lastResult.outputTokens);
         llmDurationMs += lastResult.durationMs;
@@ -1116,8 +1193,9 @@ async function compilePlaybookImpl(opts: CompileOptions): Promise<CompilePlayboo
 
   const outPath =
     opts.outPath ?? resolveDefaultCompilePlaybookPath(session.site, playbook.toolName);
+  const playbookText = `${stripCodeFences(lastResult.text).trim()}\n`;
   mkdirSync(dirname(outPath), { recursive: true });
-  writeFileSync(outPath, `${stripCodeFences(lastResult.text).trim()}\n`);
+  writeFileSync(outPath, playbookText);
 
   return {
     playbook,

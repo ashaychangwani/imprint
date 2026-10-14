@@ -116,7 +116,7 @@ describe('AuthVerifier', () => {
     expect(inspected.bodyText).toContain('[REDACTED]');
     expect(inspected.bodyText).not.toContain('otp+code%2F42');
     expect(JSON.stringify(inspected)).not.toContain('fixture pass/word');
-    expect(JSON.stringify(inspected)).not.toContain('must-not-leak');
+    expect(inspected.cookies?.[0]?.value).toBe('must-not-leak');
 
     await verifier.runAction('finish');
     expect(initialStates).toEqual([undefined, { ticket: 'fixture-ticket' }]);
@@ -203,7 +203,7 @@ describe('AuthVerifier', () => {
     ]);
   });
 
-  it('sanitizes raw and encoded secrets in every error-facing result string', async () => {
+  it('protects typed credentials while preserving session and continuation data', async () => {
     const calls: Array<{
       params: Record<string, string | number | boolean>;
       initialState?: Record<string, unknown>;
@@ -242,9 +242,11 @@ describe('AuthVerifier', () => {
       },
       usedBackend: 'cdp-replay',
     });
-    expect(result.message).toBe('Login [REDACTED] failed with [REDACTED] and [REDACTED].');
+    expect(result.message).toBe(
+      'Login [REDACTED] failed with fixture-cookie-secret and nested-ticket.',
+    );
     expect(result.responseBodyPreview).toBe(
-      'password=[REDACTED]&email=[REDACTED]&device=[REDACTED]&ticket=[REDACTED]&nonce=[REDACTED]',
+      'password=[REDACTED]&email=[REDACTED]&device=fixture-storage-secret&ticket=nested-ticket&nonce=nested-nonce',
     );
   });
 

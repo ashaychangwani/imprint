@@ -136,6 +136,155 @@ describe('executeWorkflow', () => {
     expect(r.data).toEqual({ results: [1, 2, 3] });
   });
 
+  it('observes the exact prepared request without letting diagnostics affect execution', async () => {
+    const prepared: unknown[] = [];
+    const result = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello world' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      onPreparedRequest: (observation) => prepared.push(observation),
+    });
+    expect(result.ok).toBeTrue();
+    expect(prepared).toEqual([
+      {
+        requestIndex: 0,
+        method: 'GET',
+        url: 'https://api.example.com/search?q=hello%20world',
+        headers: { Accept: 'application/json', cookie: 'session=abc123' },
+      },
+    ]);
+
+    const resultWithBrokenObserver = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      onPreparedRequest: () => {
+        throw new Error('diagnostic failure');
+      },
+    });
+    expect(resultWithBrokenObserver.ok).toBeTrue();
+  });
+
+  it('copies the ordered raw chain without letting an evidence observer change the result', async () => {
+    const chains: unknown[][] = [];
+    let calls = 0;
+    const result = await executeWorkflow({
+      workflow: { ...baseWorkflow, requests: [...baseWorkflow.requests, ...baseWorkflow.requests] },
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ item: { id: ++calls } }))) as unknown as typeof fetch,
+      onRawResponses: (responses) => {
+        chains.push(structuredClone(responses));
+        (responses[1] as { item: { id: number } }).item.id = 999;
+        throw new Error('evidence observer failed');
+      },
+    });
+    expect(chains).toEqual([[{ item: { id: 1 } }, { item: { id: 2 } }]]);
+    expect(result).toMatchObject({ ok: true, data: { item: { id: 2 } } });
+
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () => new Response('failed', { status: 403 })) as unknown as typeof fetch,
+      onRawResponses: (responses) => chains.push(responses),
+    });
+    expect(chains).toHaveLength(1);
+  });
+
+  it('protects only explicitly supplied login values in live response previews', async () => {
+    const observations: Array<{ redactedBodyPreview?: string }> = [];
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: { ...STORE, values: { password: 'typed-fixture-password' } },
+      fetchImpl: (async () =>
+        new Response(
+          '{"password":"typed-fixture-password","token":"ordinary-token"}',
+        )) as unknown as typeof fetch,
+      onResponse: (observation) => observations.push(observation),
+    });
+    expect(observations[0]?.redactedBodyPreview).toContain('${credential.password}');
+    expect(observations[0]?.redactedBodyPreview).toContain('ordinary-token');
+    expect(observations[0]?.redactedBodyPreview).not.toContain('typed-fixture-password');
+  });
+
+  it('preserves ordinary token data in bounded failed-response observations', async () => {
+    const observations: unknown[] = [];
+    const opaque = 'opaque-browser-minted-credential-12345';
+    const body = JSON.stringify({ error: 'invalid request shape', csrf: opaque });
+    const result = await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(body, {
+          status: 400,
+          headers: { 'content-type': 'application/json; charset=utf-8' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => observations.push(observation),
+    });
+
+    expect(result).toEqual(expect.objectContaining({ ok: false, error: 'BAD_RESPONSE' }));
+    expect(observations).toHaveLength(1);
+    expect(observations[0]).toEqual(
+      expect.objectContaining({
+        requestIndex: 0,
+        status: 400,
+        bodyByteLength: new TextEncoder().encode(body).byteLength,
+        contentType: 'application/json',
+        valueType: 'object',
+        topLevelKeys: ['csrf', 'error'],
+      }),
+    );
+    expect(observations[0]).not.toHaveProperty('preview');
+    expect(observations[0]).toEqual(
+      expect.objectContaining({
+        redactedBodyPreview: expect.stringContaining('invalid request shape'),
+      }),
+    );
+    expect(JSON.stringify(observations)).not.toContain('[REDACTED:');
+    expect(JSON.stringify(observations)).toContain(opaque);
+  });
+
+  it('preserves framed RPC previews and bounds disclosed object keys', async () => {
+    const rpcObservations: Array<{ redactedBodyPreview?: string }> = [];
+    const jwt = ['eyJhbGciOiJIUzI1NiJ9', 'eyJzdWIiOiIxMjM0NTY3ODkwIn0', 'signature-value'].join(
+      '.',
+    );
+    const rpcBody = `)]}'\n[["wrb.fr","rpc","person@example.com Bearer ${jwt}"]]`;
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(rpcBody, {
+          status: 400,
+          headers: { 'content-type': 'application/json+protobuf' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => rpcObservations.push(observation),
+    });
+    expect(rpcObservations[0]?.redactedBodyPreview).toBe(rpcBody);
+
+    const longKey = 'k'.repeat(1_000);
+    const objectObservations: Array<{ topLevelKeys?: string[] }> = [];
+    await executeWorkflow({
+      workflow: baseWorkflow,
+      params: { q: 'hello' },
+      credentials: STORE,
+      fetchImpl: (async () =>
+        new Response(JSON.stringify({ [longKey]: true }), {
+          status: 400,
+          headers: { 'content-type': 'application/json' },
+        })) as unknown as typeof fetch,
+      onResponse: (observation) => objectObservations.push(observation),
+    });
+    expect(Buffer.byteLength(objectObservations[0]?.topLevelKeys?.[0] ?? '', 'utf8')).toBe(200);
+  });
+
   it('parses JSON body even when content-type is text/html', async () => {
     const fetchMock = (async () =>
       new Response(JSON.stringify({ vehicles: [{ type: 'SUV', price: 45 }] }), {
@@ -363,6 +512,16 @@ describe('executeWorkflow', () => {
     expect(r.ok).toBe(false);
     if (r.ok) return;
     expect(r.error).toBe('NETWORK');
+    expect(r.requestStageFacts).toEqual([
+      {
+        requestIndex: 0,
+        stage: 'preparation',
+        outcome: 'passed',
+        bodyPresent: false,
+        bodyByteLength: 0,
+      },
+      { requestIndex: 0, stage: 'send', outcome: 'failed' },
+    ]);
   });
 
   it('returns UNKNOWN with the parameter name when a required param is missing', async () => {
@@ -584,6 +743,46 @@ describe('executeWorkflow', () => {
     if (result.ok) return;
     expect(result.error).toBe('STATE_MISSING');
     expect(result.message).toMatch(/unsafe request/);
+    expect(result.requestStageFacts).toEqual([
+      { requestIndex: 1, stage: 'preparation', outcome: 'failed' },
+    ]);
+  });
+
+  it('attributes a bracket-form missing state failure only to its first blocked request', async () => {
+    const workflow: Workflow = {
+      ...baseWorkflow,
+      parameters: [],
+      requests: [
+        {
+          method: 'POST',
+          effect: 'unsafe',
+          url: 'https://api.example.com/start',
+          headers: {},
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/first',
+          headers: { 'X-CSRF-Token': '${state["csrf-token"]}' },
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/second',
+          headers: { 'X-CSRF-Token': '${state["csrf-token"]}' },
+        },
+      ],
+    };
+    const result = await executeWorkflow({
+      workflow,
+      params: {},
+      credentials: STORE,
+      fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+    });
+
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.requestStageFacts).toEqual([
+      { requestIndex: 1, stage: 'preparation', outcome: 'failed' },
+    ]);
   });
 
   it('URL-encodes credential values inside form-urlencoded request bodies', async () => {
@@ -781,6 +980,203 @@ describe('requestTransformModule', () => {
     }
   });
 
+  it('loads an edited request transform instead of a cached prior attempt', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-rewrite-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://api.example.com/search',
+          headers: {},
+        },
+      ],
+    };
+    const sent: Array<{ url: string; body: RequestInit['body'] }> = [];
+    const fetchMock = (async (url: string, init?: RequestInit) => {
+      sent.push({ url, body: init?.body });
+      return new Response('{}', { headers: { 'content-type': 'application/json' } });
+    }) as unknown as typeof fetch;
+    const transformPath = join(tmpDir, 'request-transform.ts');
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        transformPath,
+        `export function transform(_method, url) {
+          return { url: url + '?attempt=first', body: 'stale-body' };
+        }`,
+      );
+      await executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+
+      writeFileSync(
+        transformPath,
+        `export function transform(_method, url) {
+          return url + '?attempt=second';
+        }`,
+      );
+      await executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: fetchMock,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+
+      expect(sent).toEqual([
+        { url: 'https://api.example.com/search?attempt=first', body: 'stale-body' },
+        { url: 'https://api.example.com/search?attempt=second', body: undefined },
+      ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('loads an edited parser instead of a cached prior attempt', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-parser-rewrite-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requestTransformModule: undefined,
+      parserModule: './parser.ts',
+    };
+    const parserPath = join(tmpDir, 'parser.ts');
+    const run = () =>
+      executeWorkflow({
+        workflow,
+        params: { q: 'test', filter: 'none' },
+        fetchImpl: (async () =>
+          new Response('{"value":1}', {
+            headers: { 'content-type': 'application/json' },
+          })) as unknown as typeof fetch,
+        workflowPath: join(tmpDir, 'workflow.json'),
+      });
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(parserPath, `export function extract() { return { attempt: 'first' }; }`);
+      expect(await run()).toMatchObject({ ok: true, data: { attempt: 'first' } });
+
+      writeFileSync(parserPath, `export function extract() { return { attempt: 'second' }; }`);
+      expect(await run()).toMatchObject({ ok: true, data: { attempt: 'second' } });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('reports stage facts and a bounded redacted earlier response when a later transform fails', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-stage-facts-'));
+    const workflow: Workflow = {
+      ...transformWorkflow,
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://api.example.com/first',
+          headers: {},
+          body: 'f.req=${param.q}',
+        },
+        {
+          method: 'POST',
+          url: 'https://api.example.com/second',
+          headers: {},
+          body: 'f.req=${param.q}',
+        },
+      ],
+    };
+    let sends = 0;
+    const responseObservations: Array<{
+      redactedBodyPreview?: string;
+      requestIndex: number;
+    }> = [];
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform(_method, url, responses) {
+          if (responses.length > 0) throw new Error('could not derive downstream request state');
+          return { url, body: 'f.req=rendered-state' };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: { q: 'private-query', filter: 'private-filter' },
+        workflowPath: join(tmpDir, 'workflow.json'),
+        onResponse: (observation) => responseObservations.push(observation),
+        fetchImpl: (async () => {
+          sends++;
+          return new Response(
+            JSON.stringify({
+              state: { continuation: 'usable-local-value' },
+              email: 'person@example.com',
+              filler: 'x'.repeat(8_000),
+            }),
+            {
+              headers: { 'content-type': 'application/json' },
+            },
+          );
+        }) as unknown as typeof fetch,
+      });
+
+      expect(sends).toBe(1);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.requestStageFacts).toEqual([
+        expect.objectContaining({
+          requestIndex: 0,
+          stage: 'preparation',
+          outcome: 'passed',
+          bodyPresent: true,
+        }),
+        expect.objectContaining({
+          requestIndex: 0,
+          stage: 'transform',
+          outcome: 'passed',
+          bodyChanged: true,
+        }),
+        { requestIndex: 0, stage: 'send', outcome: 'passed', httpStatus: 200 },
+        expect.objectContaining({
+          requestIndex: 1,
+          stage: 'preparation',
+          outcome: 'passed',
+          bodyPresent: true,
+        }),
+        expect.objectContaining({
+          requestIndex: 1,
+          stage: 'transform',
+          outcome: 'failed',
+          bodyChanged: false,
+        }),
+      ]);
+      const serializedFacts = JSON.stringify(result.requestStageFacts);
+      expect(serializedFacts).not.toContain('private-query');
+      expect(serializedFacts).not.toContain('private-filter');
+      expect(serializedFacts).not.toContain('rendered-state');
+      expect(serializedFacts).not.toContain('api.example.com');
+      expect(responseObservations).toHaveLength(1);
+      expect(responseObservations[0]?.requestIndex).toBe(0);
+      expect(responseObservations[0]?.redactedBodyPreview).toContain('usable-local-value');
+      expect(responseObservations[0]?.redactedBodyPreview).not.toContain('[REDACTED:');
+      expect(responseObservations[0]?.redactedBodyPreview).toContain('person@example.com');
+      expect(
+        Buffer.byteLength(responseObservations[0]?.redactedBodyPreview ?? '', 'utf8'),
+      ).toBeLessThanOrEqual(4_000);
+      expect(responseObservations[0]?.redactedBodyPreview).toEndWith('[preview truncated]');
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
   it('forwards dynamic navigation actions from the request transform', async () => {
     const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
     const { join } = await import('node:path');
@@ -797,7 +1193,14 @@ describe('requestTransformModule', () => {
           url: 'https://example.com/start',
           headers: {},
           mode: 'navigate',
-          navigation: { selector: '#ready' },
+          navigation: {
+            selector: '#ready',
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
+          },
         },
       ],
       site: 'test',
@@ -844,11 +1247,90 @@ describe('requestTransformModule', () => {
             headers: {},
             body: undefined,
             selector: '#ready',
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+            },
             actions: [{ action: 'click', selector: '[data-id="S1"]' }],
             resultSelector: '#done',
           },
         },
       ]);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects any request-transform override of a network response matcher', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-undefined-network-response-'));
+    const navigations: unknown[] = [];
+    const workflow: Workflow = {
+      toolName: 'test_undefined_network_response_patch',
+      intent: { description: 'test' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+              method: 'POST',
+              resourceType: 'Fetch',
+            },
+          },
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return {
+            navigation: {
+              networkResponse: {
+                urlIncludes: undefined,
+                method: undefined,
+              resourceType: 'XHR',
+              },
+            },
+          };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate(_url, options) {
+            navigations.push(options);
+            return new Response('{}', {
+              headers: { 'content-type': 'application/json' },
+            });
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
+      });
+      expect(navigations).toEqual([]);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -901,6 +1383,94 @@ describe('requestTransformModule', () => {
         ok: false,
         error: 'BAD_RESPONSE',
         message: expect.stringContaining('invalid navigation click actions'),
+      });
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects request transforms that change or introduce a network response matcher', async () => {
+    const { mkdirSync, mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    mkdirSync(scratchRoot, { recursive: true });
+    const tmpDir = mkdtempSync(join(scratchRoot, 'rt-transform-response-provenance-'));
+    const workflow: Workflow = {
+      toolName: 'test_response_provenance_transform',
+      intent: { description: 'test' },
+      parameters: [],
+      requests: [
+        {
+          method: 'GET',
+          url: 'https://example.com/start',
+          headers: {},
+          mode: 'navigate',
+          navigation: {
+            networkResponse: {
+              urlIncludes: '/api/results',
+              recordingResponseRequestSeq: 42,
+            },
+          },
+        },
+      ],
+      site: 'test',
+      requestTransformModule: './request-transform.ts',
+    };
+    try {
+      writeFileSync(join(tmpDir, 'workflow.json'), JSON.stringify(workflow));
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return { navigation: { networkResponse: { recordingResponseRequestSeq: 43 } } };
+        }`,
+      );
+
+      const result = await executeWorkflow({
+        workflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate() {
+            throw new Error('navigation should not run');
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
+      });
+
+      writeFileSync(
+        join(tmpDir, 'request-transform.ts'),
+        `export function transform() {
+          return { navigation: { networkResponse: { urlIncludes: '/api/dynamic' } } };
+        }`,
+      );
+      const noMatcherWorkflow: Workflow = {
+        ...workflow,
+        requests: workflow.requests.map((request) => ({ ...request, navigation: undefined })),
+      };
+      const introduced = await executeWorkflow({
+        workflow: noMatcherWorkflow,
+        params: {},
+        workflowPath: join(tmpDir, 'workflow.json'),
+        browser: {
+          async navigate() {
+            throw new Error('navigation should not run');
+          },
+          async snapshotCookies() {
+            return [];
+          },
+        },
+      });
+      expect(introduced).toMatchObject({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: expect.stringContaining('cannot override navigation.networkResponse'),
       });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });

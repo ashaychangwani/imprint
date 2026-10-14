@@ -141,6 +141,11 @@ The compile-agent writes this module when `stateHints` flag per-call query param
 
 ## D20 — Redaction scope: key-based responses, envelope-safe, real-secret policy set
 
+**Superseded on 2026-09-05.** At the user's request, only known user-supplied
+login values are substituted. Generic token/PII scanning and cookie, storage,
+header, and response-field masking were removed. The historical decision below
+explains earlier behavior; see [current handling](security.md).
+
 **Decided.** Three narrowings of redaction: (1) response bodies are redacted by sensitive **field name** only — no value-pattern (free-form) scan; (2) the free-form fallback never flat-scans a structured RPC envelope (a body led by the `)]}'` anti-XSSI guard or a `<len>\n[…]` length-prefixed frame), detected by `looksLikeRpcEnvelope` in `redact.ts`; (3) the `redactum` policy set drops the four `GENERIC_*` catch-alls (PASSWORD/TOKEN/CREDENTIAL/SECRET), keeping core PII, private keys, JWT, and keyword-anchored cloud/service-token policies.
 
 **Alternative:** Keep full free-form scanning on every body with the generic policies. Rejected: scanning the whole response as flat text injected `[REDACTED]` into bare numeric IDs/coordinates **inside** doubly-encoded `batchexecute` payloads (15/28 payloads corrupted in a real google-hotels recording → un-parseable inner JSON, which then failed the shared-module verifier and pruned a correct decoder), and the `GENERIC_*` policies fire on benign `id=1234567890`-style data.

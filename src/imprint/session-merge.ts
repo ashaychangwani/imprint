@@ -1,17 +1,29 @@
 /**
  * Multi-session merge for `imprint teach`.
  *
- * When a user records a new session, they can combine it with past recordings
- * of the same site so triage and candidate detection see the full picture.
- * The merge produces a single valid Session object that the rest of the
- * pipeline consumes unchanged.
+ * Users may explicitly combine selected recordings. A normal teach chooses
+ * only the newest raw recording; it never expands its scope automatically.
  */
 
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { localSessionsDir } from './paths.ts';
 import { friendlySessionTimestamp } from './teach-state.ts';
 import { type Session, SessionSchema } from './types.ts';
+
+export interface TeachingRecordingResolution {
+  /** Absolute path to the selected raw recording or explicitly requested aggregate. */
+  path: string;
+  /** Digest of the exact recording bytes selected for this run. */
+  recordingSha256: string;
+  /** Number of user-selected raw recordings represented by this file. */
+  sourceCount: number;
+  /** True only when an explicit multi-recording selection wrote an aggregate. */
+  refreshed: boolean;
+  /** Session parsed from the exact bytes represented by recordingSha256. */
+  session: Session;
+}
 
 /**
  * Format an ISO timestamp string (e.g. "2026-05-24T09:00:00.000Z") into
@@ -31,13 +43,37 @@ interface SessionInfo {
   requestCount: number;
   narrationCount: number;
   url: string;
+  recordingSha256: string;
+  session: Session;
+}
+
+const SESSION_READ_ATTEMPTS = 3;
+
+/** Read one session consistently, retrying only an incomplete JSON read. */
+export function readSessionFile(
+  path: string,
+  read: (path: string) => Buffer = (target) => readFileSync(target),
+): { contents: Buffer; session: Session } {
+  let lastParseError: unknown;
+  for (let attempt = 0; attempt < SESSION_READ_ATTEMPTS; attempt++) {
+    const contents = read(path);
+    let raw: unknown;
+    try {
+      raw = JSON.parse(contents.toString('utf8'));
+    } catch (error) {
+      lastParseError = error;
+      continue;
+    }
+    return { contents, session: SessionSchema.parse(raw) };
+  }
+  throw lastParseError;
 }
 
 export function listSiteSessions(site: string): SessionInfo[] {
   return listSessionsInDir(localSessionsDir(site));
 }
 
-export function listSessionsInDir(dir: string): SessionInfo[] {
+function listSessionsInDir(dir: string): SessionInfo[] {
   if (!existsSync(dir)) return [];
 
   const files = readdirSync(dir).filter(
@@ -52,8 +88,7 @@ export function listSessionsInDir(dir: string): SessionInfo[] {
   for (const filename of files) {
     const absPath = pathJoin(dir, filename);
     try {
-      const raw = JSON.parse(readFileSync(absPath, 'utf8'));
-      const session = SessionSchema.parse(raw);
+      const { contents, session } = readSessionFile(absPath);
       infos.push({
         absPath,
         filename,
@@ -61,6 +96,8 @@ export function listSessionsInDir(dir: string): SessionInfo[] {
         requestCount: session.requests.length,
         narrationCount: session.narration.length,
         url: session.url,
+        recordingSha256: sha256Id(contents),
+        session,
       });
     } catch {
       // Skip malformed sessions
@@ -199,4 +236,63 @@ export function writeCombinedSession(site: string, combined: Session): string {
   const absPath = pathJoin(sessDir, filename);
   writeFileSync(absPath, `${JSON.stringify(combined, null, 2)}\n`, 'utf8');
   return absPath;
+}
+
+/** Use exactly the recordings the user named, combining them only when there are several. */
+export function resolveExplicitTeachingRecordings(
+  site: string,
+  selectedPaths: readonly string[],
+): TeachingRecordingResolution {
+  if (selectedPaths.length === 0) {
+    throw new Error('at least one recording must be selected');
+  }
+  if (new Set(selectedPaths).size !== selectedPaths.length) {
+    throw new Error('the same recording was selected more than once');
+  }
+
+  const selected = selectedPaths.map((path) => {
+    const { contents, session } = readSessionFile(path);
+    if (session.site !== site) {
+      throw new Error(`recording site "${session.site}" does not match requested site "${site}"`);
+    }
+    return { path, contents, session };
+  });
+
+  if (selected.length === 1) {
+    const only = selected[0] as (typeof selected)[number];
+    return {
+      path: only.path,
+      recordingSha256: sha256Id(only.contents),
+      sourceCount: 1,
+      refreshed: false,
+      session: only.session,
+    };
+  }
+
+  const combined = mergeSessions(selected.map(({ session }) => session));
+  const path = writeCombinedSession(site, combined);
+  return {
+    path,
+    recordingSha256: sha256Id(readFileSync(path)),
+    sourceCount: selected.length,
+    refreshed: true,
+    session: combined,
+  };
+}
+
+/** Select only the newest valid raw recording for a fresh teach run. */
+export function resolveTeachingRecording(site: string): TeachingRecordingResolution | undefined {
+  const latest = listSiteSessions(site)[0];
+  if (!latest) return undefined;
+  return {
+    path: latest.absPath,
+    recordingSha256: latest.recordingSha256,
+    sourceCount: 1,
+    refreshed: false,
+    session: latest.session,
+  };
+}
+
+function sha256Id(contents: Uint8Array): string {
+  return `sha256:${createHash('sha256').update(contents).digest('hex')}`;
 }

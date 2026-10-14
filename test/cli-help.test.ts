@@ -11,8 +11,9 @@ import { resolve as pathResolve } from 'node:path';
 import {
   VERB_HELP,
   closestVerb,
+  formatFreshTeachSummary,
+  freshTeachExitCode,
   inferPlaybookSiteForSmokeCommand,
-  resolveTeachSelectionMode,
   tryParseParamKV,
 } from '../src/cli.ts';
 
@@ -34,28 +35,6 @@ const dispatcherVerbs = (() => {
   return set;
 })();
 
-describe('teach selection mode', () => {
-  it('reports the default all-tools modes accurately for telemetry', () => {
-    expect(resolveTeachSelectionMode({ noInteractive: true })).toEqual({ mode: 'all-default' });
-    expect(resolveTeachSelectionMode({ allTools: true })).toEqual({ mode: 'all-explicit' });
-    expect(resolveTeachSelectionMode({})).toEqual({ mode: 'interactive-default-all' });
-  });
-
-  it('reports narrowing modes and rejects conflicting flags', () => {
-    expect(resolveTeachSelectionMode({ primaryTool: true })).toEqual({ mode: 'primary' });
-    expect(resolveTeachSelectionMode({ tool: 'get_details' })).toEqual({ mode: 'tool' });
-    expect(resolveTeachSelectionMode({ tool: 'x', allTools: true }).error).toContain(
-      '--tool cannot be combined with --all-tools',
-    );
-    expect(resolveTeachSelectionMode({ tool: 'x', primaryTool: true }).error).toContain(
-      '--tool cannot be combined with --primary-tool',
-    );
-    expect(resolveTeachSelectionMode({ allTools: true, primaryTool: true }).error).toContain(
-      '--all-tools cannot be combined with --primary-tool',
-    );
-  });
-});
-
 describe('CLI verb / VERB_HELP drift', () => {
   it('every dispatcher verb has a VERB_HELP entry', () => {
     const missing = [...dispatcherVerbs].filter((v) => !(v in VERB_HELP));
@@ -76,6 +55,81 @@ describe('CLI verb / VERB_HELP drift', () => {
 
   it.each(Object.keys(VERB_HELP))('%s example starts with `imprint %s`', (verb) => {
     expect(VERB_HELP[verb]?.example.startsWith(`imprint ${verb}`)).toBe(true);
+  });
+});
+
+describe('teach help', () => {
+  it('reports incomplete teaching as a command failure', () => {
+    expect(freshTeachExitCode('completed')).toBe(0);
+    expect(freshTeachExitCode('partial')).toBe(1);
+    expect(freshTeachExitCode('failed')).toBe(1);
+    expect(freshTeachExitCode('cancelled')).toBe(130);
+  });
+
+  it('documents the single foreground all-tools flow', () => {
+    const teach = VERB_HELP.teach;
+    const flags = teach?.flags ?? [];
+    expect(teach?.summary).toContain('every supported tool');
+    expect(flags.map(({ name }) => name)).toContain('--agent codex');
+    expect(flags.find(({ name }) => name === '--agent codex')?.description).toContain('codex-cli');
+    expect(flags.find(({ name }) => name === '--timeout <duration>')?.description).toContain(
+      'Foreground teach deadline',
+    );
+    expect(flags.find(({ name }) => name === '--unbounded')?.description).toContain(
+      'whole-run deadline',
+    );
+    expect(flags.find(({ name }) => name === '--guidance <text>')?.description).toContain(
+      'explicit human scope',
+    );
+  });
+
+  it('labels interrupted work as unfinished instead of failed', () => {
+    const summary = (
+      status: 'cancelled' | 'provider_unavailable' | 'partial' | 'failed' | 'blocked',
+    ) =>
+      formatFreshTeachSummary({
+        status,
+        readyTools: 1,
+        nonReadyTools: 4,
+        runRoot: '/tmp/fixture-run',
+      });
+    expect(summary('cancelled')).toContain('4 unfinished');
+    expect(summary('provider_unavailable')).toContain('4 unfinished');
+    expect(summary('partial')).toContain('4 unresolved');
+    expect(summary('failed')).toContain('4 not ready');
+    expect(summary('blocked')).toContain('4 blocked');
+  });
+
+  it('documents candidate-selection reuse as fresh downstream work', () => {
+    const teach = VERB_HELP.teach;
+    const flag = (teach?.flags ?? []).find(({ name }) => name === '--from-candidates <run-id>');
+    expect(teach?.usage.join(' ')).toContain('[--from-candidates <run-id>]');
+    expect(flag?.description).toContain('candidate selection');
+    expect(flag?.description).toContain('planning and compilation start fresh');
+  });
+
+  it('documents latest-recording default and explicit selected-session merging', () => {
+    const teach = VERB_HELP.teach;
+    const flag = (teach?.flags ?? []).find(({ name }) => name === '--from-session <path>');
+    expect(teach?.usage.join(' ')).toContain('[--from-session <path> ...]');
+    expect(flag?.description).toContain('Repeat the flag');
+    expect(flag?.description).toContain('newest raw recording');
+  });
+
+  it('does not expose retired selection or resume flags', () => {
+    const names = (VERB_HELP.teach?.flags ?? []).map(({ name }) => name);
+    for (const retired of [
+      '--all-tools',
+      '--primary-tool',
+      '--tool',
+      '--skip-replay',
+      '--from-step',
+      '--to-step',
+      '--only',
+      '--resume',
+    ]) {
+      expect(names).not.toContain(retired);
+    }
   });
 });
 
