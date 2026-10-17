@@ -1,67 +1,58 @@
 type Params = Record<string, string | number | boolean>;
 
+function rpcBody(rpcId: string, payload: unknown, slot: string): string {
+  const request = [[[rpcId, JSON.stringify(payload), null, slot]]];
+  return new URLSearchParams({ 'f.req': JSON.stringify(request) }).toString() + '&';
+}
+
 export function transform(
-  _method: string,
+  method: string,
   url: string,
-  _responses: unknown[],
-  params?: Params,
-): { url: string; body?: string } {
-  const p = params ?? {};
-  const destination = stringParam(p.destination, 'tahoe city');
-  const propertyType = stringParam(p.property_type, 'vacation_rentals');
-  const checkIn = parseDate(stringParam(p.check_in_date, '2026-08-09'));
-  const checkOut = parseDate(stringParam(p.check_out_date, '2026-08-16'));
-  const hotelToken = stringParam(p.hotel_token, '');
-  const isVacationRental = propertyType === 'vacation_rentals' || propertyType === 'vacation rental';
+  responses: unknown[],
+  params: Params = {},
+): { url: string; body: string } {
+  void method;
+  void responses;
+  const hotelId = typeof params.hotel_id === 'string' ? params.hotel_id.trim() : '';
+  const hotelName = typeof params.hotel_name === 'string' ? params.hotel_name.trim() : '';
+  if (!hotelId) throw new Error('hotel_id is required');
+  if (!hotelName) throw new Error('hotel_name is required');
 
-  const placeId = isVacationRental ? '0x809bd62ecf1fa721:0x2a98b230816c9ed1' : null;
-  const placeMid = isVacationRental ? '/m/0gyvmkl' : '/m/0gz469';
-  const placeLabel = isVacationRental ? 'Tahoe City' : 'Chicago Loop';
-  const propertyCode = isVacationRental ? 2 : 1;
-  const occupancy = isVacationRental ? [0] : [1];
-  const stayLength = diffDays(checkIn, checkOut);
-
-  const payload = [
-    destination,
-    [
-      propertyCode,
-      isVacationRental ? [[[3], [3], [3], [3]], 1] : [[[3], [3]], 0],
+  const rpcId = new URL(url).searchParams.get('rpcids');
+  if (rpcId === 'AtySUc') {
+    const payload = [
+      hotelName,
       [
-        [null, [[placeMid, null, null, null, null, placeId, placeLabel]].map(trimTrailingNulls), isVacationRental ? undefined : []].filter((v) => v !== undefined),
-        [null, [checkIn, checkOut, stayLength], null, null, null, occupancy],
+        1,
+        [[[3], [3]], 0],
+        [
+          [null, [[null, null, null, null, null, null, hotelName]], []],
+          [null, null, null, null, null, [1]],
+        ],
+        null,
+        [[null, null, null, null, null, null, 'USD'], null, []],
       ],
+      [1, null, null, 0, 0, hotelId, 13, null, 0],
       null,
-      [[null, null, null, null, null, null, 'USD'], null, []],
-    ],
-    [propertyCode === 1 ? 1 : 0, null, null, 0, 0, hotelToken || null, 13, null, 0],
-    null,
-    1,
-  ];
-
-  const fReq = [[["AtySUc", JSON.stringify(payload), null, "1"]]];
-  return { url, body: `f.req=${encodeURIComponent(JSON.stringify(fReq))}&` };
-}
-
-function stringParam(value: string | number | boolean | undefined, fallback: string): string {
-  if (typeof value === 'string' && value.length > 0) return value;
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  return fallback;
-}
-
-function parseDate(value: string): [number, number, number] {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (!match) throw new Error(`Expected date in YYYY-MM-DD format, got ${value}`);
-  return [Number(match[1]), Number(match[2]), Number(match[3])];
-}
-
-function diffDays(start: [number, number, number], end: [number, number, number]): number {
-  const startDate = Date.UTC(start[0], start[1] - 1, start[2]);
-  const endDate = Date.UTC(end[0], end[1] - 1, end[2]);
-  return Math.max(1, Math.round((endDate - startDate) / 86_400_000));
-}
-
-function trimTrailingNulls(values: unknown[]): unknown[] {
-  const out = [...values];
-  while (out.length > 0 && out[out.length - 1] == null) out.pop();
-  return out;
+      1,
+    ];
+    return { url, body: rpcBody(rpcId, payload, '1') };
+  }
+  if (rpcId === 'zM1L7d') {
+    return { url, body: rpcBody(rpcId, [null, null, null, [152, 152], hotelId], '1') };
+  }
+  if (rpcId === 'ocp93e') {
+    return {
+      url,
+      body: rpcBody(
+        rpcId,
+        [null, null, null, null, null, null, null, null, hotelId, null, null, [[]]],
+        '1',
+      ),
+    };
+  }
+  if (rpcId === 'bdmBfe') {
+    return { url, body: rpcBody(rpcId, [hotelName, 3], 'generic') };
+  }
+  throw new Error(`unsupported hotel detail RPC: ${rpcId ?? 'missing'}`);
 }

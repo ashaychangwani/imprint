@@ -1,214 +1,119 @@
-type Money = {
-  currencyCode?: string;
-  value?: string | number;
-};
+import { normalizeFareFamilies, normalizeMoney, normalizeRoute } from "../_shared/fare-normalizer.ts";
 
-type FareProduct = {
-  productId?: string;
-  availabilityStatus?: string;
-  passengerType?: string;
-  fare?: {
-    accrualPoints?: string;
-    baseFare?: Money;
-    totalFare?: Money;
-    totalTaxesAndFees?: Money;
-    totalFareBaselineDifference?: Money;
-    seatsLeft?: number;
-  };
-};
+type R = Record<string, unknown>;
+const record = (v: unknown): v is R => !!v && typeof v === "object" && !Array.isArray(v);
+const list = (v: unknown): unknown[] => Array.isArray(v) ? v : [];
+const str = (v: unknown): string | null => typeof v === "string" ? v : null;
+const num = (v: unknown): number | null => typeof v === "number" ? v : null;
 
-type Segment = {
-  operatingCarrierCode?: string;
-  marketingCarrierCode?: string;
-  flightNumber?: string;
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  departureDateTime?: string;
-  arrivalDateTime?: string;
-  departureTime?: string;
-  arrivalTime?: string;
-  duration?: string;
-  numberOfStops?: number;
-  aircraftEquipmentType?: string;
-  wifiOnBoard?: boolean;
-  stopsDetails?: Array<Record<string, unknown>>;
-};
-
-type FlightDetail = {
-  nextDay?: boolean;
-  totalDuration?: number;
-  filterTags?: string[];
-  fareProducts?: {
-    ADULT?: Record<string, FareProduct>;
-    [passengerType: string]: Record<string, FareProduct> | undefined;
-  };
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  flightNumbers?: string[];
-  departureDateTime?: string;
-  arrivalDateTime?: string;
-  departureTime?: string;
-  arrivalTime?: string;
-  segments?: Segment[];
-};
-
-type AirProduct = {
-  originationAirportCode?: string;
-  destinationAirportCode?: string;
-  fastestDuration?: string;
-  lowestFare?: Money & { fareFamily?: string };
-  containsAfterSix?: boolean;
-  containsAvailability?: boolean;
-  containsBeforeNoon?: boolean;
-  containsDirect?: boolean;
-  containsNonstop?: boolean;
-  containsNoonToSix?: boolean;
-  containsStops?: boolean;
-  containsTimeOfDay?: boolean;
-  containsOnlyPlaneChange?: boolean;
-  details?: FlightDetail[];
-};
-
-type SearchResponse = {
-  data?: {
-    searchResults?: {
-      fareSummary?: Array<{ fareFamily?: string; minimumFare?: Money }>;
-      airProducts?: AirProduct[];
-      promoToken?: string;
-    };
-  };
-};
-
-type ParserContext = {
-  params?: Record<string, string | number | boolean>;
-  responses?: unknown[];
-};
-
-function moneyValue(money: Money | undefined): number | null {
-  if (!money || money.value === undefined || money.value === null || money.value === '') return null;
-  const parsed = Number(money.value);
-  return Number.isFinite(parsed) ? parsed : null;
+function fares(value: unknown) {
+  if (!record(value)) return {};
+  const adult = record(value.ADULT) ? value.ADULT : {};
+  const fareAmounts: R = {};
+  for (const [family, product] of Object.entries(adult)) {
+    if (record(product)) fareAmounts[family] = product.fare;
+  }
+  const normalized = normalizeFareFamilies(fareAmounts);
+  return Object.fromEntries(Object.entries(adult).map(([family, product]) => {
+    const p = record(product) ? product : {};
+    return [family, {
+      productId: str(p.productId),
+      availabilityStatus: str(p.availabilityStatus),
+      passengerType: str(p.passengerType),
+      ...normalized[family],
+      seatsLeft: record(p.fare) && typeof p.fare.seatsLeft === "number" ? p.fare.seatsLeft : null,
+    }];
+  }));
 }
 
-function compactRecord<T extends Record<string, unknown>>(record: T): T {
-  return Object.fromEntries(
-    Object.entries(record).filter(([, value]) => value !== undefined && value !== null),
-  ) as T;
-}
-
-function parseFares(detail: FlightDetail): Array<Record<string, unknown>> {
-  const adultFares = detail.fareProducts?.ADULT ?? {};
-  return Object.entries(adultFares)
-    .map(([fareFamily, product]) => {
-      const totalFare = product?.fare?.totalFare;
-      return compactRecord({
-        fareFamily,
-        productId: product?.productId,
-        availabilityStatus: product?.availabilityStatus,
-        passengerType: product?.passengerType,
-        currency: totalFare?.currencyCode,
-        price: moneyValue(totalFare),
-        baseFare: moneyValue(product?.fare?.baseFare),
-        taxesAndFees: moneyValue(product?.fare?.totalTaxesAndFees),
-        accrualPoints: product?.fare?.accrualPoints ? Number(product.fare.accrualPoints) : undefined,
-        seatsLeft: product?.fare?.seatsLeft,
-      });
-    })
-    .filter((fare) => fare.fareFamily && (fare.price !== null || fare.availabilityStatus));
-}
-
-function parseSegments(segments: Segment[] | undefined): Array<Record<string, unknown>> {
-  return (segments ?? [])
-    .map((segment) => compactRecord({
-      carrier: segment.marketingCarrierCode ?? segment.operatingCarrierCode,
-      operatingCarrier: segment.operatingCarrierCode,
-      flightNumber: segment.flightNumber,
-      originationAirportCode: segment.originationAirportCode,
-      destinationAirportCode: segment.destinationAirportCode,
-      departureDateTime: segment.departureDateTime,
-      arrivalDateTime: segment.arrivalDateTime,
-      departureTime: segment.departureTime,
-      arrivalTime: segment.arrivalTime,
-      duration: segment.duration,
-      numberOfStops: segment.numberOfStops,
-      aircraftEquipmentType: segment.aircraftEquipmentType,
-      wifiOnBoard: segment.wifiOnBoard,
-      stopsDetails: segment.stopsDetails ?? [],
-    }))
-    .filter((segment) => segment.flightNumber || segment.originationAirportCode || segment.destinationAirportCode);
-}
-
-function requestedAdultsCount(context: ParserContext | undefined): number {
-  const raw = context?.params?.adults_count;
-  const parsed = typeof raw === 'number' ? raw : Number(raw);
-  return Number.isFinite(parsed) && parsed > 0 ? parsed : 1;
-}
-
-function withPassengerTotals(fares: Array<Record<string, unknown>>, adultsCount: number): Array<Record<string, unknown>> {
-  return fares.map((fare) => {
-    const price = typeof fare.price === 'number' ? fare.price : null;
-    return compactRecord({
-      ...fare,
-      passengerCount: adultsCount,
-      totalPrice: price === null ? undefined : Number((price * adultsCount).toFixed(2)),
-    });
-  });
-}
-
-export function extract(rawResponse: unknown, context?: ParserContext): unknown {
-  const response = rawResponse as SearchResponse;
-  const adultsCount = requestedAdultsCount(context);
-  const searchResults = response?.data?.searchResults;
-  const fareSummary = (searchResults?.fareSummary ?? [])
-    .map((summary) => compactRecord({
-      fareFamily: summary.fareFamily,
-      currency: summary.minimumFare?.currencyCode,
-      minimumFare: moneyValue(summary.minimumFare),
-    }))
-    .filter((summary) => summary.fareFamily || summary.minimumFare !== null);
-
-  const flights = (searchResults?.airProducts ?? []).flatMap((product) => {
-    return (product.details ?? []).map((detail) => {
-      const segments = parseSegments(detail.segments);
-      const fares = withPassengerTotals(parseFares(detail), adultsCount);
-      const stopCount = Math.max(0, segments.length - 1);
-      const lowestFare = fares
-        .filter((fare) => typeof fare.price === 'number')
-        .sort((a, b) => Number(a.price) - Number(b.price))[0];
-
-      return compactRecord({
-        originationAirportCode: detail.originationAirportCode ?? product.originationAirportCode,
-        destinationAirportCode: detail.destinationAirportCode ?? product.destinationAirportCode,
-        departureDateTime: detail.departureDateTime,
-        arrivalDateTime: detail.arrivalDateTime,
-        departureTime: detail.departureTime,
-        arrivalTime: detail.arrivalTime,
-        flightNumbers: detail.flightNumbers ?? segments.map((segment) => String(segment.flightNumber)).filter(Boolean),
-        durationMinutes: detail.totalDuration,
-        duration: segments.length === 1 ? segments[0]?.duration : undefined,
-        stopCount,
-        nonstop: stopCount === 0,
-        nextDay: detail.nextDay,
-        filterTags: detail.filterTags ?? [],
-        passengerCount: adultsCount,
-        lowestFare,
-        fares,
-        segments,
-      });
-    });
-  }).filter((flight) => {
-    return Boolean(
-      flight.originationAirportCode ||
-      flight.destinationAirportCode ||
-      (Array.isArray(flight.flightNumbers) && flight.flightNumbers.length > 0),
-    );
-  });
-
+function flight(value: unknown) {
+  if (!record(value)) return null;
+  const route = normalizeRoute(value);
+  if (!route.originationAirportCode && !route.destinationAirportCode && !str(value.departureTime)) return null;
   return {
-    requestedAdultsCount: adultsCount,
-    fareSummary,
-    flights,
-    count: flights.length,
-    promoToken: searchResults?.promoToken ?? '',
+    ...route,
+    flightNumbers: list(value.flightNumbers).filter((x): x is string => typeof x === "string"),
+    departureDateTime: str(value.departureDateTime),
+    arrivalDateTime: str(value.arrivalDateTime),
+    departureTime: str(value.departureTime),
+    arrivalTime: str(value.arrivalTime),
+    totalDurationMinutes: num(value.totalDuration),
+    nextDay: typeof value.nextDay === "boolean" ? value.nextDay : null,
+    filterTags: list(value.filterTags).filter((x): x is string => typeof x === "string"),
+    fares: fares(value.fareProducts),
+    segments: list(value.segments).filter(record).map(s => ({
+      ...normalizeRoute(s),
+      flightNumber: str(s.flightNumber),
+      departureDateTime: str(s.departureDateTime),
+      arrivalDateTime: str(s.arrivalDateTime),
+      departureTime: str(s.departureTime),
+      arrivalTime: str(s.arrivalTime),
+      duration: str(s.duration),
+      numberOfStops: num(s.numberOfStops),
+      aircraftEquipmentType: str(s.aircraftEquipmentType),
+      wifiOnBoard: typeof s.wifiOnBoard === "boolean" ? s.wifiOnBoard : null,
+      stops: list(s.stopsDetails).filter(record).map(stop => ({
+        ...normalizeRoute(stop),
+        flightNumber: str(stop.flightNumber),
+        departureTime: str(stop.departureTime),
+        arrivalTime: str(stop.arrivalTime),
+        changePlanes: typeof stop.changePlanes === "boolean" ? stop.changePlanes : null,
+        legDurationMinutes: num(stop.legDuration),
+        stopDurationMinutes: num(stop.stopDuration),
+      })),
+    })),
+  };
+}
+
+const TIME_WINDOWS = new Set(["ALL_DAY", "BEFORE_NOON", "NOON_TO_SIX", "AFTER_SIX"]);
+
+function requestedTimeWindow(
+  params: Record<string, string | number | boolean>,
+  name: "departure_time_of_day" | "return_time_of_day",
+): string {
+  const value = String(params[name] ?? "ALL_DAY").toUpperCase();
+  return TIME_WINDOWS.has(value) ? value : "ALL_DAY";
+}
+
+function matchesTimeWindow(value: unknown, window: string): boolean {
+  if (window === "ALL_DAY" || !record(value)) return true;
+  return list(value.filterTags).includes(window);
+}
+
+export function extract(
+  rawResponse: unknown,
+  context?: { params: Record<string, string | number | boolean>; responses: unknown[] },
+): unknown {
+  if (!record(rawResponse) || !record(rawResponse.data) || !record(rawResponse.data.searchResults)) {
+    if (record(rawResponse) && (rawResponse.error || rawResponse.errors)) {
+      throw new Error(
+        `SOUTHWEST_SEARCH_ERROR: ${JSON.stringify(rawResponse.error ?? rawResponse.errors)}`,
+      );
+    }
+    throw new Error("Southwest response is missing data.searchResults");
+  }
+  const search = rawResponse.data.searchResults;
+  const params = context?.params ?? {};
+  const departureWindow = requestedTimeWindow(params, "departure_time_of_day");
+  const returnWindow = requestedTimeWindow(params, "return_time_of_day");
+  return {
+    promoToken: str(search.promoToken),
+    fareSummary: list(search.fareSummary).filter(record).map(x => ({
+      fareFamily: str(x.fareFamily),
+      minimumFare: normalizeMoney(x.minimumFare),
+    })).filter(x => x.fareFamily),
+    bounds: list(search.airProducts).filter(record).map((bound, index) => {
+      const window = index === 0 ? departureWindow : returnWindow;
+      return {
+        index,
+        ...normalizeRoute(bound),
+        containsAvailability: typeof bound.containsAvailability === "boolean" ? bound.containsAvailability : null,
+        containsDirect: typeof bound.containsDirect === "boolean" ? bound.containsDirect : null,
+        containsNonstop: typeof bound.containsNonstop === "boolean" ? bound.containsNonstop : null,
+        fastestDurationMinutes: typeof bound.fastestDuration === "string" ? Number(bound.fastestDuration) : num(bound.fastestDuration),
+        lowestFare: normalizeMoney(bound.lowestFare),
+        flights: list(bound.details).filter(value => matchesTimeWindow(value, window)).map(flight).filter(Boolean),
+      };
+    }),
   };
 }

@@ -1,9 +1,0 @@
-{
-  "name": "imprint-tool-google-flights",
-  "private": true,
-  "devDependencies": {
-    "@types/bun": "latest",
-    "@types/node": "latest",
-    "bun-types": "latest"
-  }
-}

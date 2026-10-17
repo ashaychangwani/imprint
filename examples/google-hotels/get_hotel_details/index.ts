@@ -3,7 +3,7 @@
  *
  * Tool: get_hotel_details
  * Site: google-hotels
- * Intent: Fetch detailed Google Hotels information for a selected hotel or vacation-rental result.
+ * Intent: Get detailed information, photos, reviews, and related web links for a Google Travel hotel.
  *
  * To regenerate: imprint emit ~/.imprint/google-hotels/get_hotel_details/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,101 +20,143 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_hotel_details",
   "intent": {
-    "description": "Fetch detailed Google Hotels information for a selected hotel or vacation-rental result.",
-    "userSaid": "clicked one of hte offerings, saw booking options; changed property type to vacation rentals instead of hotels; changed location to tahoe city"
+    "description": "Get detailed information, photos, reviews, and related web links for a Google Travel hotel.",
+    "userSaid": "clicked one of the offerings and viewed its hotel detail sections"
   },
   "parameters": [
     {
-      "name": "hotel_token",
+      "name": "hotel_id",
       "type": "string",
-      "description": "Google Hotels selected result token for the hotel, usually emitted by a hotel search result.",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Google Travel property identifier returned by search_hotels.",
+      "sourcedFrom": {
+        "tool": "search_hotels",
+        "field": "hotel_id"
+      }
     },
     {
-      "name": "destination",
+      "name": "hotel_name",
       "type": "string",
-      "description": "Destination context used when opening the hotel result.",
-      "default": "tahoe city",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "check_in_date",
-      "type": "string",
-      "description": "Check-in date in YYYY-MM-DD format.",
-      "default": "2026-08-09",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "check_out_date",
-      "type": "string",
-      "description": "Check-out date in YYYY-MM-DD format.",
-      "default": "2026-08-16",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "property_type",
-      "type": "string",
-      "description": "Property type context, either hotels or vacation_rentals.",
-      "default": "vacation_rentals",
-      "verified": true
+      "description": "Hotel name used for the detail context and related web results."
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=7513562915459271421&bl=boq_travel-frontend-ui_20260527.01_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.google.com/travel/search?q=${param.destination}",
-        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"x6c25Q==\"]",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=${param.destination}|${param.check_in_date}|${param.check_out_date}|${param.property_type}|${param.hotel_token}",
+      "body": "f.req=%5B%5B%5B%22AtySUc%22%2C%22%5B%5C%22${param.hotel_name}%5C%22%2C%5B1%2C%5B%5B%5B3%5D%2C%5B3%5D%5D%2C0%5D%2C%5B%5Bnull%2C%5B%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22${param.hotel_name}%5C%22%5D%5D%2C%5B%5D%5D%2C%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B1%5D%5D%5D%2Cnull%2C%5B%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22USD%5C%22%5D%2Cnull%2C%5B%5D%5D%5D%2C%5B1%2Cnull%2Cnull%2C0%2C0%2C%5C%22${param.hotel_id}%5C%22%2C13%2Cnull%2C0%5D%2Cnull%2C1%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=zM1L7d&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5B%5B%5B%22zM1L7d%22%2C%22%5Bnull%2Cnull%2Cnull%2C%5B152%2C152%5D%2C%5C%22${param.hotel_id}%5C%22%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=ocp93e&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5B%5B%5B%22ocp93e%22%2C%22%5Bnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5C%22${param.hotel_id}%5C%22%2Cnull%2Cnull%2C%5B%5B%5D%5D%5D%22%2Cnull%2C%221%22%5D%5D%5D&",
+      "effect": "safe"
+    },
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=bdmBfe&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=%5B%5B%5B%22bdmBfe%22%2C%22%5B%5C%22${param.hotel_name}%5C%22%2C3%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&",
       "effect": "safe"
     }
   ],
   "site": "google-hotels",
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?qs=OAA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "name": "f_sid",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\\\"FdrFJe\\\":\\\"(-?\\d+)\\\"",
+        "group": 1
+      },
+      {
+        "name": "bl",
+        "required": true,
+        "capability": "browser_bootstrap",
+        "source": "html_regex",
+        "pattern": "\\\"cfb2h\\\":\\\"(boq_travel-frontend-ui_[^\\\"]+)\\\"",
+        "group": 1
+      }
+    ]
+  },
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "liveVerified": true
+  "limitations": [
+    {
+      "feature": "Destination context",
+      "reason": "The hotel detail RPC accepts the producer-issued hotel_id directly; the recording's Chicago destination identifier was intentionally not frozen because it is search-session-specific."
+    },
+    {
+      "feature": "Custom photo thumbnail dimensions",
+      "reason": "Live verification returned the same fixed Google image variants for requested 640x480 and recorded 152x152 sizes, so the RPC does not honor this caller contract.",
+      "omittedParameters": [
+        "photo_width",
+        "photo_height"
+      ]
+    },
+    {
+      "feature": "Canonical hotel name output",
+      "reason": "Live evidence shows AtySUc may echo the caller's hotel_name even when hotel_id resolves a different property. The parser therefore omits hotel.name and returns ID-keyed address, photos, reviews, and links instead."
+    },
+    {
+      "feature": "Hotel coordinates",
+      "reason": "Live verification showed the positional AtySUc payload contains multiple nearby coordinates and the generic extraction selected points not reliably tied to hotel_id/address. Coordinates are omitted rather than returning a misleading location."
+    }
+  ]
 };
 
 export interface GetHotelDetailsInput {
-  /** Google Hotels selected result token for the hotel, usually emitted by a hotel search result. */
-  hotel_token: string;
-  /** Destination context used when opening the hotel result. */
-  destination?: string;
-  /** Check-in date in YYYY-MM-DD format. */
-  check_in_date?: string;
-  /** Check-out date in YYYY-MM-DD format. */
-  check_out_date?: string;
-  /** Property type context, either hotels or vacation_rentals. */
-  property_type?: string;
+  /** Google Travel property identifier returned by search_hotels. */
+  hotel_id: string;
+  /** Hotel name used for the detail context and related web results. */
+  hotel_name: string;
 }
 
 export async function getHotelDetails(
   input: GetHotelDetailsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    destination: input.destination ?? "tahoe city",
-    check_in_date: input.check_in_date ?? "2026-08-09",
-    check_out_date: input.check_out_date ?? "2026-08-16",
-    property_type: input.property_type ?? "vacation_rentals",
-    hotel_token: input.hotel_token,
+    hotel_id: input.hotel_id,
+    hotel_name: input.hotel_name,
+
   };
   return executeWorkflow({
     workflow: WORKFLOW,
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

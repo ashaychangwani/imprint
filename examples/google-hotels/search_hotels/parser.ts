@@ -1,281 +1,128 @@
-type Json = null | boolean | number | string | Json[] | { [key: string]: Json };
-
-type HotelItem = {
+export interface HotelResult {
+  hotel_id: string | null;
   name: string;
-  coordinates?: { latitude: number; longitude: number };
-  star_class?: number;
-  class_label?: string;
-  rating?: number;
-  review_count?: number;
-  rating_facets?: Array<{ id: number; score: string }>;
-  nightly_price?: string;
-  nightly_price_range?: string[];
-  total_price_range?: string[];
-  location_snippets?: Array<{ label: string; time?: string }>;
-  website?: string;
-  image?: string;
-  description?: string;
-  hotel_token?: string;
-  result_token?: string;
-};
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+  property_type: string | null;
+  coordinates: { latitude: number; longitude: number } | null;
+  nightly_price: number | null;
+  currency: string | null;
+  rating: number | null;
+  review_count: number | null;
 }
 
-function parseBatchexecute(raw: unknown): unknown {
+function decodePayload(raw: unknown): unknown {
   if (typeof raw !== 'string') return raw;
-  const lines = raw.replace(/^\)\]\}'\s*/, '').split('\n').map((line) => line.trim()).filter(Boolean);
+  const lines = raw.replace(/^\)\]\}'\s*/, '').split(/\r?\n/).map(x => x.trim()).filter(Boolean);
   for (const line of lines) {
-    if (!line.startsWith('[')) continue;
+    if (!line.startsWith('[[')) continue;
     try {
-      const frame = JSON.parse(line) as unknown;
-      if (!Array.isArray(frame)) continue;
-      for (const row of frame) {
-        if (Array.isArray(row) && row[0] === 'wrb.fr' && row[1] === 'AtySUc' && typeof row[2] === 'string') {
-          return JSON.parse(row[2]);
-        }
-      }
-      return frame;
-    } catch {
-      continue;
-    }
+      const frame = JSON.parse(line) as unknown[][];
+      const row = frame.find(x => Array.isArray(x) && x[0] === 'wrb.fr');
+      if (typeof row?.[2] === 'string') return JSON.parse(row[2]);
+    } catch { /* inspect next framed line */ }
   }
-  return raw;
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function walk(value: unknown, visit: (value: unknown) => void): void {
   visit(value);
-  if (Array.isArray(value)) {
-    for (const child of value) walk(child, visit);
-  } else if (isRecord(value)) {
-    for (const child of Object.values(value)) walk(child, visit);
-  }
+  if (Array.isArray(value)) for (const child of value) walk(child, visit);
+  else if (value && typeof value === 'object') for (const child of Object.values(value as Record<string, unknown>)) walk(child, visit);
 }
 
-function asNumber(value: unknown): number | undefined {
-  if (typeof value === 'number' && Number.isFinite(value)) return value;
-  if (typeof value === 'string') {
-    const parsed = Number(value.replace(/[^\d.-]/g, ''));
-    if (Number.isFinite(parsed)) return parsed;
-  }
-  return undefined;
-}
-
-function uniqueStrings(values: string[]): string[] {
-  return [...new Set(values.filter(Boolean))];
-}
-
-function paramNumber(params: Record<string, string | number | boolean> | undefined, key: string): number {
-  const value = params?.[key];
-  const parsed = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : 0;
-  return Number.isFinite(parsed) ? parsed : 0;
-}
-
-function paramNumberSet(params: Record<string, string | number | boolean> | undefined, key: string): Set<number> {
-  const value = params?.[key];
-  if (typeof value !== 'string') return new Set();
-  return new Set(
-    value
-      .split(',')
-      .map((part) => part.trim())
-      .filter((part) => part.length > 0)
-      .map((part) => Number(part.trim()))
-      .filter((part) => Number.isFinite(part)),
-  );
-}
-
-function moneyAmount(value: string | undefined): number | undefined {
-  if (!value) return undefined;
-  const parsed = Number(value.replace(/[^\d.]/g, ''));
-  return Number.isFinite(parsed) ? parsed : undefined;
-}
-
-function collectMoney(value: unknown): string[] {
+function stringsIn(value: unknown): string[] {
   const out: string[] = [];
-  walk(value, (node) => {
-    if (typeof node === 'string' && /^\$[\d,]+/.test(node)) out.push(node);
-  });
-  return uniqueStrings(out);
-}
-
-function firstImage(value: unknown): string | undefined {
-  let image: string | undefined;
-  walk(value, (node) => {
-    if (!image && typeof node === 'string' && /^https:\/\/lh\d\.googleusercontent\.com\//.test(node)) image = node;
-  });
-  return image;
-}
-
-function firstWebsite(details: unknown[]): string | undefined {
-  let site: string | undefined;
-  walk(details, (node) => {
-    if (!site && typeof node === 'string' && /^https?:\/\//.test(node) && !node.includes('googleusercontent.com')) site = node;
-  });
-  return site;
-}
-
-function firstToken(value: unknown): string | undefined {
-  let token: string | undefined;
-  walk(value, (node) => {
-    if (!token && typeof node === 'string' && /^Ch[ck][A-Za-z0-9_-]{12,}/.test(node)) token = node;
-  });
-  return token;
-}
-
-function ratingFacets(details: unknown[]): Array<{ id: number; score: string }> | undefined {
-  const facets = details[12];
-  if (!Array.isArray(facets) || !Array.isArray(facets[5])) return undefined;
-  const parsed = facets[5]
-    .filter((entry): entry is unknown[] => Array.isArray(entry))
-    .map((entry) => ({ id: asNumber(entry[0]) ?? 0, score: String(entry[1] ?? '') }))
-    .filter((entry) => entry.id > 0 && entry.score);
-  return parsed.length ? parsed : undefined;
-}
-
-function nearby(details: unknown[]): Array<{ label: string; time?: string }> | undefined {
-  const section = details[19];
-  const snippets: Array<{ label: string; time?: string }> = [];
-  if (!Array.isArray(section)) return undefined;
-  for (const group of section) {
-    const entries = Array.isArray(group) ? group[1] : undefined;
-    const rows = Array.isArray(entries) ? entries[2] : undefined;
-    if (!Array.isArray(rows)) continue;
-    for (const row of rows) {
-      if (!Array.isArray(row) || typeof row[0] !== 'string') continue;
-      let time: string | undefined;
-      walk(row, (node) => {
-        if (!time && typeof node === 'string' && /\b(min|hr)\b/.test(node)) time = node;
-      });
-      snippets.push({ label: row[0], time });
-    }
-  }
-  return snippets.length ? snippets : undefined;
-}
-
-function reviewSummary(row: unknown[]): { rating?: number; review_count?: number } {
-  let best: { rating?: number; review_count?: number } = {};
-  walk(row, (node) => {
-    if (!Array.isArray(node) || node.length < 2) return;
-    const rating = asNumber(node[0]);
-    const count = asNumber(node[1]);
-    if (rating !== undefined && count !== undefined && rating >= 1 && rating <= 5 && count > 20) {
-      if (!best.review_count || count > best.review_count) best = { rating, review_count: count };
-    }
-  });
-  return best;
-}
-
-function description(row: unknown[]): string | undefined {
-  let text: string | undefined;
-  walk(row, (node) => {
-    if (!text && typeof node === 'string' && node.length > 35 && /hotel|rooms|lodging|suite|resort|apartment/i.test(node)) {
-      text = node;
-    }
-  });
-  return text;
-}
-
-function isHotelRow(value: unknown): value is unknown[] {
-  return Array.isArray(value)
-    && typeof value[1] === 'string'
-    && Array.isArray(value[2])
-    && Array.isArray((value[2] as unknown[])[0])
-    && typeof ((value[2] as unknown[])[0] as unknown[])[0] === 'number'
-    && typeof ((value[2] as unknown[])[0] as unknown[])[1] === 'number';
-}
-
-function parseHotelRow(row: unknown[]): HotelItem | null {
-  const name = String(row[1] ?? '').trim();
-  if (!name) return null;
-  const details = Array.isArray(row[2]) ? row[2] as unknown[] : [];
-  const coords = Array.isArray(details[0]) ? details[0] as unknown[] : [];
-  const klass = Array.isArray(row[3]) ? row[3] as unknown[] : [];
-  const prices = collectMoney(row);
-  const reviews = reviewSummary(row);
-  const item: HotelItem = { name };
-  if (typeof coords[0] === 'number' && typeof coords[1] === 'number') {
-    item.coordinates = { latitude: coords[0], longitude: coords[1] };
-  }
-  if (typeof klass[0] === 'string') item.class_label = klass[0];
-  if (typeof klass[1] === 'number') item.star_class = klass[1];
-  if (reviews.rating !== undefined) item.rating = reviews.rating;
-  if (reviews.review_count !== undefined) item.review_count = reviews.review_count;
-  item.rating_facets = ratingFacets(details);
-  const nearbyRows = nearby(details);
-  if (nearbyRows) item.location_snippets = nearbyRows;
-  const website = firstWebsite(details);
-  if (website) item.website = website;
-  const image = firstImage(row);
-  if (image) item.image = image;
-  const desc = description(row);
-  if (desc) item.description = desc;
-  const resultToken = firstToken(row);
-  if (resultToken) {
-    item.hotel_token = resultToken;
-    item.result_token = resultToken;
-  }
-  if (prices.length) {
-    item.nightly_price = prices[0];
-    item.nightly_price_range = prices.slice(0, 2);
-    if (prices.length >= 4) item.total_price_range = prices.slice(2, 4);
-  }
-  return item;
-}
-
-function metadata(payload: unknown): { result_count?: number; location_name?: string; price_histogram?: unknown; ads?: unknown } {
-  const out: { result_count?: number; location_name?: string; price_histogram?: unknown; ads?: unknown } = {};
-  walk(payload, (node) => {
-    if (!isRecord(node)) return;
-    const countBlock = node['416343588'];
-    if (Array.isArray(countBlock) && typeof countBlock[0] === 'number') {
-      out.result_count = countBlock[0];
-      if (typeof countBlock[2] === 'string') out.location_name = countBlock[2];
-    }
-    const histogram = node['429411180'];
-    if (Array.isArray(histogram)) {
-      out.price_histogram = {
-        place_ids: Array.isArray(histogram[0]) ? histogram[0] : undefined,
-        buckets: Array.isArray(histogram[1]) ? histogram[1] : undefined,
-        summary: Array.isArray(histogram[2]) ? histogram[2][0] : undefined,
-      };
-    }
-    const ads = node['300000000'];
-    if (Array.isArray(ads) && ads.length) out.ads = ads;
-  });
+  walk(value, x => { if (typeof x === 'string') out.push(x); });
   return out;
 }
 
-function filterItemsForParams(items: HotelItem[], params?: Record<string, string | number | boolean>): HotelItem[] {
-  const maxPrice = paramNumber(params, 'max_price');
-  const minRating = paramNumber(params, 'min_rating');
-  const classes = paramNumberSet(params, 'hotel_classes');
-  return items.filter((item) => {
-    const nightly = moneyAmount(item.nightly_price);
-    if (maxPrice > 0 && nightly !== undefined && nightly > maxPrice) return false;
-    if (minRating > 0 && item.rating !== undefined && item.rating < minRating) return false;
-    if (classes.size > 0 && item.star_class !== undefined && !classes.has(item.star_class)) return false;
-    return true;
+function coordinatesIn(value: unknown): { latitude: number; longitude: number } | null {
+  let found: { latitude: number; longitude: number } | null = null;
+  walk(value, x => {
+    if (found || !Array.isArray(x) || x.length !== 2) return;
+    const [a,b] = x;
+    if (
+      typeof a === 'number' &&
+      typeof b === 'number' &&
+      Math.abs(a) <= 90 &&
+      Math.abs(b) <= 180 &&
+      (a !== 0 || b !== 0) &&
+      (
+        Math.abs(a) > 10 ||
+        Math.abs(b) > 10 ||
+        !Number.isInteger(a) ||
+        !Number.isInteger(b)
+      )
+    ) {
+      found = { latitude: a, longitude: b };
+    }
   });
+  return found;
 }
 
-export function extract(rawResponse: unknown, context?: { params: Record<string, string | number | boolean>; responses: unknown[] }): unknown {
-  const payload = parseBatchexecute(rawResponse) as Json;
-  const seen = new Set<string>();
-  const items: HotelItem[] = [];
-  walk(payload, (node) => {
-    if (!isHotelRow(node)) return;
-    const item = parseHotelRow(node);
-    if (!item || seen.has(item.name)) return;
-    seen.add(item.name);
-    items.push(item);
+function priceIn(value: unknown): number | null {
+  const strings = stringsIn(value);
+  for (const s of strings) {
+    const match = s.match(/^\$([0-9][0-9,]*(?:\.\d+)?)$/);
+    if (match) return Number(match[1]!.replace(/,/g, ''));
+  }
+  return null;
+}
+
+function directLocalizedPairs(node: unknown[]): Array<[string,string]> {
+  return node.filter(x => Array.isArray(x) && x.length === 2 && typeof x[0] === 'string' && typeof x[1] === 'string' && /^[a-z]{2}(?:-[A-Z]{2})?$/.test(x[1])) as Array<[string,string]>;
+}
+
+export function extract(rawResponse: unknown): unknown {
+  const payload = decodePayload(rawResponse);
+  if (!Array.isArray(payload)) {
+    throw new Error('ATYSUC_UNPARSED: Google returned a non-batchexecute search response');
+  }
+  const byName = new Map<string, HotelResult>();
+  walk(payload, node => {
+    if (!Array.isArray(node)) return;
+    const pairs = directLocalizedPairs(node);
+    if (!pairs.length) return;
+    const typePair = pairs.find(([value]) => /^(Hotel|Vacation rental|Resort|Motel|Hostel|Inn|Apartment|Bed and breakfast)$/i.test(value));
+    if (!typePair) return;
+    const namePair = pairs.find(([value]) => value !== typePair[0] && value.length >= 3);
+    if (!namePair || /^(Images may|Essential info)/i.test(namePair[0])) return;
+    const allStrings = stringsIn(node);
+    const token = allStrings.find(s => /^Ch[a-zA-Z0-9_-]{20,}$/.test(s)) ?? null;
+    const ratingCandidate = node.find(x => typeof x === 'number' && x >= 1 && x <= 5 && !Number.isInteger(x)) as number | undefined;
+    const reviewCandidate = node.find(x => typeof x === 'number' && Number.isInteger(x) && x > 5 && x < 1000000) as number | undefined;
+    byName.set(namePair[0], {
+      hotel_id: token,
+      name: namePair[0],
+      property_type: typePair[0],
+      coordinates: coordinatesIn(node),
+      nightly_price: priceIn(node),
+      currency: allStrings.includes('USD') || allStrings.some(s => /^\$/.test(s)) ? 'USD' : null,
+      rating: ratingCandidate ?? null,
+      review_count: reviewCandidate ?? null,
+    });
   });
-  const filteredItems = filterItemsForParams(items, context?.params);
-  const meta = metadata(payload);
-  return {
-    query: context?.params?.destination,
-    count: filteredItems.length,
-    ...meta,
-    items: filteredItems,
-  };
+
+  // Tagged-map variants put the localized compact record one level below a numeric-keyed object.
+  if (!byName.size && payload && typeof payload === 'object') {
+    walk(payload, node => {
+      if (!node || Array.isArray(node) || typeof node !== 'object') return;
+      for (const child of Object.values(node as Record<string, unknown>)) {
+        if (!Array.isArray(child)) continue;
+        const strings = stringsIn(child);
+        const type = strings.find(s => /^(Hotel|Vacation rental|Resort|Motel|Hostel|Inn|Apartment)$/i.test(s));
+        const name = strings.find(s => s.length > 3 && s !== type && !/^https?:|^\/|^\$|^[A-Z]{3}$/.test(s));
+        if (!type || !name) continue;
+        byName.set(name, { hotel_id: strings.find(s => /^Ch[a-zA-Z0-9_-]{20,}$/.test(s)) ?? null, name, property_type:type, coordinates:coordinatesIn(child), nightly_price:priceIn(child), currency:strings.includes('USD')?'USD':null, rating:null, review_count:null });
+      }
+    });
+  }
+
+  const items = [...byName.values()].filter(x => x.name.trim() && x.property_type);
+  if (items.length === 0 && payload.length !== 0) {
+    throw new Error(
+      'ATYSUC_UNPARSED: Google returned a non-empty search frame in an unsupported or challenge response shape; retry the request.',
+    );
+  }
+  const all = stringsIn(payload);
+  return { query: null, currency: all.includes('USD') ? 'USD' : null, count: items.length, items };
 }

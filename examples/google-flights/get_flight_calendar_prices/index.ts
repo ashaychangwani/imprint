@@ -3,7 +3,7 @@
  *
  * Tool: get_flight_calendar_prices
  * Site: google-flights
- * Intent: Get Google Flights calendar fare prices for candidate departure and return dates.
+ * Intent: Get round-trip date-pair fare prices for an airport route over a calendar range.
  *
  * To regenerate: imprint emit ~/.imprint/google-flights/get_flight_calendar_prices/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,49 +20,60 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_flight_calendar_prices",
   "intent": {
-    "description": "Get Google Flights calendar fare prices for candidate departure and return dates.",
+    "description": "Get round-trip date-pair fare prices for an airport route over a calendar range.",
     "userSaid": "searched for a round trip flight"
   },
   "parameters": [
     {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Calendar mode; only round_trip is supported by the recorded API encoding.",
+      "default": "round_trip",
+      "verified": true
+    },
+    {
       "name": "origin",
       "type": "string",
-      "description": "Origin airport code, city code, or place identifier.",
-      "default": "SJC",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Three-letter origin airport code.",
+      "verified": true
     },
     {
       "name": "destination",
       "type": "string",
-      "description": "Destination airport code, city code, or place identifier.",
-      "default": "SAN",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Three-letter destination airport code.",
+      "verified": true
     },
     {
       "name": "start_date",
       "type": "string",
-      "description": "Start of date range in YYYY-MM-DD format.",
-      "default": "2026-05-24",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Inclusive beginning of the departure-date range in YYYY-MM-DD format.",
+      "verified": true
     },
     {
       "name": "end_date",
       "type": "string",
-      "description": "End of date range in YYYY-MM-DD format.",
-      "default": "2026-06-30",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Inclusive end of the departure-date range in YYYY-MM-DD format.",
+      "verified": true
     },
     {
-      "name": "trip_length",
+      "name": "trip_length_days",
+      "type": "number",
+      "description": "Exact round-trip length in days.",
+      "verified": true
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1,
+      "verified": true
+    },
+    {
+      "name": "cabin_class",
       "type": "string",
-      "description": "Desired round-trip stay length encoded as a JSON array, such as [7,7] for exactly seven nights.",
-      "default": "[7,7]",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Cabin class; only economy is supported by the recorded API encoding.",
+      "default": "economy",
+      "verified": true
     }
   ],
   "requests": [
@@ -71,25 +83,25 @@ const WORKFLOW: Workflow = {
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
-        "X-Goog-BatchExecute-Bgr": "[\";Ax24HXnQAAZ9xeyCXcVfQlm-O5f3IMQmAEABEArZ1HslyK_BQ4JUKKyty1YaNnvwE0sZIvxZhduE37esgzJCv9uMqDEE1XWJ18RMdQIqq0x78ZaVDYUSpNlkHwAAADRPAAAAA3UBB2MAQlf4Dur8CYS7BGnPB7Iacw3MphUBUI2W-YWb5e8PhXYs-8TUiv6viHhKnooYK5Zh4Bn8BBnjIZRYQcbsJOpFS3ZhooQDMQVPZtietR5D0nXyywzsouTKdgfr-GRsjHAUlFxRsdTnP5169CGPpxrG1D0RMatGaVAf0M36ShU86Y4maDJeysl1scNfvkas-OzyjVF5YrvzbvXAAyZPIS5j1dr9tEXukNKcD1Jw4z5ZzB2pO1gn7nOlo1fQ4OcQnBjhJesq2h4o-LV5hCp2M3dWaLs83Z2d1yRVJHtrDHsCAFKiwAXAOYLsUZuudogTEucsNMX99na4rWfoLD5ccN159OWWW2TenwRa0lKq5aiFxXsJxD25al6H_w_vMZXswB33fovMNoz0o1kFp9OD1qu-X14ts4n0cFlLUeMztzLeGJREyMt2j58Rwcoyf7Exwu5OIgVPPYfoJGCShTdAtystQqvLld2xkUuHWaj2UxiAqSH63PGKJ4xCvcDSMnV6qbXeqStlJEg3rbpNdAsNEGzw5XSyJ54TYH7q_loLQqRdZttrvL_FnlDDFQLcOyNiwXo-2HnNtbUNvcNUrtRVlbnOkaM6L9LKd5lqd2T2ehRm-Tn9YgaKvRBT38Ja2MhR8Yu2kN2WspglRfBMvrzlyRZeu0hp0QeSQowIV0IJqHOMZbAkJ5nUFo23sPg-vCiV2MsSvTeiRSLIe_R0qOH5u_UzxD1mmg7A7-Af-YRG5lnFxl9GuDLAXdyqMMXnsTwVwicln6bF4dfGAoXS0_8YNOPdX1OfZEfypJaMOodYI-R2hH0G_Gc-HlLb_m2KU605V4aPi31gQPvQIp7SQdLiBajE-pQXsF5Am9CfQEkkHeIQasRtHWsEmWz8Dyr3pLu8gOx2IHzevgNdLrqLLcGLqysWxXRK-f7ftjMYvOADGAwTZ7vC_fg8HcLwiCcliIrt4oIWPBfiKh86mJ6_rFh07j50xwBKCyVft8iX8qqrRpj8mUvdD5TxJkC2OlGdX3_hrtU0y46WIX1HjUtiqILu9dShE3VErqkEOS5uHVQrr4fKXholojoNsLQj5DNREkQ7-ajRqcwN4tF3KCHBIapjB0tygaUqxwcy-bRp0qHCJn6q2iSYMGEOmQkj0jHGavGmlAIDC_ZbbhOSgN_OixbX-VN4yqjwbgnh7GE\",null,null,214,8,null,null,0,\"5\"]",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]",
-        "Referer": "https://www.google.com/travel/flights?tfs=CBwQARoSagcIARIDU0pDcgcIARIDU0FOGhJqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ&tfu=KgIIAw"
+        "Referer": "https://www.google.com/travel/flights"
       },
-      "body": "f.req=%5Bnull%2C%22%5Bnull%2C%5Bnull%2Cnull%2C1%2Cnull%2C%5B%5D%2C1%2C%5B1%2C0%2C0%2C0%5D%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2Cnull%2C%5B%5B%5B%5B%5B%5C%22${param.origin}%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22${param.destination}%5C%22%2C0%5D%5D%5D%2Cnull%2C0%5D%2C%5B%5B%5B%5B%5C%22${param.destination}%5C%22%2C0%5D%5D%5D%2C%5B%5B%5B%5C%22${param.origin}%5C%22%2C0%5D%5D%5D%2Cnull%2C0%5D%5D%2Cnull%2Cnull%2Cnull%2C1%5D%2C%5B%5C%22${param.start_date}%5C%22%2C%5C%22${param.end_date}%5C%22%5D%2Cnull%2C${param.trip_length}%5D%22%5D",
+      "body": "f.req=${param.trip_type}|${param.origin}|${param.destination}|${param.start_date}|${param.end_date}|${param.trip_length_days}|${param.adults}|${param.cabin_class}",
       "effect": "safe"
     }
   ],
   "site": "google-flights",
   "bootstrap": {
-    "url": "https://www.google.com/travel/flights?tfs=CBwQARoSagcIARIDU0pDcgcIARIDU0FOGhJqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ&tfu=KgIIAw",
+    "url": "https://www.google.com/travel/flights",
     "waitUntil": "domcontentloaded",
+    "timeoutMs": 30000,
     "captures": [
       {
         "name": "f_sid",
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\\\"FdrFJe\\\":\\\"([^\\\"]+)\\\"",
+        "pattern": "[\"']FdrFJe[\"']\\s*:\\s*[\"'](-?\\d+)[\"']",
         "group": 1
       },
       {
@@ -97,47 +109,73 @@ const WORKFLOW: Workflow = {
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\\\"cfb2h\\\":\\\"([^\\\"]+)\\\"",
+        "pattern": "[\"']cfb2h[\"']\\s*:\\s*[\"']([^\"']+)[\"']",
         "group": 1
       }
     ]
   },
   "parserModule": "./parser.ts",
-  "requestTransformModule": "../_shared/google_flights_transport.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Trip modes",
+      "reason": "Seq 97 records only the round-trip enum and reciprocal two-leg shape; one-way encoding is intentionally not guessed.",
+      "omittedParameters": []
+    },
+    {
+      "feature": "Cabin classes",
+      "reason": "Seq 97 establishes only enum 1 (economy); other cabin enum mappings are not evidenced.",
+      "omittedParameters": []
+    },
+    {
+      "feature": "Location identifiers",
+      "reason": "Seq 97 establishes three-letter airport codes, not arbitrary city or region identifiers.",
+      "omittedParameters": []
+    }
+  ],
   "liveVerified": true
 };
 
 export interface GetFlightCalendarPricesInput {
-  /** Origin airport code, city code, or place identifier. */
-  origin?: string;
-  /** Destination airport code, city code, or place identifier. */
-  destination?: string;
-  /** Start of date range in YYYY-MM-DD format. */
-  start_date?: string;
-  /** End of date range in YYYY-MM-DD format. */
-  end_date?: string;
-  /** Desired round-trip stay length encoded as a JSON array, such as [7,7] for exactly seven nights. */
-  trip_length?: string;
+  /** Calendar mode; only round_trip is supported by the recorded API encoding. */
+  trip_type?: string;
+  /** Three-letter origin airport code. */
+  origin: string;
+  /** Three-letter destination airport code. */
+  destination: string;
+  /** Inclusive beginning of the departure-date range in YYYY-MM-DD format. */
+  start_date: string;
+  /** Inclusive end of the departure-date range in YYYY-MM-DD format. */
+  end_date: string;
+  /** Exact round-trip length in days. */
+  trip_length_days: number;
+  /** Number of adult passengers. */
+  adults?: number;
+  /** Cabin class; only economy is supported by the recorded API encoding. */
+  cabin_class?: string;
 }
 
 export async function getFlightCalendarPrices(
   input: GetFlightCalendarPricesInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    origin: input.origin ?? "SJC",
-    destination: input.destination ?? "SAN",
-    start_date: input.start_date ?? "2026-05-24",
-    end_date: input.end_date ?? "2026-06-30",
-    trip_length: input.trip_length ?? "[7,7]",
-
+    trip_type: input.trip_type ?? "round_trip",
+    adults: input.adults ?? 1,
+    cabin_class: input.cabin_class ?? "economy",
+    origin: input.origin,
+    destination: input.destination,
+    start_date: input.start_date,
+    end_date: input.end_date,
+    trip_length_days: input.trip_length_days,
   };
   return executeWorkflow({
     workflow: WORKFLOW,
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

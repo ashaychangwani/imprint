@@ -4,7 +4,7 @@ Imprint is a CLI tool: record a real browser session once, get back two determin
 
 ## Status
 
-v0.1 shipped. Star demos: `examples/google-flights` (4 tools, audit 92.6%) and `examples/google-hotels` (4 tools, audit 91.7%) — each one-shot compiled from a single real browser-session recording via `imprint teach`, decoding Google's `batchexecute` nested-array wire format with producer→consumer token chaining (search → booking/reviews). Other working demos: `examples/southwest` (live, defeats Akamai via stealth-fetch) and `examples/discoverandgo` (authed museum-pass booking). `examples/echo` is the MCP smoke-test fixture. Deferred work lives in [TODOS.md](TODOS.md).
+v0.1 shipped. Current flagship snapshots are `examples/google-flights` (5 tools; 46/46 gradeable generation-audit units), `examples/google-hotels` (4 tools; 25/25), and `examples/southwest` (5 read-only tools; 35/35 gradeable public-tool units, with two authenticated tools excluded as infrastructure-blocked). They were refreshed from fresh replays of recorded browser sessions with `imprint teach`, then differentially audited and repaired only within the generated artifacts. The scores cover the refreshed, narrower contracts rather than same-scope comparisons with earlier snapshots. The Google examples decode Google's `batchexecute` nested-array wire format and preserve producer-consumer flows where the recordings proved them. Other working demos include `examples/discoverandgo` (authed museum-pass booking) and `examples/echo` (the MCP smoke-test fixture). Deferred work lives in [TODOS.md](TODOS.md).
 
 ## Where to look
 

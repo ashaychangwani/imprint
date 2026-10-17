@@ -1,12 +1,10 @@
 {
   "toolName": "list_upcoming_trips",
-  "site": "southwest",
   "intent": {
-    "description": "List upcoming Southwest trips for the logged-in account.",
+    "description": "List upcoming Southwest reservations for the signed-in member.",
     "userSaid": "logged into southwest; went to My Trips page"
   },
   "parameters": [],
-  "parserModule": "./parser.ts",
   "requests": [
     {
       "method": "GET",
@@ -27,52 +25,20 @@
       "effect": "safe"
     },
     {
-      "method": "POST",
-      "url": "https://www.southwest.com/api/security/v4/security/token",
-      "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
-        "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}",
-        "Origin": "https://www.southwest.com"
-      },
-      "body": "username=${credential.username}&password=${credential.password}&scope=openid&response_type=id_token+swa_token&client_id=6b6199ac-6726-4642-b5bd-86eb07062161",
-      "captures": [
-        {
-          "source": "json",
-          "name": "access_token",
-          "path": "$.access_token",
-          "required": true
-        },
-        {
-          "source": "json",
-          "name": "id_token",
-          "path": "$.id_token",
-          "required": true
-        }
-      ],
-      "effect": "safe"
-    },
-    {
       "method": "GET",
       "url": "https://www.southwest.com/api/loyalty-management/v2/loyalty-management/accounts/self/future-air-reservations-secure",
       "headers": {
         "Accept": "application/json, text/plain, */*",
         "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
         "x-channel-id": "southwest",
+        "x-app-version": "27.0.0",
         "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}"
+        "x-api-key": "${state.southwest_api_key}",
+        "x-app-id": "landing-home-page-v2"
       },
       "effect": "safe"
     }
   ],
-  "liveVerified": true
+  "site": "southwest",
+  "parserModule": "./parser.ts"
 }
