@@ -28,6 +28,7 @@ import {
   apiResearchCandidateSha256,
   apiResearchFollowUpStateSha256,
   apiResearchInputsSha256,
+  focusedPlannerResearchContext,
   mechanicalProofFailures,
   parseApiResearchOutput,
   parseBaselineMvpReviewOutput,
@@ -1957,6 +1958,53 @@ describe('prompts and pre-plan discovery', () => {
     );
   });
 
+  it('allows explicit research from plan review before execution while retaining known-reference checks', () => {
+    const base = revisionMasterInput();
+    const tool = at(base.current.plan.payload.tools, 0);
+    const input: MasterDecisionInput = {
+      ...base,
+      current: { run: base.current.run, plan: base.current.plan },
+      apiResearch: [
+        ApiResearchHandoffSchema.parse({
+          toolName: tool.candidate.toolName,
+          researchInputsSha256: apiResearchInputsSha256(tool),
+          status: 'blocked',
+          summary: 'The retained fixture observation leaves a construction question.',
+        }),
+      ],
+    };
+    const output = revisionMasterOutput(input);
+    output.researchFollowUps = [
+      {
+        toolName: tool.candidate.toolName,
+        instruction: 'Inspect the recorded response origin before choosing the construction.',
+        missingProof: ['The proposed response provenance differs from the retained call.'],
+        relevantToolNames: [],
+        relevantRequestSeqs: [12],
+      },
+    ];
+    expect(input.current?.snapshot).toBeUndefined();
+    expect(parseMasterDecisionOutput(JSON.stringify(output), input).researchFollowUps).toEqual(
+      output.researchFollowUps,
+    );
+
+    const unknownRequest = structuredClone(output);
+    at(unknownRequest.researchFollowUps ?? [], 0).relevantRequestSeqs = [999];
+    expect(() => parseMasterDecisionOutput(JSON.stringify(unknownRequest), input)).toThrow(
+      'unknown recording request',
+    );
+    const unknownSibling = structuredClone(output);
+    at(unknownSibling.researchFollowUps ?? [], 0).relevantToolNames = ['absent_tool'];
+    expect(() => parseMasterDecisionOutput(JSON.stringify(unknownSibling), input)).toThrow(
+      'unknown sibling research',
+    );
+    const unknownTarget = structuredClone(output);
+    at(unknownTarget.researchFollowUps ?? [], 0).toolName = 'absent_tool';
+    expect(() => parseMasterDecisionOutput(JSON.stringify(unknownTarget), input)).toThrow(
+      'research target is absent from desired plan',
+    );
+  });
+
   it('keeps unchanged blocked API research at the master checkpoint', async () => {
     const base = revisionMasterInput();
     const currentTool = at(base.current.plan.payload.tools, 0);
@@ -2258,6 +2306,7 @@ describe('prompts and pre-plan discovery', () => {
       reason: 'The revised required parameter is proven.',
     };
     let seen: unknown;
+    const researchMemory = memoryFixture(runIdentity.runId);
     const analyzer: MasterTeachAnalyzer = {
       async analyze(_prompt, payload, options) {
         seen = payload;
@@ -2271,7 +2320,11 @@ describe('prompts and pre-plan discovery', () => {
     const send = async (delta?: Parameters<typeof requestApiResearchStep>[2]) => {
       seen = undefined;
       expect(
-        await requestApiResearchStep(input, { provider: 'codex-cli', analyzer }, delta),
+        await requestApiResearchStep(
+          input,
+          { provider: 'codex-cli', analyzer, sharedResearch: researchMemory },
+          delta,
+        ),
       ).toEqual(output);
       return (seen as { input: Record<string, unknown> }).input;
     };
@@ -2365,6 +2418,145 @@ describe('prompts and pre-plan discovery', () => {
       'id',
     );
     expect(JSON.stringify(followUpTurn)).not.toContain('toolId');
+
+    const siblingCandidate = structuredClone(candidate);
+    siblingCandidate.workflow.toolName = 'search_sibling';
+    const siblingObservation = {
+      ...observation,
+      id: 'sibling-own-matched-observation',
+      candidateSha256: apiResearchCandidateSha256(siblingCandidate),
+    };
+    const sibling = ApiResearchHandoffSchema.parse({
+      toolName: 'search_sibling',
+      researchInputsSha256: sha('d'),
+      status: 'proven',
+      summary: 'The sibling exact request returned its own matched fixture records.',
+      candidate: siblingCandidate,
+      observation: siblingObservation,
+      observations: [siblingObservation],
+    });
+    followUp.siblingResearch = [sibling];
+    const siblingDelta = { kind: 'master_follow_up' as const, followUp, evidenceRef: evidence.ref };
+    const delivered = await send(siblingDelta);
+    expect((delivered.followUp as typeof followUp).siblingResearch).toEqual([sibling]);
+    const repeated = await send(siblingDelta);
+    const compact = repeated.followUp as typeof followUp & {
+      retainedSiblingResearch: Array<{ handoffRef: ContentAddressedRef; handoffSha256: string }>;
+    };
+    expect(compact.siblingResearch).toEqual([]);
+    expect(compact.retainedSiblingResearch[0]?.handoffSha256).toBe(digest(sibling));
+    const retainedRef = compact.retainedSiblingResearch[0]?.handoffRef;
+    if (!retainedRef) throw new Error('missing exact retained sibling reference');
+    let restored = '';
+    for (let offset: number | null = 0; offset !== null; ) {
+      const page = researchMemory.exchange('fixture-reader', {
+        runId: runIdentity.runId,
+        query: { action: 'read', ref: retainedRef, offset, length: 2000 },
+      }).read as { text: string; nextOffset: number | null };
+      restored += page.text;
+      offset = page.nextOffset;
+    }
+    expect(JSON.parse(restored)).toEqual(sibling);
+    expect(input.followUp?.siblingResearch).toEqual([sibling]);
+    await requestApiResearchStep(input, { provider: 'codex-cli', analyzer }, siblingDelta);
+    expect(
+      (seen as { input: { followUp: typeof followUp } }).input.followUp.siblingResearch,
+    ).toEqual([sibling]);
+
+    followUp.siblingResearch = [{ ...sibling, summary: 'A changed exact sibling observation.' }];
+    const changed = await send(siblingDelta);
+    expect((changed.followUp as typeof followUp).siblingResearch).toEqual(followUp.siblingResearch);
+    followUp.siblingResearch = [
+      { ...sibling, summary: 'New facts not sent by an observation-only turn.' },
+    ];
+    await send({ kind: 'observation', latestObservation: observation });
+    const notYetDelivered = await send(siblingDelta);
+    expect((notYetDelivered.followUp as typeof followUp).siblingResearch).toEqual(
+      followUp.siblingResearch,
+    );
+
+    // A new native pass has a fresh analyzer wrapper but the same retained child.
+    const nativeRoot = mkdtempSync(join(tmpdir(), 'imprint-research-delivery-'));
+    const family = new NativeTeachAgents({
+      root: nativeRoot,
+      model: 'fixture',
+      deadline: new RunDeadline(Date.now() + 10_000),
+    });
+    try {
+      await family.run(async () => {
+        await send(siblingDelta);
+        expect(
+          (seen as { input: { followUp: typeof followUp } }).input.followUp.siblingResearch,
+        ).toEqual(followUp.siblingResearch);
+        await requestApiResearchStep(
+          input,
+          {
+            provider: 'codex-cli',
+            analyzer: { analyze: analyzer.analyze },
+            sharedResearch: researchMemory,
+          },
+          siblingDelta,
+        );
+        expect(
+          (seen as { input: { followUp: typeof followUp } }).input.followUp.siblingResearch,
+        ).toEqual([]);
+        await requestApiResearchStep(
+          input,
+          {
+            provider: 'codex-cli',
+            conversationPrefix: 'separate:',
+            sharedResearch: researchMemory,
+            analyzer: {
+              async analyze(_prompt, payload) {
+                seen = payload;
+                return { text: JSON.stringify(output) };
+              },
+            },
+          },
+          siblingDelta,
+        );
+        expect(
+          (seen as { input: { followUp: typeof followUp } }).input.followUp.siblingResearch,
+        ).toEqual(followUp.siblingResearch);
+        const nextRun = { ...input, run: { ...input.run, runId: 'next-research-run' } };
+        await requestApiResearchStep(
+          nextRun,
+          {
+            provider: 'codex-cli',
+            sharedResearch: memoryFixture(nextRun.run.runId),
+            analyzer: {
+              async analyze(_prompt, payload) {
+                seen = payload;
+                return {
+                  text: JSON.stringify({
+                    ...output,
+                    binding: { ...output.binding, runId: nextRun.run.runId },
+                  }),
+                };
+              },
+            },
+          },
+          siblingDelta,
+        );
+        expect(
+          (seen as { input: { followUp: typeof followUp } }).input.followUp.siblingResearch,
+        ).toEqual(followUp.siblingResearch);
+      });
+      const separateFamily = new NativeTeachAgents({
+        root: join(nativeRoot, 'separate-family'),
+        model: 'fixture',
+        deadline: new RunDeadline(Date.now() + 10_000),
+      });
+      await separateFamily.run(async () => {
+        const delivered = await send(siblingDelta);
+        expect((delivered.followUp as typeof followUp).siblingResearch).toEqual(
+          followUp.siblingResearch,
+        );
+      });
+    } finally {
+      await family.close();
+      rmSync(nativeRoot, { recursive: true, force: true });
+    }
 
     const incompleteHandoff = JSON.stringify({
       binding: output.binding,
@@ -2527,6 +2719,97 @@ describe('prompts and pre-plan discovery', () => {
     ).toHaveLength(2);
   });
 
+  it('keeps own and linked research exact while loading unrelated handoffs only on demand', async () => {
+    const handoff = (toolName: string, marker: string) =>
+      ApiResearchHandoffSchema.parse({
+        toolName,
+        researchInputsSha256: sha('d'),
+        status: 'blocked',
+        summary: `Inspect the exact ${toolName} response before selecting a dependency.`,
+        observations: [
+          {
+            id: `${toolName}-observation`,
+            candidateSha256: sha('a'),
+            executionMechanism: 'fetch',
+            result: { ok: false, error: 'BAD_RESPONSE', preview: marker.repeat(1_000) },
+          },
+        ],
+      });
+    const own = handoff(detailTool.candidate.toolName, 'own ');
+    const producer = handoff(searchTool.candidate.toolName, 'producer ');
+    const unrelated = handoff('search_unrelated', 'unrelated ');
+    const input = { ...focusedInput(detailTool), apiResearch: [own, producer, unrelated] };
+    const memory = memoryFixture(input.run.runId);
+    const context = focusedPlannerResearchContext(input, memory);
+    expect(context.apiResearch).toEqual([own, producer]);
+    expect(context.apiResearchIndex?.map(({ toolName }) => toolName)).toEqual([
+      own.toolName,
+      producer.toolName,
+      unrelated.toolName,
+    ]);
+    expect(JSON.stringify(context)).not.toContain('unrelated unrelated');
+    const siblingRef = context.apiResearchIndex?.find(
+      ({ toolName }) => toolName === unrelated.toolName,
+    )?.handoffRef;
+    if (!siblingRef) throw new Error('Missing sibling handoff reference');
+    let exact = '';
+    for (let offset: number | null = 0; offset !== null; ) {
+      const page = memory.exchange('focused-planner-fixture', {
+        runId: memory.runId,
+        query: { action: 'read', ref: siblingRef, offset, length: 2_000 },
+      }).read as { text: string; nextOffset: number | null };
+      exact += page.text;
+      offset = page.nextOffset;
+    }
+    expect(JSON.parse(exact)).toEqual(unrelated);
+    expect(focusedPlannerResearchContext({ ...input, ...context }, memory)).toEqual(context);
+    expect(input.apiResearch).toEqual([own, producer, unrelated]);
+
+    const valid = focusedOutput(input);
+    const seen: Array<{ input: Record<string, unknown> }> = [];
+    expect(
+      await requestFocusedPlan(input, {
+        sharedResearch: memory,
+        analyzer: {
+          async analyze(_prompt, payload) {
+            seen.push(payload as { input: Record<string, unknown> });
+            return { text: JSON.stringify(valid) };
+          },
+        },
+      }),
+    ).toEqual(valid);
+    expect(seen[0]?.input.apiResearch).toEqual([own, producer]);
+    expect(seen[0]?.input.apiResearchIndex).toEqual(context.apiResearchIndex);
+  });
+
+  it('keeps outgoing linked consumers and a bounded index without shared-memory support', () => {
+    const input = {
+      ...focusedInput(searchTool),
+      availableProducers: [
+        {
+          toolId: detailTool.id,
+          toolName: detailTool.candidate.toolName,
+          expectedOutput: detailTool.candidate.expectedOutput,
+        },
+      ],
+    };
+    const research = [searchTool, detailTool].map((tool) =>
+      ApiResearchHandoffSchema.parse({
+        toolName: tool.candidate.toolName,
+        researchInputsSha256: sha('d'),
+        status: 'blocked',
+        summary: 'Synthetic research detail. '.repeat(100),
+      }),
+    );
+    const context = focusedPlannerResearchContext({ ...input, apiResearch: research });
+    expect(context.apiResearch).toEqual(research);
+    expect(context.apiResearchIndex).toHaveLength(2);
+    expect(context.apiResearchIndex?.every(({ handoffRef }) => handoffRef === undefined)).toBe(
+      true,
+    );
+    expect(context.apiResearchIndex?.every(({ summary }) => summary.length <= 400)).toBe(true);
+  });
+
   it('repairs missing recording links before accepting a focused plan', async () => {
     const input = focusedInput();
     const output = focusedOutput(input);
@@ -2652,6 +2935,7 @@ describe('prompts and pre-plan discovery', () => {
     const sent = (seen[0] as { input: Record<string, unknown> }).input;
     expect(Object.keys(sent).sort()).toEqual([
       'apiResearch',
+      'apiResearchIndex',
       'availableProducers',
       'evidence',
       'incomingChainEdges',

@@ -204,5 +204,6 @@ test('API research stays separate, retained, site-neutral, and ahead of compilat
   expect(apiResearchPrompt).toContain('Do not choose or recommend playbook here.');
   expect(apiResearchPrompt).not.toMatch(/google|southwest|hotels|flights/i);
   expect(prompt).toContain('separate retained request specialist has already produced');
-  expect(prompt).toContain('Preserve that request construction');
+  expect(prompt).toContain('advisory does not require another research pass');
+  expect(prompt).toContain('old observation separate from');
 });

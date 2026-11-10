@@ -33,6 +33,7 @@ export interface LiveIntegrationEvidence {
   result: LadderRun['result'];
   usedBackend: LadderRun['usedBackend'];
   attempts: LadderRun['attempts'];
+  responseObservations?: LadderRun['responseObservations'];
   durationMs: number;
 }
 
@@ -182,6 +183,7 @@ export async function runCapturedIntegrationCase(opts: {
       result: run.result,
       usedBackend: run.usedBackend,
       attempts: run.attempts,
+      responseObservations: run.responseObservations,
       durationMs: Date.now() - startedAt,
     };
     appendFileSync(evidencePath, `${JSON.stringify(evidence)}\n`, { mode: 0o600 });

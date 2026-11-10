@@ -8,6 +8,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin, resolve as pathResolve } from 'node:path';
@@ -29,9 +30,11 @@ import {
   runWorkflowWithLadder,
 } from '../src/imprint/backend-ladder.ts';
 import type { MintedJar } from '../src/imprint/cdp-browser-fetch.ts';
+import { RuntimeCookieJar } from '../src/imprint/cookie-jar.ts';
 import { type CredentialStore, executeWorkflow } from '../src/imprint/runtime.ts';
 import { type StealthFetch, createStealthFetch } from '../src/imprint/stealth-fetch.ts';
 import { saveCachedToken } from '../src/imprint/stealth-token-cache.ts';
+import { withTeachBrowserResources } from '../src/imprint/teach-browser-resources.ts';
 import type { ResolvedTool } from '../src/imprint/tool-loader.ts';
 import {
   type ConcreteBackend,
@@ -2549,7 +2552,10 @@ describe('cdp-replay cookie seeding by toolKind', () => {
   // A validated jar with an anti-bot cookie sitting in the site dir — the exact
   // shape `saveJar` leaves behind after any prior cdp-replay run.
   function seedJarOnDisk(site: string): void {
-    const cacheDir = compileBackendStateDir(pathJoin(root, site, 'tool'), 'cdp-replay');
+    const cacheDir = pathJoin(
+      compileBackendStateDir(pathJoin(root, site, 'tool'), 'cdp-replay'),
+      createHash('sha256').update(`https://${site}.example.com/login`).digest('hex'),
+    );
     mkdirSync(cacheDir, { recursive: true });
     const jar: MintedJar = {
       cookies: [{ name: '_abck', value: 'SEED~0~SEED', domain: `.${site}.example.com`, path: '/' }],
@@ -2570,7 +2576,10 @@ describe('cdp-replay cookie seeding by toolKind', () => {
         fetchImpl: (async () => new Response('{}', { status: 200 })) as unknown as typeof fetch,
         ensureBootstrapped: async () => [],
         mintJar: async () => ({
-          cookies: [],
+          cookies: (opts.seedCookies ?? []).map((cookie) => ({
+            ...cookie,
+            path: cookie.path ?? '/',
+          })),
           ua: 'X',
           html: '',
           bootstrapEpoch: Date.now(),
@@ -2649,6 +2658,387 @@ describe('cdp-replay cookie seeding by toolKind', () => {
     expect(r.usedBackend).toBe('cdp-replay');
     expect(cap.seen()?.map((cookie) => cookie.name)).toEqual(['trusted_device']);
     expect(runtimeCookieNames).toEqual(['trusted_device']);
+  });
+});
+
+describe('cdp-replay cookie snapshot continuity', () => {
+  it('does not launch a replacement when cancellation arrives while a credential refresh closes its browser', async () => {
+    const cancel = new AbortController();
+    let launches = 0;
+    __setCdpBrowserFetchFactoryForTest(() => {
+      launches++;
+      return {
+        fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: [],
+          ua: 'fixture-UA',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '?',
+        }),
+        close: async () => {
+          cancel.abort(new Error('fixture credential refresh cancellation'));
+        },
+      };
+    });
+    const tool: ResolvedTool = {
+      site: 'fixture-cancel-refresh',
+      dir: pathJoin(root, 'fixture-cancel-refresh', 'tool'),
+      workflow: {
+        site: 'fixture-cancel-refresh',
+        toolName: 'tool',
+        parameters: [],
+        intent: { description: 'fixture' },
+        requests: [{ method: 'GET', url: 'https://fixture.test/api/results', headers: {} }],
+      },
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+    const credentials = { site: tool.site, values: { username: 'fixture-first' }, cookies: [] };
+    const pool = new Map();
+    await runWithLadder(['cdp-replay'], tool, {}, root, new Map(), {
+      credentials,
+      signal: cancel.signal,
+      cdpPool: pool,
+    });
+    credentials.values.username = 'fixture-refreshed';
+    await expect(
+      runWithLadder(['cdp-replay'], tool, {}, root, new Map(), {
+        credentials,
+        signal: cancel.signal,
+        cdpPool: pool,
+      }),
+    ).rejects.toThrow('fixture credential refresh cancellation');
+    expect(launches).toBe(1);
+    expect(pool.size).toBe(0);
+  });
+  it('does not launch a replacement when cancellation arrives during low-memory eviction', async () => {
+    const previous = process.env.IMPRINT_TEACH_LOW_MEMORY;
+    process.env.IMPRINT_TEACH_LOW_MEMORY = '1';
+    let launches = 0;
+    __setCdpBrowserFetchFactoryForTest(() => {
+      launches++;
+      throw new Error('Must not launch');
+    });
+    __setCdpJarMinterForTest(async () => {
+      launches++;
+      throw new Error('Must not mint');
+    });
+    const tool: ResolvedTool = {
+      site: 'fixture-cancel-budget',
+      dir: pathJoin(root, 'fixture-cancel-budget', 'tool'),
+      workflow: {
+        site: 'fixture-cancel-budget',
+        toolName: 'tool',
+        parameters: [],
+        intent: { description: 'fixture' },
+        requests: [{ method: 'GET', url: 'https://fixture.test/api/results', headers: {} }],
+      },
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+    try {
+      for (const backend of ['cdp-replay', 'fetch-bootstrap'] as const) {
+        const cancel = new AbortController();
+        const pool = new Map([
+          [
+            'previous',
+            {
+              close: async () => {
+                cancel.abort(new Error('fixture eviction cancellation'));
+              },
+            } as never,
+          ],
+        ]);
+        await expect(
+          withTeachBrowserResources(pool, cancel.signal, (cdpPool) =>
+            runWithLadder([backend], tool, {}, root, new Map(), {
+              credentials: { site: tool.site, values: {}, cookies: [] },
+              signal: cancel.signal,
+              cdpPool,
+            }),
+          ),
+        ).rejects.toThrow('fixture eviction cancellation');
+      }
+      expect(launches).toBe(0);
+    } finally {
+      process.env.IMPRINT_TEACH_LOW_MEMORY = previous;
+    }
+  });
+  it('evicts managed browser contexts before CDP and standalone bootstrap launches', async () => {
+    const previous = process.env.IMPRINT_TEACH_LOW_MEMORY;
+    process.env.IMPRINT_TEACH_LOW_MEMORY = '1';
+    let closed = 0;
+    const pool = new Map();
+    pool.set('previous', {
+      close: async () => {
+        closed++;
+      },
+    });
+    const jar: MintedJar = {
+      cookies: [],
+      ua: 'fixture-UA',
+      html: '',
+      bootstrapEpoch: Date.now(),
+      abckFlag: '?',
+    };
+    __setCdpBrowserFetchFactoryForTest(() => {
+      expect(closed).toBe(1);
+      return {
+        fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => jar,
+        close: async () => {
+          closed++;
+        },
+      };
+    });
+    const tool: ResolvedTool = {
+      site: 'fixture-budget',
+      dir: pathJoin(root, 'fixture-budget', 'tool'),
+      workflow: {
+        site: 'fixture-budget',
+        toolName: 'tool',
+        parameters: [],
+        intent: { description: 'fixture' },
+        requests: [{ method: 'GET', url: 'https://fixture.test/api/results', headers: {} }],
+      },
+      toolFn: async () => ({ ok: true, data: {} }),
+    };
+    const credentials = { site: tool.site, values: {}, cookies: [] };
+    try {
+      await withTeachBrowserResources(pool, undefined, (cdpPool) =>
+        runWithLadder(['cdp-replay'], tool, {}, root, new Map(), { credentials, cdpPool }),
+      );
+      __setCdpJarMinterForTest(async () => {
+        expect(closed).toBe(2);
+        return jar;
+      });
+      await withTeachBrowserResources(pool, undefined, (cdpPool) =>
+        runWithLadder(['fetch-bootstrap'], tool, {}, root, new Map(), { credentials, cdpPool }),
+      );
+      expect(pool.size).toBe(0);
+    } finally {
+      process.env.IMPRINT_TEACH_LOW_MEMORY = previous;
+    }
+  });
+  it('preserves serialized HTTP-only changes and deletions at a retained authentication boundary', async () => {
+    const browserCookies = [
+      { name: 'rotated', value: 'browser-old', domain: 'fixture.test', path: '/' },
+      { name: 'deleted', value: 'browser-old', domain: 'fixture.test', path: '/' },
+    ];
+    const baseline = new RuntimeCookieJar(browserCookies);
+    const persisted = baseline.clone();
+    persisted.setCookieFromHeader(
+      'only_http=fixture-http; Path=/',
+      'https://api.fixture.test/',
+      baseline,
+    );
+    persisted.setCookieFromHeader('rotated=http-new; Path=/', 'https://fixture.test/', baseline);
+    persisted.setCookieFromHeader('deleted=; Max-Age=0; Path=/', 'https://fixture.test/', baseline);
+    const credentials: CredentialStore = {
+      site: 'fixture-auth-boundary',
+      values: {},
+      cookies: browserCookies,
+    };
+    let launches = 0;
+    __setCdpBrowserFetchFactoryForTest(() => {
+      launches++;
+      return {
+        fetchImpl: (async () => new Response('{}')) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies: browserCookies,
+          ua: 'fixture-UA',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '?',
+        }),
+        navigate: async () => new Response('{}'),
+        snapshotCookies: async () => browserCookies,
+        close: async () => {},
+      };
+    });
+    const observed: string[] = [];
+    const tool: ResolvedTool = {
+      site: credentials.site,
+      dir: pathJoin(root, credentials.site, 'tool'),
+      workflow: {
+        site: credentials.site,
+        toolName: 'tool',
+        toolKind: 'authenticate',
+        parameters: [],
+        intent: { description: 'fixture' },
+        requests: [{ method: 'GET', url: 'https://fixture.test/start', headers: {} }],
+      },
+      toolFn: async (_parameters, options) => {
+        const jar = new RuntimeCookieJar((options?.credentials as CredentialStore).cookies);
+        observed.push(jar.getCookieHeader('https://fixture.test/') ?? '');
+        observed.push(jar.getCookieHeader('https://api.fixture.test/') ?? '');
+        return { ok: true, data: {} };
+      },
+    };
+    const pool = new Map();
+    await runWithLadder(['cdp-replay'], tool, {}, root, new Map(), { credentials, cdpPool: pool });
+    credentials.cookies = JSON.parse(JSON.stringify(persisted.toJSON()));
+    await runWithLadder(['cdp-replay'], tool, {}, root, new Map(), { credentials, cdpPool: pool });
+    expect(launches).toBe(1);
+    expect(observed.slice(2)).toEqual(['rotated=http-new', 'only_http=fixture-http']);
+  });
+
+  it('keeps evicted bootstrap-context snapshots separate across A to B to A', async () => {
+    const seeds: Array<{ context: string; cookies: MintedJar['cookies'] }> = [];
+    __setCdpBrowserFetchFactoryForTest((options) => {
+      const context = options.bootstrapUrl ?? '';
+      let cookies = (options.seedCookies ?? []).map((cookie) => ({
+        ...cookie,
+        path: cookie.path ?? '/',
+      }));
+      seeds.push({ context, cookies });
+      return {
+        fetchImpl: (async () => {
+          cookies = [
+            {
+              name: 'context',
+              value: context.endsWith('/A') ? 'fixture-A' : 'fixture-B',
+              domain: 'fixture.test',
+              path: '/',
+            },
+          ];
+          return new Response('{}');
+        }) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies,
+          ua: 'fixture-UA',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '?',
+        }),
+        close: async () => {},
+      };
+    });
+    const tool: ResolvedTool = {
+      site: 'fixture-context',
+      dir: pathJoin(root, 'fixture-context', 'tool'),
+      workflow: {
+        site: 'fixture-context',
+        toolName: 'tool',
+        parameters: [{ name: 'context', type: 'string', description: 'fixture' }],
+        intent: { description: 'fixture' },
+        bootstrap: { url: 'https://fixture.test/${param.context}' },
+        requests: [{ method: 'GET', url: 'https://fixture.test/api/results', headers: {} }],
+      },
+      toolFn: async (_parameters, options) => {
+        await (options?.fetchImpl as typeof fetch)('https://fixture.test/api/results');
+        return { ok: true, data: {} };
+      },
+    };
+    const credentials = { site: tool.site, values: {}, cookies: [] };
+    for (const context of ['A', 'B', 'A'])
+      await runWithLadder(['cdp-replay'], tool, { context }, root, new Map(), { credentials });
+    expect(seeds[0]?.cookies).toEqual([]);
+    expect(seeds[1]?.cookies).toEqual([]);
+    expect(seeds[2]?.cookies).toEqual([
+      { name: 'context', value: 'fixture-A', domain: 'fixture.test', path: '/' },
+    ]);
+  });
+  it('retains rotation and deletion across recreation, but discards old snapshots after credential changes', async () => {
+    const seeds: MintedJar['cookies'][] = [];
+    let closed = 0;
+    const durable: CredentialStore = {
+      site: 'fixture-continuity',
+      values: { username: 'fixture-user' },
+      storage: [
+        {
+          origin: 'https://fixture.test',
+          kind: 'localStorage',
+          key: 'device',
+          value: 'fixture-device',
+        },
+      ],
+      cookies: [
+        { name: 'removed', value: 'fixture-old', domain: 'login.fixture.test', path: '/' },
+        { name: 'session', value: 'fixture-initial', domain: 'travel.fixture.test', path: '/' },
+      ],
+    };
+    __setCdpBrowserFetchFactoryForTest((options) => {
+      let cookies = (options.seedCookies ?? []).map((cookie) => ({
+        ...cookie,
+        path: cookie.path ?? '/',
+      }));
+      seeds.push(cookies);
+      return {
+        fetchImpl: (async () => {
+          cookies = [
+            { name: 'session', value: 'fixture-rotated', domain: 'travel.fixture.test', path: '/' },
+          ];
+          return new Response('{}');
+        }) as unknown as typeof fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => ({
+          cookies,
+          ua: 'fixture-UA',
+          html: '',
+          bootstrapEpoch: Date.now(),
+          abckFlag: '?',
+        }),
+        close: async () => {
+          closed++;
+        },
+      };
+    });
+    const tool: ResolvedTool = {
+      site: durable.site,
+      dir: pathJoin(root, durable.site, 'tool'),
+      workflow: {
+        site: durable.site,
+        toolName: 'tool',
+        parameters: [],
+        intent: { description: 'fixture' },
+        requests: [{ method: 'GET', url: 'https://travel.fixture.test/api/results', headers: {} }],
+      },
+      toolFn: async (_params, options) => {
+        await (options?.fetchImpl as typeof fetch)('https://travel.fixture.test/api/results');
+        return { ok: true, data: {} };
+      },
+    };
+    const run = (pool = new Map()) =>
+      runWithLadder(['cdp-replay'], tool, {}, root, new Map(), {
+        credentials: durable,
+        cdpPool: pool,
+      });
+    expect((await run()).result.ok).toBe(true);
+    expect((await run()).result.ok).toBe(true);
+    expect(seeds[1]).toEqual([
+      { name: 'session', value: 'fixture-rotated', domain: 'travel.fixture.test', path: '/' },
+    ]);
+    expect(durable.cookies[1]?.value).toBe('fixture-initial');
+    durable.cookies = [
+      { name: 'session', value: 'fixture-refreshed', domain: 'travel.fixture.test', path: '/' },
+    ];
+    await run();
+    expect(seeds[2]?.[0]?.value).toBe('fixture-refreshed');
+    durable.values.username = 'fixture-other-user';
+    await run();
+    expect(seeds[3]?.[0]?.value).toBe('fixture-refreshed');
+    if (durable.storage?.[0]) durable.storage[0].value = 'fixture-new-device';
+    await run();
+    expect(seeds[4]?.[0]?.value).toBe('fixture-refreshed');
+    const retainedPool = new Map();
+    await run(retainedPool);
+    await run(retainedPool);
+    expect(seeds).toHaveLength(6);
+    durable.cookies = [
+      {
+        name: 'session',
+        value: 'fixture-refreshed-again',
+        domain: 'travel.fixture.test',
+        path: '/',
+      },
+    ];
+    await run(retainedPool);
+    expect(seeds[6]?.[0]?.value).toBe('fixture-refreshed-again');
+    expect(closed).toBe(1);
   });
 });
 
@@ -3348,6 +3738,7 @@ describe('concurrent compile pacing', () => {
     __resetCompilePacingForTest();
     process.env.IMPRINT_COMPILE_ACT_SPACING_MS = '100';
     const starts: number[] = [];
+    let received = 0;
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
@@ -3355,17 +3746,22 @@ describe('concurrent compile pacing', () => {
     const server = Bun.serve({
       port: 0,
       fetch: async () => {
-        starts.push(Date.now());
-        if (starts.length === 1) await gate;
+        if (++received === 1) await gate;
         return Response.json({ ok: true });
       },
     });
-    const calls = [0, 1, 2].map((i) =>
+    // Prepare disk fixtures before reserving any start slots, and observe the
+    // prepared dispatch rather than variable loopback connection arrival time.
+    const workflows = [0, 1, 2].map((i) =>
+      fixture(`http://127.0.0.1:${server.port}/fixture`, `paced_${i}`),
+    );
+    const calls = workflows.map((workflowPath) =>
       runWorkflowWithLadder({
-        workflowPath: fixture(`http://127.0.0.1:${server.port}/fixture`, `paced_${i}`),
+        workflowPath,
         params: {},
         credentials: { site: 'pacing-fixture', cookies: [], values: {} },
         forceBackend: 'fetch',
+        onPreparedRequest: () => starts.push(Date.now()),
       }),
     );
     try {

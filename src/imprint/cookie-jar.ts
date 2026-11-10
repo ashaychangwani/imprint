@@ -10,6 +10,8 @@
  * scope for v1.
  */
 
+import { createHash } from 'node:crypto';
+
 export interface RuntimeCookie {
   name: string;
   value: string;
@@ -21,6 +23,8 @@ export interface RuntimeCookie {
   sameSite?: string;
   hostOnly?: boolean;
   creationIndex?: number;
+  /** Exact browser observation when an independent HTTP response changed this scope. */
+  httpResponse?: { browserSnapshotHash: string | null; deleted?: boolean };
 }
 
 export interface CookieLookupConstraints {
@@ -52,14 +56,95 @@ export class RuntimeCookieJar {
     return this.cookies.map((c) => ({ ...c }));
   }
 
+  /** Reconcile a complete browser snapshot, including cookies it removed. */
+  replace(cookies: RuntimeCookie[]): void {
+    this.cookies = [];
+    for (const cookie of cookies) this.setCookie(cookie);
+  }
+
+  /** Restore actual browser state while retaining HTTP changes whose browser
+   * baseline has not changed since that response, including deletion markers. */
+  restoreBrowserSnapshot(cookies: RuntimeCookie[]): void {
+    const observed = new RuntimeCookieJar(cookies);
+    const independent = this.cookies.filter(
+      (cookie) =>
+        cookie.httpResponse !== undefined &&
+        cookie.httpResponse.browserSnapshotHash === observed.scopeHash(cookie),
+    );
+    this.replace([...cookies, ...independent]);
+  }
+
+  private scopeHash(cookie: RuntimeCookie): string | null {
+    const matching = this.cookies.find((entry) => cookieScopeKey(entry) === cookieScopeKey(cookie));
+    if (!matching) return null;
+    const { name, value, domain, path, expires, sameSite, hostOnly } = matching;
+    return createHash('sha256')
+      .update(
+        JSON.stringify({
+          name,
+          value,
+          domain,
+          path,
+          expires,
+          sameSite,
+          hostOnly,
+          secure: Boolean(matching.secure),
+          httpOnly: Boolean(matching.httpOnly),
+        }),
+      )
+      .digest('hex');
+  }
+
+  /** Reconcile browser changes while retaining independent HTTP Set-Cookie
+   * changes that the browser has not observed. The caller owns the previous
+   * browser snapshot separately from this mixed-transport jar. */
+  reconcileBrowserSnapshot(cookies: RuntimeCookie[], previous: RuntimeCookieJar): void {
+    const next = new RuntimeCookieJar(cookies);
+    const scope = cookieScopeKey;
+    const before = new Map(previous.cookies.map((cookie) => [scope(cookie), cookie]));
+    const after = new Map(next.cookies.map((cookie) => [scope(cookie), cookie]));
+    const current = new Map(this.cookies.map((cookie) => [scope(cookie), cookie]));
+    const equal = (a: RuntimeCookie | undefined, b: RuntimeCookie | undefined) => {
+      const fields: (keyof RuntimeCookie)[] = [
+        'name',
+        'value',
+        'domain',
+        'path',
+        'expires',
+        'httpOnly',
+        'secure',
+        'sameSite',
+        'hostOnly',
+      ];
+      return (
+        a === b ||
+        Boolean(
+          a &&
+            b &&
+            fields.every((field) =>
+              field === 'secure' || field === 'httpOnly'
+                ? Boolean(a[field]) === Boolean(b[field])
+                : a[field] === b[field],
+            ),
+        )
+      );
+    };
+    this.cookies = this.cookies.filter((cookie) => {
+      const key = scope(cookie);
+      return !before.has(key) || after.has(key) || !equal(cookie, before.get(key));
+    });
+    for (const [key, cookie] of after) {
+      if (!equal(cookie, before.get(key)) || equal(current.get(key), before.get(key)))
+        this.setCookie(cookie);
+    }
+    previous.replace(cookies);
+  }
+
   setCookie(cookie: RuntimeCookie): void {
     const normalized = normalizeCookie(cookie);
-    const idx = this.cookies.findIndex(
-      (c) =>
-        c.name === normalized.name && c.domain === normalized.domain && c.path === normalized.path,
-    );
+    const idx = this.cookies.findIndex((c) => cookieScopeKey(c) === cookieScopeKey(normalized));
 
-    if (isExpired(normalized)) {
+    if (isExpired(normalized) && !normalized.httpResponse?.deleted) {
       if (idx >= 0) this.cookies.splice(idx, 1);
       return;
     }
@@ -75,9 +160,20 @@ export class RuntimeCookieJar {
     }
   }
 
-  setCookieFromHeader(setCookie: string, requestUrl: string): void {
+  setCookieFromHeader(
+    setCookie: string,
+    requestUrl: string,
+    browserSnapshot?: RuntimeCookieJar,
+  ): void {
     const parsed = parseSetCookie(setCookie, requestUrl);
-    if (parsed) this.setCookie(parsed);
+    if (parsed) {
+      if (browserSnapshot)
+        parsed.httpResponse = {
+          browserSnapshotHash: browserSnapshot.scopeHash(parsed),
+          ...(isExpired(parsed) ? { deleted: true } : {}),
+        };
+      this.setCookie(parsed);
+    }
   }
 
   getCookieHeader(url: string): string | null {
@@ -129,6 +225,7 @@ export class RuntimeCookieJar {
     const nowSeconds = Date.now() / 1000;
 
     return this.cookies.filter((c) => {
+      if (c.httpResponse?.deleted) return false;
       if (c.expires !== undefined && c.expires <= nowSeconds) return false;
       if (c.secure && !secure) return false;
       if (!domainMatches(c, host)) return false;
@@ -197,6 +294,19 @@ function parseSetCookie(setCookie: string, requestUrl: string): RuntimeCookie | 
   }
 
   return normalizeCookie(cookie);
+}
+
+/** Chromium stores host-only and domain cookies as distinct scopes even when
+ * their names, normalized domains, and paths match. */
+export function cookieScopeKey(
+  cookie: Pick<RuntimeCookie, 'name' | 'domain' | 'path' | 'hostOnly'>,
+): string {
+  return JSON.stringify([
+    normalizeDomain(cookie.domain),
+    cookie.hostOnly ?? !cookie.domain.startsWith('.'),
+    cookie.path || '/',
+    cookie.name,
+  ]);
 }
 
 function normalizeCookie(cookie: RuntimeCookie): RuntimeCookie {

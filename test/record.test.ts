@@ -1,6 +1,6 @@
 /**
  * End-to-end smoke test for the recorder. Launches a real Chromium, navigates
- * to example.com (zero anti-bot, zero auth), records for 2 seconds, then aborts
+ * to a local synthetic page (zero anti-bot, zero auth), records, then aborts
  * via AbortController and asserts the captured session is well-formed.
  *
  * Skipped when CI=true unless RUN_BROWSER_TESTS=1 is also set, because GitHub
@@ -17,61 +17,88 @@ import { record } from '../src/imprint/record.ts';
 
 const SHOULD_RUN = process.env.CI !== 'true' || process.env.RUN_BROWSER_TESTS === '1';
 
+function startFixtureRecording(options: Parameters<typeof record>[0]) {
+  const recording = record(options);
+  // A fixture may be waiting for page activity when startup fails. Own that
+  // rejection immediately, then surface it through the fixture's activity wait.
+  void recording.catch(() => {});
+  return recording;
+}
+
+async function waitForFixtureActivity<T>(
+  activity: Promise<T>,
+  recording: ReturnType<typeof record>,
+  message: string,
+  timeoutMs = 10_000,
+): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      activity,
+      recording.then(() => {
+        throw new Error(`Recording stopped before fixture activity: ${message}`);
+      }),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
+      }),
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 describe('recorder e2e', () => {
   if (!SHOULD_RUN) {
     it.skip('skipped in CI: set RUN_BROWSER_TESTS=1 to enable', () => {});
     return;
   }
 
-  it('captures a navigation to example.com', async () => {
+  it('captures a real navigation and response from a local fixture', async () => {
     const tmp = mkdtempSync(pathJoin(tmpdir(), 'imprint-test-'));
     const outPath = pathJoin(tmp, 'session.jsonl');
     const ctrl = new AbortController();
-
-    // Kick off the recording. It runs until ctrl.abort() fires.
-    const recordPromise = record({
+    const fixtureBody =
+      '<!doctype html><title>Fixture recorder navigation</title><h1>Recorded fixture</h1>';
+    const server = Bun.serve({
+      hostname: '127.0.0.1',
+      port: 0,
+      fetch: () => new Response(fixtureBody, { headers: { 'content-type': 'text/html' } }),
+    });
+    const url = `http://127.0.0.1:${server.port}/`;
+    const recordPromise = startFixtureRecording({
       site: 'test',
-      url: 'https://example.com/',
+      url,
       outPath,
       signal: ctrl.signal,
       noNarration: true,
     });
-
-    // Give Chromium time to launch + load + finish all network requests.
-    // example.com is ~1KB so this is generous.
-    await sleep(5000);
-    ctrl.abort();
-
-    const result = await recordPromise;
-
-    expect(result.jsonlPath).toBe(outPath);
-    expect(existsSync(result.sessionPath)).toBe(true);
-    expect(result.count).toBeGreaterThan(0);
-
-    // Validate the assembled session through the same parser downstream tools use.
-    const { assembleFromJsonl } = await import('../src/imprint/session-writer.ts');
-    const session = assembleFromJsonl(outPath);
-    expect(session.site).toBe('test');
-    expect(session.url).toBe('https://example.com/');
-    expect(session.requests.length).toBeGreaterThan(0);
-
-    const exampleRequest = session.requests.find((r) => r.url.includes('example.com'));
-    expect(exampleRequest).toBeDefined();
-    expect(exampleRequest?.method).toBe('GET');
-    if (exampleRequest?.response) {
-      expect(exampleRequest.response.status).toBeGreaterThanOrEqual(200);
-      expect(exampleRequest.response.status).toBeLessThan(400);
+    try {
+      // Preserve the existing launch/capture window; no external uptime dependency.
+      await sleep(5000);
+      ctrl.abort();
+      const result = await recordPromise;
+      expect(result.jsonlPath).toBe(outPath);
+      expect(existsSync(result.sessionPath)).toBe(true);
+      expect(result.count).toBeGreaterThan(0);
+      const { assembleFromJsonl } = await import('../src/imprint/session-writer.ts');
+      const session = assembleFromJsonl(outPath);
+      expect(session.site).toBe('test');
+      expect(session.url).toBe(url);
+      expect(session.requests.length).toBeGreaterThan(0);
+      const navigation = session.requests.find((request) => request.url === url);
+      expect(navigation).toBeDefined();
+      expect(navigation?.method).toBe('GET');
+      expect(navigation?.response?.status).toBe(200);
+      expect(navigation?.response?.body).toContain('Fixture recorder navigation');
+      expect(session.cookieSnapshots.length).toBeGreaterThanOrEqual(2);
+      expect(session.cookieSnapshots.find((snapshot) => snapshot.label === 'start')).toBeDefined();
+      expect(session.cookieSnapshots.find((snapshot) => snapshot.label === 'end')).toBeDefined();
+    } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
+      server.stop(true);
+      rmSync(tmp, { recursive: true, force: true });
     }
-
-    // Hardening assertions added day 2.5 — cookie snapshots fire at start
-    // and end so we know the auth state surrounding the captured workflow.
-    expect(session.cookieSnapshots.length).toBeGreaterThanOrEqual(2);
-    const startSnap = session.cookieSnapshots.find((s) => s.label === 'start');
-    const endSnap = session.cookieSnapshots.find((s) => s.label === 'end');
-    expect(startSnap).toBeDefined();
-    expect(endSnap).toBeDefined();
-
-    rmSync(tmp, { recursive: true, force: true });
   }, 30_000);
 
   it('returns when Chromium exits before a no-narration stop signal', async () => {
@@ -80,16 +107,22 @@ describe('recorder e2e', () => {
     const ctrl = new AbortController();
     const closeBrowser = Promise.withResolvers<() => Promise<void>>();
 
+    const recordPromise = startFixtureRecording({
+      site: 'browser-exit-test',
+      url: 'about:blank',
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+      onBrowserReady: (_port, close) => closeBrowser.resolve(close),
+    });
     try {
-      const recordPromise = record({
-        site: 'browser-exit-test',
-        url: 'about:blank',
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-        onBrowserReady: (_port, close) => closeBrowser.resolve(close),
-      });
-      await (await closeBrowser.promise)();
+      await (
+        await waitForFixtureActivity(
+          closeBrowser.promise,
+          recordPromise,
+          'browser did not become ready',
+        )
+      )();
       const result = await Promise.race([
         recordPromise,
         sleep(10_000).then(() => {
@@ -98,6 +131,8 @@ describe('recorder e2e', () => {
       ]);
       expect(result.jsonlPath).toBe(outPath);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       rmSync(tmp, { recursive: true, force: true });
     }
   }, 30_000);
@@ -128,23 +163,28 @@ describe('recorder e2e', () => {
       },
     });
 
+    const recordPromise = startFixtureRecording({
+      site: 'browser-exit-open-response-test',
+      url: `http://127.0.0.1:${server.port}/`,
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+      onBrowserReady: (_port, close) => closeBrowser.resolve(close),
+    });
     try {
-      const recordPromise = record({
-        site: 'browser-exit-open-response-test',
-        url: `http://127.0.0.1:${server.port}/`,
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-        onBrowserReady: (_port, close) => closeBrowser.resolve(close),
-      });
-      await Promise.race([
+      await waitForFixtureActivity(
         responseStarted.promise,
-        sleep(10_000).then(() => {
-          throw new Error('open response did not start');
-        }),
-      ]);
+        recordPromise,
+        'open response did not start',
+      );
       await sleep(200);
-      await (await closeBrowser.promise)();
+      await (
+        await waitForFixtureActivity(
+          closeBrowser.promise,
+          recordPromise,
+          'browser did not become ready',
+        )
+      )();
       const result = await Promise.race([
         recordPromise,
         sleep(5_000).then(() => {
@@ -153,6 +193,8 @@ describe('recorder e2e', () => {
       ]);
       expect(result.jsonlPath).toBe(outPath);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       server.stop(true);
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -163,7 +205,7 @@ describe('recorder e2e', () => {
     const outPath = pathJoin(tmp, 'session.jsonl');
     const ctrl = new AbortController();
 
-    const recordPromise = record({
+    const recordPromise = startFixtureRecording({
       site: 'check-test',
       url: 'https://example.com/',
       outPath,
@@ -171,18 +213,22 @@ describe('recorder e2e', () => {
       noNarration: true,
     });
 
-    await sleep(3500);
-    ctrl.abort();
-    await recordPromise;
+    try {
+      await sleep(3500);
+      ctrl.abort();
+      await recordPromise;
 
-    const { checkSession } = await import('../src/imprint/check.ts');
-    const result = checkSession(outPath.replace(/\.jsonl$/, '.json'));
-    // We expect at least the no-narration warning. Capture is otherwise sound.
-    expect(result.summary).toContain('site:        check-test');
-    expect(result.summary).toContain('cookies:');
-    expect(result.warnings.some((w) => /narration/i.test(w))).toBe(true);
-
-    rmSync(tmp, { recursive: true, force: true });
+      const { checkSession } = await import('../src/imprint/check.ts');
+      const result = checkSession(outPath.replace(/\.jsonl$/, '.json'));
+      // We expect at least the no-narration warning. Capture is otherwise sound.
+      expect(result.summary).toContain('site:        check-test');
+      expect(result.summary).toContain('cookies:');
+      expect(result.warnings.some((w) => /narration/i.test(w))).toBe(true);
+    } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
+      rmSync(tmp, { recursive: true, force: true });
+    }
   }, 30_000);
 
   it('drains and preserves a redirect that starts before shutdown', async () => {
@@ -207,20 +253,15 @@ describe('recorder e2e', () => {
       },
     });
 
+    const recordPromise = startFixtureRecording({
+      site: 'shutdown-drain-test',
+      url: `http://127.0.0.1:${server.port}/`,
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+    });
     try {
-      const recordPromise = record({
-        site: 'shutdown-drain-test',
-        url: `http://127.0.0.1:${server.port}/`,
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-      });
-      await Promise.race([
-        started.promise,
-        sleep(10_000).then(() => {
-          throw new Error('slow request did not start');
-        }),
-      ]);
+      await waitForFixtureActivity(started.promise, recordPromise, 'slow request did not start');
       ctrl.abort();
       await recordPromise;
 
@@ -236,6 +277,8 @@ describe('recorder e2e', () => {
         ),
       ).toBe(false);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       server.stop(true);
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -260,20 +303,15 @@ describe('recorder e2e', () => {
       },
     });
 
+    const recordPromise = startFixtureRecording({
+      site: 'shutdown-cutoff-test',
+      url: `http://127.0.0.1:${server.port}/`,
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+    });
     try {
-      const recordPromise = record({
-        site: 'shutdown-cutoff-test',
-        url: `http://127.0.0.1:${server.port}/`,
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-      });
-      await Promise.race([
-        started.promise,
-        sleep(10_000).then(() => {
-          throw new Error('late request did not start');
-        }),
-      ]);
+      await waitForFixtureActivity(started.promise, recordPromise, 'late request did not start');
       ctrl.abort();
       await recordPromise;
 
@@ -283,6 +321,8 @@ describe('recorder e2e', () => {
         session.requests.some((request) => new URL(request.url).pathname === '/too-late'),
       ).toBe(false);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       server.stop(true);
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -317,20 +357,15 @@ describe('recorder e2e', () => {
       },
     });
 
+    const recordPromise = startFixtureRecording({
+      site: 'rsc-stream-test',
+      url: `http://127.0.0.1:${server.port}/`,
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+    });
     try {
-      const recordPromise = record({
-        site: 'rsc-stream-test',
-        url: `http://127.0.0.1:${server.port}/`,
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-      });
-      await Promise.race([
-        requested.promise,
-        sleep(10_000).then(() => {
-          throw new Error('RSC request did not start');
-        }),
-      ]);
+      await waitForFixtureActivity(requested.promise, recordPromise, 'RSC request did not start');
       await sleep(1_000);
       ctrl.abort();
       await recordPromise;
@@ -341,6 +376,8 @@ describe('recorder e2e', () => {
       expect(rsc?.response?.mimeType).toBe('text/x-component');
       expect(rsc?.response?.body).toBe(flightBody);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       server.stop(true);
       rmSync(tmp, { recursive: true, force: true });
     }
@@ -386,21 +423,20 @@ describe('recorder e2e', () => {
       },
     });
 
+    const recordPromise = startFixtureRecording({
+      site: 'rsc-prefetch-intent-test',
+      url: `http://127.0.0.1:${server.port}/`,
+      outPath,
+      signal: ctrl.signal,
+      noNarration: true,
+      onBrowserReady: browserReady.resolve,
+    });
     try {
-      const recordPromise = record({
-        site: 'rsc-prefetch-intent-test',
-        url: `http://127.0.0.1:${server.port}/`,
-        outPath,
-        signal: ctrl.signal,
-        noNarration: true,
-        onBrowserReady: browserReady.resolve,
-      });
-      await Promise.race([
+      await waitForFixtureActivity(
         requested.promise,
-        sleep(10_000).then(() => {
-          throw new Error('prefetch request did not start');
-        }),
-      ]);
+        recordPromise,
+        'prefetch request did not start',
+      );
       await sleep(700);
       const port = await browserReady.promise;
       const driver = await CDP({
@@ -478,6 +514,8 @@ describe('recorder e2e', () => {
       expect(prefetch?.response?.body).toBe(flightBody);
       expect(activePrefetch?.response?.body).toBe(flightBody);
     } finally {
+      ctrl.abort();
+      await recordPromise.catch(() => {});
       server.stop(true);
       rmSync(tmp, { recursive: true, force: true });
     }

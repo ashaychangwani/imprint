@@ -75,6 +75,11 @@ import {
   SharedResearchExchangeSchema,
   type TeachResearchMemory,
 } from './teach-research-memory.ts';
+import {
+  AgentInteractionSchema,
+  USER_INTERACTION_INSTRUCTIONS,
+  requestAgentInteraction,
+} from './user-interaction.ts';
 export * from './master-teach-agent-contracts.ts';
 export * from './master-teach-prompt-projections.ts';
 export type { MasterTeachAnalyzer } from './native-agent-pass.ts';
@@ -1767,16 +1772,8 @@ function masterOutputSchema(input: MasterDecisionInput) {
     if (input.phase === 'discovery' && output.recallToolNames.length > 0)
       issue(ctx, ['recallToolNames'], 'initial discovery cannot recall an existing tool');
     const researchFollowUps = output.researchFollowUps ?? [];
-    if (
-      researchFollowUps.length > 0 &&
-      input.decisionPurpose !== 'research_review' &&
-      !input.current?.snapshot
-    )
-      issue(
-        ctx,
-        ['researchFollowUps'],
-        'research follow-ups require research review or a current execution snapshot',
-      );
+    if (researchFollowUps.length > 0 && !input.current)
+      issue(ctx, ['researchFollowUps'], 'research follow-ups require an existing teaching plan');
     if (input.decisionPurpose === 'research_review' && output.recallToolNames.length > 0)
       issue(ctx, ['recallToolNames'], 'research review directs researchers, not compilers');
     const currentToolNames = new Set(
@@ -2179,6 +2176,7 @@ type Role =
   | 'focused planner'
   | 'API researcher'
   | 'master decision'
+  | 'component recovery'
   | 'baseline MVP reviewer'
   | 'parameter advisor'
   | 'completion reviewer'
@@ -2450,6 +2448,7 @@ async function request<S extends z.ZodTypeAny>(options: {
   validation: unknown;
   schema: S;
   agent: MasterTeachAgentOptions;
+  allowInteractions?: boolean;
 }): Promise<z.output<S>> {
   const memory = options.agent.sharedResearch;
   const author = `${options.agent.conversationPrefix ?? ''}${options.conversationKey}`;
@@ -2459,7 +2458,7 @@ async function request<S extends z.ZodTypeAny>(options: {
     input: options.input,
     validation: options.validation,
   });
-  const system = `${readFileSync(join(PROMPTS, options.prompt), 'utf8')}${memory ? SHARED_RESEARCH_INSTRUCTIONS : ''}\n\nWhen supplied, runTiming gives the host's current time and remaining shared run budget at this turn. Use it to choose a useful MVP and proportionate next steps, leaving time for planning, compilation, live verification, repair, and publication. These are time facts, not per-tool attempt limits or permission to weaken proof. Strategy remains yours.`;
+  const system = `${readFileSync(join(PROMPTS, options.prompt), 'utf8')}${memory ? SHARED_RESEARCH_INSTRUCTIONS : ''}${USER_INTERACTION_INSTRUCTIONS}\n\nWhen supplied, runTiming gives the host's current time and remaining shared run budget at this turn. Use it to choose a useful MVP and proportionate next steps, leaving time for planning, compilation, live verification, repair, and publication. These are time facts, not per-tool attempt limits or permission to weaken proof. Strategy remains yours.`;
   const startedAt = Date.now();
   const roleExpiresAt =
     options.agent.timeoutMs === undefined ? undefined : startedAt + options.agent.timeoutMs;
@@ -2529,6 +2528,31 @@ async function request<S extends z.ZodTypeAny>(options: {
     while (true) {
       try {
         const decoded = parse(options.role, response.text, z.record(z.unknown()), attempt);
+        if (decoded.interaction !== undefined) {
+          if (options.allowInteractions === false)
+            throw new SemanticAgentOutputError(
+              options.role,
+              [
+                'Return the recovery decision directly; the host dispatches the selected component owner.',
+              ],
+              attempt,
+            );
+          const interaction = parse(
+            options.role,
+            JSON.stringify(decoded),
+            z.object({ interaction: AgentInteractionSchema }).strict(),
+            attempt,
+          ).interaction;
+          const interactionResult = await requestAgentInteraction(interaction, signal);
+          response = await analyze({
+            ...(retainedCodexConversation ? {} : { originalInput: options.input }),
+            validationContext: options.validation,
+            interactionResult,
+            instruction:
+              'Continue the same role. User input and authentication results do not prove the data operation. Cancellation or unavailable input is not approval.',
+          });
+          continue;
+        }
         const { sharedResearch, ...decision } = decoded;
         let exchange: z.infer<typeof SharedResearchExchangeSchema> | undefined;
         if (sharedResearch !== undefined) {
@@ -2645,6 +2669,61 @@ export async function requestToolSelectionAdvice(
     agent,
   });
 }
+/** Keep exact own/dependency research in the reading path and retain other
+ * operations as a small index. The master still owns every complete handoff. */
+export function focusedPlannerResearchContext(
+  input: Pick<
+    FocusedPlannerInput,
+    | 'tool'
+    | 'availableProducers'
+    | 'siblingToolEvidence'
+    | 'incomingChainEdges'
+    | 'outgoingChainEdges'
+    | 'apiResearch'
+    | 'apiResearchIndex'
+  >,
+  memory?: TeachResearchMemory,
+): Pick<FocusedPlannerInput, 'apiResearch' | 'apiResearchIndex'> {
+  const relevantNames = new Set([
+    input.tool.candidate.toolName,
+    ...input.tool.candidate.dependsOnTools,
+  ]);
+  const namesById = new Map([
+    [input.tool.id, input.tool.candidate.toolName],
+    ...input.availableProducers.map(({ toolId, toolName }) => [toolId, toolName] as const),
+    ...input.siblingToolEvidence.map(({ toolId, toolName }) => [toolId, toolName] as const),
+  ]);
+  for (const edge of [...input.incomingChainEdges, ...input.outgoingChainEdges]) {
+    for (const toolId of [edge.producerToolId, edge.consumerToolId]) {
+      const name = namesById.get(toolId);
+      if (name) relevantNames.add(name);
+    }
+  }
+  const index = new Map((input.apiResearchIndex ?? []).map((entry) => [entry.toolName, entry]));
+  for (const handoff of input.apiResearch ?? []) {
+    const observation = handoff.observation ?? handoff.observations?.at(-1);
+    const handoffRef = memory?.remember(handoff) ?? index.get(handoff.toolName)?.handoffRef;
+    index.set(handoff.toolName, {
+      toolName: handoff.toolName,
+      researchInputsSha256: handoff.researchInputsSha256,
+      status: handoff.status,
+      summary: handoff.summary.slice(0, 400),
+      ...(observation
+        ? {
+            observationId: observation.id,
+            executionMechanism: observation.executionMechanism,
+            resultOk: observation.result.ok,
+          }
+        : {}),
+      ...(handoffRef ? { handoffRef } : {}),
+    });
+  }
+  return {
+    apiResearch: (input.apiResearch ?? []).filter(({ toolName }) => relevantNames.has(toolName)),
+    apiResearchIndex: [...index.values()],
+  };
+}
+
 export async function requestFocusedPlan(
   input: FocusedPlannerInput,
   agent: MasterTeachAgentOptions = {},
@@ -2654,7 +2733,7 @@ export async function requestFocusedPlan(
     role: 'focused planner',
     conversationKey: `tool:${checked.tool.candidate.toolName}:planner`,
     prompt: 'master-teach-focused-planner.md',
-    input: checked,
+    input: { ...checked, ...focusedPlannerResearchContext(checked, agent.sharedResearch) },
     validation: {
       binding: focusedPlannerBinding(checked),
       recordingIndex: checked.recordingIndex,
@@ -2664,6 +2743,13 @@ export async function requestFocusedPlan(
     agent,
   });
 }
+// Native research passes wrap a new analyzer around the same retained child.
+// Key native delivery by family + conversation rather than that short-lived wrapper.
+const researchSiblingDelivery = new WeakMap<
+  object,
+  Map<string, { runId: string; handoffs: Map<string, string> }>
+>();
+
 export async function requestApiResearchStep(
   input: ApiResearchInput,
   agent: MasterTeachAgentOptions = {},
@@ -2671,11 +2757,41 @@ export async function requestApiResearchStep(
 ) {
   const checked = ApiResearchInputValidationSchema.parse(input);
   const latestObservation = checked.observations.at(-1);
+  const conversation = `${agent.conversationPrefix ?? ''}tool:${checked.tool.candidate.toolName}:api-researcher`;
+  const retainedOwner =
+    agent.provider === 'codex-cli' ? (currentNativeTeachAgents() ?? agent.analyzer) : undefined;
+  const priorDelivery = retainedOwner
+    ? researchSiblingDelivery.get(retainedOwner)?.get(conversation)
+    : undefined;
+  const previousSiblings =
+    priorDelivery?.runId === checked.run.runId ? priorDelivery.handoffs : undefined;
+  const memory = agent.sharedResearch;
+  const followUp =
+    retainedTurnDelta?.kind === 'master_follow_up' && retainedOwner && memory
+      ? {
+          ...retainedTurnDelta.followUp,
+          siblingResearch: retainedTurnDelta.followUp.siblingResearch.filter(
+            (handoff) => previousSiblings?.get(handoff.toolName) !== digest(handoff),
+          ),
+          retainedSiblingResearch: retainedTurnDelta.followUp.siblingResearch.flatMap((handoff) => {
+            const handoffSha256 = digest(handoff);
+            if (previousSiblings?.get(handoff.toolName) !== handoffSha256) return [];
+            return [
+              {
+                toolName: handoff.toolName,
+                researchInputsSha256: handoff.researchInputsSha256,
+                handoffSha256,
+                handoffRef: memory.remember(handoff),
+              },
+            ];
+          }),
+        }
+      : undefined;
   const retainedInput = retainedTurnDelta
     ? (({ kind, ...delta }) => ({
         instruction:
           kind === 'master_follow_up'
-            ? 'Continue the same retained API-research conversation. Follow this new master direction using the recording evidence already in this conversation. The evidenceRef identifies the current immutable projection; if a newly selected recorded request is needed, use inspect with its exact request seq to retrieve only that evidence. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
+            ? 'Continue the same retained API-research conversation. Follow this new master direction using the recording evidence already in this conversation. siblingResearch contains new or changed handoffs; retainedSiblingResearch identifies unchanged handoffs already delivered to you. Use their retained exact proof, or read handoffRef through shared research when present; a sibling test does not prove this tool. The evidenceRef identifies the current immutable projection; if a newly selected recorded request is needed, use inspect with its exact request seq to retrieve only that evidence. Test complete candidates until the named proof gap is resolved, remains partial with a better exact handoff, or is factually blocked.'
             : kind === 'observation'
               ? 'Continue the same retained API-research conversation. Evaluate this newest factual test result. Return partial only when the selected core result or a required downstream obligation remains incomplete; defer optional breadth and further minimization.'
               : kind === 'catalog_page'
@@ -2687,9 +2803,10 @@ export async function requestApiResearchStep(
                     : 'Review your proposed blocker once using the retained evidence. Return another evidence-backed action when one remains, otherwise return blocked with the exact factual reason.',
         turnKind: kind,
         ...delta,
+        ...(followUp ? { followUp } : {}),
       }))(retainedTurnDelta)
     : undefined;
-  return request({
+  const output = await request({
     role: 'API researcher',
     conversationKey: `tool:${checked.tool.candidate.toolName}:api-researcher`,
     prompt: 'master-teach-api-researcher.md',
@@ -2717,6 +2834,19 @@ export async function requestApiResearchStep(
     schema: apiResearchOutputSchema(checked),
     agent,
   });
+  if (
+    retainedOwner &&
+    checked.followUp &&
+    (!retainedTurnDelta || retainedTurnDelta.kind === 'master_follow_up')
+  ) {
+    const conversations = researchSiblingDelivery.get(retainedOwner) ?? new Map();
+    const handoffs = new Map(previousSiblings);
+    for (const handoff of checked.followUp.siblingResearch)
+      handoffs.set(handoff.toolName, digest(handoff));
+    conversations.set(conversation, { runId: checked.run.runId, handoffs });
+    researchSiblingDelivery.set(retainedOwner, conversations);
+  }
+  return output;
 }
 // Only retain delivery fingerprints for an actual shared analyzer conversation.
 // Full research history remains in the host input and the provider conversation.
@@ -2766,6 +2896,91 @@ export async function requestMasterDecision(
   }
   return output;
 }
+const LiveComponentRecoveryInputSchema = z.object({
+  toolName: z.string().min(1),
+  toolId: z.string().optional(),
+  phase: z.string().default('live'),
+  authenticationAvailable: z.boolean(),
+  components: z.array(
+    z.object({
+      id: z.string().min(1),
+      kind: z.string().min(1),
+      label: z.string(),
+      toolIds: z.array(z.string()),
+    }),
+  ),
+  parameters: z.record(z.union([z.string(), z.number(), z.boolean()])),
+  failure: z.object({
+    error: z.string().min(1),
+    status: z.number().optional(),
+    message: z.string(),
+    missing: z.unknown().optional(),
+    requestStageFacts: z.unknown().optional(),
+  }),
+  previousRecoveries: z.number().int().nonnegative(),
+  recordedAuthentication: z.object({
+    credentialRequestSeqs: z.array(z.number().int().nonnegative()),
+    authRequestSeqs: z.array(z.number().int().nonnegative()),
+    credentialNames: z.array(z.string()),
+    notes: z.string(),
+  }),
+  contexts: z.array(
+    z.object({
+      contextRef: z.string(),
+      label: z.string(),
+      workflowPath: z.string().optional(),
+      latestAction: z.string().optional(),
+      latestOk: z.boolean().optional(),
+      latestStatus: z.number().optional(),
+      latestError: z.string().optional(),
+    }),
+  ),
+});
+export type LiveComponentRecoveryInput = z.input<typeof LiveComponentRecoveryInputSchema>;
+
+export async function requestLiveComponentRecovery(
+  input: LiveComponentRecoveryInput,
+  agent: MasterTeachAgentOptions = {},
+) {
+  const checked = LiveComponentRecoveryInputSchema.parse(input);
+  return request({
+    role: 'component recovery',
+    conversationKey: `tool:${checked.toolName}:component-recovery`,
+    prompt: 'component-recovery.md',
+    input: checked,
+    validation: { toolName: checked.toolName },
+    schema: z
+      .discriminatedUnion('action', [
+        z
+          .object({
+            action: z.literal('authenticate'),
+            plan: AgentInteractionSchema.options[1].shape.plan,
+            reason: z.string().min(1),
+          })
+          .strict(),
+        z
+          .object({
+            action: z.literal('recover_component'),
+            componentId: z.string().min(1),
+            reason: z.string().min(1),
+          })
+          .strict(),
+        z.object({ action: z.literal('return_failure'), reason: z.string().min(1) }).strict(),
+      ])
+      .superRefine((decision, ctx) => {
+        if (decision.action === 'authenticate' && !checked.authenticationAvailable)
+          issue(ctx, ['action'], 'No authentication owner is attached');
+        if (
+          decision.action === 'recover_component' &&
+          !checked.components.some((c) => c.id === decision.componentId)
+        )
+          issue(ctx, ['componentId'], 'Choose an explicitly supplied component owner');
+      }),
+    agent,
+    allowInteractions: false,
+  });
+}
+
 export async function requestParameterSelectionAdvice(
   input: ParameterSelectionAdvisorInput,
   agent: MasterTeachAgentOptions = {},

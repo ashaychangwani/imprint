@@ -28,6 +28,7 @@ import { imprintHomeDir } from './paths.ts';
 import { type TeachState, loadTeachState } from './teach-state.ts';
 import { type ResolvedTool, discoverTools } from './tool-loader.ts';
 import { recordLlmUsageSpan, setSpanAttributes, totalPromptTokens, traced } from './tracing.ts';
+import { authActionOutcomes } from './types.ts';
 
 const log = createLog('audit');
 
@@ -214,7 +215,11 @@ export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPa
       continue;
     }
     const pauses = auth
-      ? Object.entries(auth.actions).filter(([, action]) => action.outcome.type === 'pause')
+      ? Object.entries(auth.actions).flatMap(([name, action]) =>
+          authActionOutcomes(action).flatMap((outcome) =>
+            outcome.type === 'pause' ? [`${name}: ${outcome.message}`] : [],
+          ),
+        )
       : [];
     if (pauses.length === 0) {
       eligible.push(tool);
@@ -223,11 +228,7 @@ export function partitionAuditTools(tools: readonly ResolvedTool[]): AuditToolPa
     }
 
     const receipt = readAuthVerificationReceiptStatus(tool.dir, tool.workflow);
-    const pauseSummary = pauses
-      .map(([name, action]) =>
-        action.outcome.type === 'pause' ? `${name}: ${action.outcome.message}` : name,
-      )
-      .join('; ');
+    const pauseSummary = pauses.join('; ');
     skippedInteractiveAuth.push({
       name: tool.workflow.toolName,
       reason: `requires human continuation (${pauseSummary})`,

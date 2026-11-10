@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -140,6 +140,28 @@ function sessionWithLoginResponse(body: string): Session {
 }
 
 describe('extractCredentials (generic persisted-capture resolver)', () => {
+  it('resolves a persisted branch capture against its final producing request', () => {
+    writeWorkflow('fixture', 'authenticate_fixture', [], ['branch_token'], 2);
+    const path = join(home, 'fixture', 'authenticate_fixture', 'workflow.json');
+    const workflow = JSON.parse(readFileSync(path, 'utf8'));
+    workflow.authConfig.actions.authenticate.branches = [
+      {
+        when: { source: 'json', name: 'branch_token', path: 'session.token' },
+        outcome: { type: 'success', evidence: ['branch_token'] },
+      },
+    ];
+    writeFileSync(path, JSON.stringify(workflow));
+    const session = sessionWithLoginResponse(
+      JSON.stringify({ session: { token: 'fixture-branch-token' } }),
+    );
+    const request = session.requests[1];
+    if (!request) throw new Error('Missing fixture response');
+    request.seq = 2;
+    expect(extractCredentials('fixture', session)).toEqual({
+      branch_token: 'fixture-branch-token',
+    });
+  });
+
   it('stores a renamed capture under its declared durable interface', () => {
     writeWorkflow(
       'fixture',

@@ -11,6 +11,13 @@ import { joinBackendPreparation } from '../src/imprint/mcp-live-verifier-server.
 
 const dirs: string[] = [];
 
+// Keep fixture requests owned even if cleanup rejects an outstanding request.
+// Awaiting the original promise below still reports the actual failure.
+function ownRequest<T>(request: Promise<T>): Promise<T> {
+  void request.catch(() => {});
+  return request;
+}
+
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
@@ -102,10 +109,16 @@ describe('live verifier MCP server', () => {
       stderr: 'pipe',
     });
     const client = new Client({ name: 'live-verifier-test', version: '1.0.0' });
+    const abort = new AbortController();
+    const timer = setTimeout(
+      () => abort.abort(new Error('Synthetic verifier MCP fixture deadline exceeded')),
+      20_000,
+    );
+    const requestOptions = { signal: abort.signal, timeout: 20_000 };
 
     try {
-      await client.connect(transport);
-      const listed = await client.listTools();
+      await ownRequest(client.connect(transport, requestOptions));
+      const listed = await ownRequest(client.listTools(undefined, requestOptions));
       expect(listed.tools.map((tool) => tool.name).sort()).toEqual([
         'prepare_live_backend',
         'refresh_auth_session',
@@ -126,40 +139,54 @@ describe('live verifier MCP server', () => {
       );
       expect(submitSchema).toContain('untestable');
       expect(submitSchema).toContain('suggestedFix');
-      const firstRefresh = await client.callTool({
-        name: 'refresh_auth_session',
-        arguments: { reason: 'fixture auth failure' },
-      });
+      const firstRefresh = await ownRequest(
+        client.callTool(
+          {
+            name: 'refresh_auth_session',
+            arguments: { reason: 'fixture auth failure' },
+          },
+          undefined,
+          requestOptions,
+        ),
+      );
       expect(firstRefresh.isError).toBe(true);
       expect(JSON.stringify(firstRefresh.content)).toContain(
         'no generated authentication workflow',
       );
-      const premature = await client.callTool({
-        name: 'submit_verification_report',
-        arguments: {
-          status: 'approved',
-          summary: 'Looks good.',
-          baseline: {
-            verdict: 'semantically_correct',
-            reason: 'Fixture result matched.',
-          },
-          parameters: [
-            {
-              name: 'query',
-              verdict: 'works',
-              reason: 'Query constrained the fixture.',
+      const premature = await ownRequest(
+        client.callTool(
+          {
+            name: 'submit_verification_report',
+            arguments: {
+              status: 'approved',
+              summary: 'Looks good.',
+              baseline: {
+                verdict: 'semantically_correct',
+                reason: 'Fixture result matched.',
+              },
+              parameters: [
+                {
+                  name: 'query',
+                  verdict: 'works',
+                  reason: 'Query constrained the fixture.',
+                },
+              ],
+              issues: [],
+              gaps: [],
             },
-          ],
-          issues: [],
-          gaps: [],
-        },
-      });
+          },
+          undefined,
+          requestOptions,
+        ),
+      );
       expect(premature.isError).toBe(true);
       expect(JSON.stringify(premature.content)).toContain('run the final integration suite');
     } finally {
+      clearTimeout(timer);
+      abort.abort(new Error('Synthetic verifier MCP fixture closed'));
       await client.close();
     }
-  });
+  }, 30_000);
 
   it('allows repeated targeted parameters when the verifier supplies a reason', async () => {
     const fixture = Bun.serve({
@@ -227,17 +254,35 @@ describe('live verifier MCP server', () => {
       stderr: 'pipe',
     });
     const client = new Client({ name: 'live-verifier-test', version: '1.0.0' });
+    const abort = new AbortController();
+    const timer = setTimeout(
+      () => abort.abort(new Error('Synthetic targeted-call MCP fixture deadline exceeded')),
+      20_000,
+    );
+    const requestOptions = { signal: abort.signal, timeout: 20_000 };
     try {
-      await client.connect(transport);
+      await ownRequest(client.connect(transport, requestOptions));
       const [first, second] = await Promise.all([
-        client.callTool({
-          name: 'run_live_integration_test',
-          arguments: { params: { query: 'tires' }, reason: 'initial semantic check' },
-        }),
-        client.callTool({
-          name: 'run_live_integration_test',
-          arguments: { params: { query: 'tires' }, reason: 'confirm after backend review' },
-        }),
+        ownRequest(
+          client.callTool(
+            {
+              name: 'run_live_integration_test',
+              arguments: { params: { query: 'tires' }, reason: 'initial semantic check' },
+            },
+            undefined,
+            requestOptions,
+          ),
+        ),
+        ownRequest(
+          client.callTool(
+            {
+              name: 'run_live_integration_test',
+              arguments: { params: { query: 'tires' }, reason: 'confirm after backend review' },
+            },
+            undefined,
+            requestOptions,
+          ),
+        ),
       ]);
       expect(first.isError).not.toBe(true);
       expect(second.isError).not.toBe(true);
@@ -251,8 +296,10 @@ describe('live verifier MCP server', () => {
           .sort(),
       ).toEqual(['targeted-call-1', 'targeted-call-2']);
     } finally {
+      clearTimeout(timer);
+      abort.abort(new Error('Synthetic targeted-call MCP fixture closed'));
       await client.close();
       fixture.stop(true);
     }
-  }, 10_000);
+  }, 30_000);
 });

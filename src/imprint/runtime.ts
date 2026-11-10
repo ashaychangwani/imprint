@@ -14,6 +14,11 @@ import {
   extractSetCookieHeaders,
 } from './cookie-jar.ts';
 import {
+  type DispatchObservation,
+  dispatchObservation,
+  recordCredentialEvent,
+} from './credential-observation.ts';
+import {
   type StorageRecord,
   commitSiteAuthState,
   loadSiteCredentials,
@@ -49,6 +54,11 @@ export interface CredentialStore {
   values: Record<string, string>;
   /** Durable browser storage captured by `imprint login`; V1 seeds localStorage only. */
   storage?: StorageRecord[];
+  /** Factual source label, not a validity judgment. */
+  source?: string;
+  /** Version of the durable snapshot read by the host, before environment
+   * overlays or browser mutations. Enables conditional cookie writeback. */
+  durableRevision?: string;
 }
 
 type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
@@ -68,7 +78,7 @@ type RequestTransform = (
   url: string,
   responses: unknown[],
   params?: Record<string, string | number | boolean>,
-) => RequestTransformResult;
+) => RequestTransformResult | Promise<RequestTransformResult>;
 
 function mergeNavigationOptions(
   base: WorkflowRequest['navigation'],
@@ -133,6 +143,8 @@ function responseProvenanceUrl(
  *  transport generic lets pages mint coupled browser state through their own
  *  JavaScript without adding OAuth-provider or frontend-framework logic here. */
 export interface BrowserNavigationTransport {
+  /** Actual browser-owned cookies before this workflow starts. */
+  initialCookies?: RuntimeCookie[];
   navigate(
     url: string,
     options?: {
@@ -150,6 +162,7 @@ export interface BrowserNavigationTransport {
       cookie?: { name: string; domain?: string; path?: string };
     },
   ): Promise<Response>;
+  /** Complete cookie snapshot for this isolated browser context; rejects when unavailable. */
   snapshotCookies(): Promise<RuntimeCookie[]>;
 }
 
@@ -157,13 +170,18 @@ export interface BrowserNavigationTransport {
  *  encrypted-file fallback → legacy JSON for backwards compat). Returns
  *  null only if there's truly nothing recorded; a missing keychain entry
  *  with no legacy file still yields an empty store. */
-export async function loadCredentialStore(site: string): Promise<CredentialStore | null> {
-  const view = await loadSiteCredentials(site);
+export async function loadCredentialStore(
+  site: string,
+  signal?: AbortSignal,
+): Promise<CredentialStore | null> {
+  const view = await loadSiteCredentials(site, { signal });
   const store: CredentialStore = {
     site: view.site,
     cookies: view.cookies,
     values: { ...view.values },
     storage: view.storage,
+    source: 'durable-store',
+    durableRevision: view.revision,
   };
 
   const envCreds = process.env.IMPRINT_TEACH_CREDENTIALS;
@@ -171,6 +189,7 @@ export async function loadCredentialStore(site: string): Promise<CredentialStore
     try {
       const parsed = JSON.parse(envCreds) as { site: string; values: Record<string, string> };
       if (parsed.site === site && parsed.values) {
+        store.source = 'durable-store+environment';
         for (const [k, v] of Object.entries(parsed.values)) {
           if (!(k in store.values)) store.values[k] = v;
         }
@@ -201,6 +220,7 @@ export interface ResponseObservation {
   valueType: 'null' | 'array' | 'object' | 'string' | 'number' | 'boolean';
   topLevelKeys?: string[];
   arrayLength?: number;
+  dispatch?: DispatchObservation;
 }
 
 /** Host-only per-request evidence, emitted before status, capture or parser failures.
@@ -235,6 +255,11 @@ interface ExecuteOptions {
   signal?: AbortSignal;
   /** Disable auth cookie/secret writes during offline request rendering. */
   persistAuthState?: boolean;
+  /** Host-only snapshot for isolated action tests; never ordinary tool output. */
+  onAuthState?: (credentials: CredentialStore) => void;
+  /** Host-only complete runtime cookie jar after a completed data request chain.
+   * Includes independent HTTP mutations; never returned as ordinary tool data. */
+  onCookieState?: (cookies: RuntimeCookie[]) => void;
   /** Internal observation hook used by teach/debug tooling after every
    * substitution and request transform. Raw values stay inside the host and
    * must be projected to bounded, value-free facts before reaching an agent.
@@ -353,6 +378,7 @@ function responseObservation(
   text: string,
   parsed: unknown,
   credentials: CredentialStore,
+  dispatch?: DispatchObservation,
 ): ResponseObservation {
   let valueType: ResponseObservation['valueType'];
   if (parsed === null) valueType = 'null';
@@ -364,6 +390,7 @@ function responseObservation(
   const contentType = response.headers.get('content-type')?.split(';', 1)[0]?.slice(0, 200);
   return {
     requestIndex,
+    ...(dispatch ? { dispatch } : {}),
     status: response.status,
     bodyByteLength: new TextEncoder().encode(text).byteLength,
     redactedBodyPreview: boundedResponsePreview(text, credentials),
@@ -417,7 +444,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
   const credentials =
     opts.credentials ??
-    (await loadCredentialStore(opts.workflow.site)) ??
+    (await loadCredentialStore(opts.workflow.site, opts.signal)) ??
     emptyStore(opts.workflow.site);
 
   // Validate required parameters are present and merge declared defaults
@@ -448,6 +475,9 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
 
   // Per-execution mutable jar. Never shared across MCP/cron calls.
   const cookieJar = new RuntimeCookieJar(credentials.cookies);
+  const browserCookieJar = new RuntimeCookieJar(
+    opts.browser?.initialCookies ?? credentials.cookies,
+  );
   const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const dependencyPreflight = preflightStateDependencies(opts.workflow, state, stateCapabilities);
@@ -534,7 +564,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     if (requestTransform) {
       const bodyBeforeTransform = subbed.body;
       try {
-        const transformResult = requestTransform(
+        const transformResult = await requestTransform(
           subbed.method,
           subbed.url,
           responseSlots.map((s) => s.raw),
@@ -603,6 +633,18 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       );
     }
 
+    const dispatch = dispatchObservation({
+      invocationId: attemptId,
+      requestIndex: i,
+      material: credentials,
+      effectiveMaterial: liveCredentials,
+      source: opts.credentials
+        ? `explicit-override:${credentials.source ?? 'caller'}`
+        : (credentials.source ?? 'empty-store'),
+      request: subbed,
+      browserOwned: !!opts.browser,
+    });
+
     let resp: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
@@ -624,7 +666,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           headers: subbed.headers,
           body: subbed.body,
         });
-        for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+        cookieJar.reconcileBrowserSnapshot(await opts.browser.snapshotCookies(), browserCookieJar);
         liveCredentials.cookies = cookieJar.toJSON();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -647,6 +689,13 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
             : controller.signal,
           redirect: 'follow',
         });
+        if (opts.browser) {
+          cookieJar.reconcileBrowserSnapshot(
+            await opts.browser.snapshotCookies(),
+            browserCookieJar,
+          );
+          liveCredentials.cookies = cookieJar.toJSON();
+        }
       } catch (err) {
         if (responseAbortTimer) clearTimeout(responseAbortTimer);
         const msg = err instanceof Error ? err.message : String(err);
@@ -676,6 +725,11 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         );
       }
     }
+    recordCredentialEvent('response', {
+      invocationId: attemptId,
+      requestIndex: i,
+      status: resp.status,
+    });
     requestStageFacts.push({
       requestIndex: i,
       stage: 'send',
@@ -723,7 +777,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         // Not valid JSON — keep as raw text string.
       }
       try {
-        opts.onResponse?.(responseObservation(i, resp, text, parsed, liveCredentials));
+        opts.onResponse?.(responseObservation(i, resp, text, parsed, liveCredentials, dispatch));
       } catch {
         // Diagnostics must never change the workflow's execution result.
       }
@@ -734,6 +788,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         {
           ok: false,
           error: 'AUTH_EXPIRED',
+          status: resp.status,
           message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
           remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
         },
@@ -747,6 +802,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         {
           ok: false,
           error: 'FORBIDDEN',
+          status: resp.status,
           message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
           remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
         },
@@ -758,6 +814,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         {
           ok: false,
           error: 'RATE_LIMITED',
+          status: resp.status,
           message: `Request ${i} returned 429: ${bodyPreview.slice(0, 300)}`,
           remediation: 'Back off and retry after the Retry-After interval.',
         },
@@ -769,6 +826,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
         {
           ok: false,
           error: 'BAD_RESPONSE',
+          status: resp.status,
           message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
         },
         requestStageFacts,
@@ -797,7 +855,11 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     const capturedResponseUrl = responseProvenanceUrl(subbed.url, navigation, resp);
     try {
       for (const sc of extractSetCookieHeaders(resp.headers))
-        cookieJar.setCookieFromHeader(sc, capturedResponseUrl);
+        cookieJar.setCookieFromHeader(
+          sc,
+          capturedResponseUrl,
+          opts.browser ? browserCookieJar : undefined,
+        );
       liveCredentials.cookies = cookieJar.toJSON();
     } catch {
       // Non-fatal; cookies stay as they were.
@@ -815,6 +877,12 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
     });
     if (!captureResult.ok) return withRequestStageFacts(captureResult.result, requestStageFacts);
     Object.assign(state, captureResult.value);
+  }
+
+  try {
+    opts.onCookieState?.(cookieJar.toJSON());
+  } catch {
+    // Observation cannot change the request or parser result.
   }
 
   // Apply parser if present
@@ -891,9 +959,12 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   const timeoutMs = opts.requestTimeoutMs ?? 30_000;
   const credentials =
     opts.credentials ??
-    (await loadCredentialStore(opts.workflow.site)) ??
+    (await loadCredentialStore(opts.workflow.site, opts.signal)) ??
     emptyStore(opts.workflow.site);
   const cookieJar = new RuntimeCookieJar(credentials.cookies);
+  const browserCookieJar = new RuntimeCookieJar(
+    opts.browser?.initialCookies ?? credentials.cookies,
+  );
   const liveCredentials: CredentialStore = { ...credentials, cookies: cookieJar.toJSON() };
   const responseSlots: ResponseSlot[] = [];
   const initialState: Record<string, unknown> = { ...(opts.initialState ?? {}) };
@@ -928,10 +999,46 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     requestUrl: string;
   };
   let lastResponse: ResponseContext | undefined;
+  let outcomeResponse: ResponseContext | undefined;
 
+  const stageFacts: RequestStageFact[] = [];
+  let stepIndex = 0;
+  let attemptCount = 0;
+  let currentRequestIndex = 0;
+  let phase: RequestStageFact['stage'] = 'preparation';
+  let transportInvoked = false;
+  let httpStatus: number | undefined;
+  const recordStage = (
+    stage: RequestStageFact['stage'],
+    outcome: RequestStageFact['outcome'],
+  ): void => {
+    phase = stage;
+    stageFacts.push({
+      requestIndex: currentRequestIndex,
+      stepIndex,
+      attempt: attemptCount,
+      stage,
+      outcome,
+      transportInvoked,
+      ...(httpStatus === undefined ? {} : { httpStatus }),
+    });
+    if (stageFacts.length > 32) stageFacts.shift();
+  };
   const fail = (result: RuntimeErrorResult): RuntimeErrorResult => {
     return {
       ...result,
+      requestStageFacts: [...stageFacts, ...(result.requestStageFacts ?? [])].slice(-32),
+      authExecution: {
+        action: actionName,
+        stepIndex,
+        requestIndex: currentRequestIndex,
+        attempts: attemptCount,
+        phase,
+        transportInvoked,
+        responseReceived: httpStatus !== undefined,
+        ...(httpStatus === undefined ? {} : { httpStatus }),
+        ...result.authExecution,
+      },
       continuation: Object.keys(initialState).length > 0 ? initialState : undefined,
     };
   };
@@ -960,13 +1067,24 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }`,
     });
 
+  const cancellationFailure = (): RuntimeErrorResult =>
+    fail({
+      ok: false,
+      error: 'NETWORK',
+      message: `Auth action ${JSON.stringify(actionName)} was cancelled.`,
+      ...(httpStatus === undefined ? {} : { status: httpStatus }),
+    });
+
   const persistCookies = async (): Promise<RuntimeErrorResult | undefined> => {
+    if (opts.signal?.aborted) return cancellationFailure();
     if (opts.persistAuthState === false) return undefined;
     try {
-      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON());
-      return undefined;
+      await saveSiteCookies(opts.workflow.site, cookieJar.toJSON(), { signal: opts.signal });
+      return opts.signal?.aborted ? cancellationFailure() : undefined;
     } catch (err) {
-      return persistenceFailure('session cookies', err);
+      return opts.signal?.aborted
+        ? cancellationFailure()
+        : persistenceFailure('session cookies', err);
     }
   };
 
@@ -1004,13 +1122,17 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       stateCapabilities,
       requestUrlTemplate: req.url,
     });
-    if (!substituted.ok) return substituted;
+    if (!substituted.ok) {
+      recordStage('preparation', 'failed');
+      return substituted;
+    }
+    recordStage('preparation', 'passed');
     const request = substituted.value;
     let navigation = req.navigation;
 
     if (requestTransform) {
       try {
-        const transformed = requestTransform(
+        const transformed = await requestTransform(
           request.method,
           request.url,
           responseSlots.map((slot) => slot.raw),
@@ -1018,7 +1140,10 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         );
         if (typeof transformed === 'string') request.url = transformed;
         else if (transformed) {
-          if (transformed.skip) return { ok: true, value: undefined };
+          if (transformed.skip) {
+            recordStage('transform', 'skipped');
+            return { ok: true, value: undefined };
+          }
           if (transformed.url !== undefined) request.url = transformed.url;
           if (transformed.body !== undefined) request.body = transformed.body;
           if (transformed.headers) Object.assign(request.headers, transformed.headers);
@@ -1026,7 +1151,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             navigation = mergeNavigationOptions(navigation, transformed.navigation);
           }
         }
+        recordStage('transform', 'passed');
       } catch (err) {
+        recordStage('transform', 'failed');
         return {
           ok: false,
           result: {
@@ -1044,11 +1171,33 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     if (cookieHeader && !hasHeader(request.headers, 'cookie'))
       request.headers.cookie = cookieHeader;
     observePreparedRequest(opts, requestIndex, request);
+    if (opts.signal?.aborted) {
+      return {
+        ok: false,
+        result: {
+          ok: false,
+          error: 'NETWORK',
+          message: `Auth action ${JSON.stringify(actionName)} was cancelled before dispatch.`,
+        },
+      };
+    }
+    const dispatch = dispatchObservation({
+      invocationId: attemptId,
+      requestIndex,
+      material: credentials,
+      effectiveMaterial: liveCredentials,
+      source: opts.credentials
+        ? `explicit-override:${credentials.source ?? 'caller'}`
+        : (credentials.source ?? 'empty-store'),
+      request,
+      browserOwned: !!opts.browser,
+    });
 
     let response: Response;
     let responseAbortTimer: ReturnType<typeof setTimeout> | undefined;
     if (req.mode === 'navigate') {
       if (!opts.browser) {
+        recordStage('send', 'unavailable');
         return {
           ok: false,
           result: {
@@ -1059,14 +1208,18 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         };
       }
       try {
+        transportInvoked = true;
+        phase = 'send';
         response = await opts.browser.navigate(request.url, {
           ...navigation,
           method: request.method,
           headers: request.headers,
           body: request.body,
         });
-        for (const cookie of await opts.browser.snapshotCookies()) cookieJar.setCookie(cookie);
+        httpStatus = response.status;
+        cookieJar.reconcileBrowserSnapshot(await opts.browser.snapshotCookies(), browserCookieJar);
       } catch (err) {
+        recordStage('send', 'failed');
         return {
           ok: false,
           result: {
@@ -1080,19 +1233,28 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }
     } else {
       const controller = new AbortController();
-      const cancel = (): void => controller.abort();
-      opts.signal?.addEventListener('abort', cancel, { once: true });
       responseAbortTimer = setTimeout(() => controller.abort(), timeoutMs);
       try {
+        transportInvoked = true;
+        phase = 'send';
         response = await fetchFn(request.url, {
           method: request.method,
           headers: request.headers,
           body: request.body,
-          signal: controller.signal,
+          signal: opts.signal
+            ? AbortSignal.any([opts.signal, controller.signal])
+            : controller.signal,
           redirect: 'follow',
         });
+        httpStatus = response.status;
+        if (opts.browser)
+          cookieJar.reconcileBrowserSnapshot(
+            await opts.browser.snapshotCookies(),
+            browserCookieJar,
+          );
       } catch (err) {
         if (responseAbortTimer) clearTimeout(responseAbortTimer);
+        recordStage('send', 'failed');
         return {
           ok: false,
           result: {
@@ -1103,11 +1265,16 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             }`,
           },
         };
-      } finally {
-        opts.signal?.removeEventListener('abort', cancel);
       }
     }
 
+    httpStatus = response.status;
+    recordCredentialEvent('response', {
+      invocationId: attemptId,
+      requestIndex,
+      status: response.status,
+    });
+    recordStage('send', 'passed');
     let text = '';
     let responseReadError: string | undefined;
     try {
@@ -1117,6 +1284,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     } finally {
       if (responseAbortTimer) clearTimeout(responseAbortTimer);
     }
+    if (opts.signal?.aborted) return { ok: false, result: cancellationFailure() };
     observeResponseEvidence(
       opts,
       attemptId,
@@ -1127,6 +1295,21 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       responseReadError,
       liveCredentials,
     );
+    if (!responseReadError) {
+      let observed: unknown = text;
+      try {
+        observed = JSON.parse(text);
+      } catch {
+        /* Text is a valid observation. */
+      }
+      try {
+        opts.onResponse?.(
+          responseObservation(requestIndex, response, text, observed, liveCredentials, dispatch),
+        );
+      } catch {
+        /* Diagnostics cannot alter action execution. */
+      }
+    }
     if (response.status >= 400) {
       const bodyPreview = responseReadError
         ? `[response body unavailable: ${responseReadError}]`
@@ -1155,7 +1338,11 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
 
     const capturedResponseUrl = responseProvenanceUrl(request.url, navigation, response);
     for (const header of extractSetCookieHeaders(response.headers)) {
-      cookieJar.setCookieFromHeader(header, capturedResponseUrl);
+      cookieJar.setCookieFromHeader(
+        header,
+        capturedResponseUrl,
+        opts.browser ? browserCookieJar : undefined,
+      );
     }
     liveCredentials.cookies = cookieJar.toJSON();
 
@@ -1167,11 +1354,13 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
     const context = { parsed, text, headers: response.headers, requestUrl: capturedResponseUrl };
     responseSlots.push({ raw: parsed, aliases: evaluateLegacyExtract(req, parsed) });
+    for (const capture of req.captures ?? []) delete state[capture.name];
     const captures = evaluateRequestCaptures(req.captures ?? [], {
       ...context,
       cookieJar,
     });
     if (!captures.ok) {
+      recordStage('capture', 'failed');
       return {
         ok: false,
         result: {
@@ -1181,15 +1370,17 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         },
       };
     }
+    recordStage('capture', 'passed');
     Object.assign(state, captures.value);
     lastResponse = context;
     return { ok: true, value: context };
   };
 
-  for (let stepIndex = 0; stepIndex < action.steps.length; stepIndex++) {
+  for (stepIndex = 0; stepIndex < action.steps.length; stepIndex++) {
     const step = action.steps[stepIndex];
     if (!step) continue;
     let matched = !step.repeat;
+    let lastFailure: RuntimeErrorResult | undefined;
 
     for (let attempt = 0; attempt < (step.repeat?.maxAttempts ?? 1); attempt++) {
       if (attempt > 0 && step.repeat) await sleep(step.repeat.intervalMs, opts.signal);
@@ -1200,8 +1391,22 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
           message: `Auth action ${JSON.stringify(actionName)} was cancelled.`,
         });
       }
+      attemptCount = attempt + 1;
+      currentRequestIndex = step.request;
+      phase = 'preparation';
+      transportInvoked = false;
+      httpStatus = undefined;
       const executed = await executeRequest(step.request);
+      // A failed or skipped final step cannot branch on an earlier response.
+      outcomeResponse = executed.ok ? executed.value : undefined;
+      if (!outcomeResponse) {
+        for (const capture of opts.workflow.requests[step.request]?.captures ?? []) {
+          delete state[capture.name];
+        }
+      }
+      if (opts.signal?.aborted) return cancellationFailure();
       if (!executed.ok) {
+        lastFailure = executed.result;
         if (step.onError === 'continue') {
           matched = true;
           break;
@@ -1209,6 +1414,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         if (step.onError === 'retry' && step.repeat) continue;
         return fail(executed.result);
       }
+      lastFailure = undefined;
       if (!step.repeat) break;
       if (!executed.value) continue;
 
@@ -1219,20 +1425,59 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       if (until.ok && Object.hasOwn(until.value, step.repeat.until.name)) {
         Object.assign(state, until.value);
         matched = true;
+        recordStage('repeat', 'passed');
         break;
       }
+      recordStage('repeat', 'failed');
     }
 
     if (!matched) {
       return fail({
-        ok: false,
-        error: 'BAD_RESPONSE',
-        message: `Auth action ${JSON.stringify(actionName)} did not satisfy the declared repeat condition for request ${step.request} after ${step.repeat?.maxAttempts ?? 1} attempts.`,
+        ...(lastFailure ?? { ok: false as const, error: 'BAD_RESPONSE' as const }),
+        message: `Auth action ${JSON.stringify(actionName)} did not satisfy the declared repeat condition for request ${step.request} after ${attemptCount} attempts.${lastFailure ? ` Last failure: ${lastFailure.message}` : ''}`,
+        authExecution: {
+          action: actionName,
+          stepIndex,
+          requestIndex: step.request,
+          attempts: attemptCount,
+          phase,
+          transportInvoked,
+          responseReceived: httpStatus !== undefined,
+          ...(httpStatus === undefined ? {} : { httpStatus }),
+          ...(lastFailure
+            ? { lastFailure: { error: lastFailure.error, message: lastFailure.message } }
+            : {}),
+        },
       });
     }
   }
 
-  const missingEvidence = action.outcome.evidence.filter((name) => !Object.hasOwn(state, name));
+  if (opts.signal?.aborted) return cancellationFailure();
+  phase = 'outcome';
+  let outcome = action.outcome;
+  for (const { when } of action.branches ?? []) delete state[when.name];
+  for (const branch of action.branches ?? []) {
+    if (!outcomeResponse) break;
+    let matched: RuntimeResult<Record<string, unknown>>;
+    try {
+      matched = evaluateRequestCaptures([{ ...branch.when, required: false } as RequestCapture], {
+        ...outcomeResponse,
+        cookieJar,
+      });
+    } catch (error) {
+      return fail({
+        ok: false,
+        error: 'BAD_RESPONSE',
+        message: `Auth action ${JSON.stringify(actionName)} could not evaluate branch ${JSON.stringify(branch.when.name)}: ${error instanceof Error ? error.message : String(error)}`,
+      });
+    }
+    if (matched.ok && Object.hasOwn(matched.value, branch.when.name)) {
+      Object.assign(state, matched.value);
+      outcome = branch.outcome;
+      break;
+    }
+  }
+  const missingEvidence = outcome.evidence.filter((name) => !Object.hasOwn(state, name));
   if (missingEvidence.length > 0) {
     return fail({
       ok: false,
@@ -1241,8 +1486,8 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     });
   }
 
-  if (action.outcome.type === 'pause') {
-    const missingCarry = action.outcome.carry.filter((name) => !Object.hasOwn(state, name));
+  if (outcome.type === 'pause') {
+    const missingCarry = outcome.carry.filter((name) => !Object.hasOwn(state, name));
     if (missingCarry.length > 0) {
       return fail({
         ok: false,
@@ -1250,19 +1495,20 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         message: `Auth action ${JSON.stringify(actionName)} completed without declared carry state: ${missingCarry.join(', ')}.`,
       });
     }
-    const continuation = Object.fromEntries(
-      action.outcome.carry.map((name) => [name, state[name]]),
-    );
+    const continuation = Object.fromEntries(outcome.carry.map((name) => [name, state[name]]));
+    if (opts.signal?.aborted) return cancellationFailure();
     const cookieFailure = await persistCookies();
+    if (opts.signal?.aborted) return cancellationFailure();
     if (cookieFailure && !opts.browser) return cookieFailure;
     const persistenceWarning = cookieFailure
       ? ` ${cookieFailure.message} Continue in the current browser session.`
       : '';
+    observeAuthState(opts, liveCredentials);
     return {
       ok: false,
       error: 'ACTION_REQUIRED',
-      message: `${action.outcome.message}${persistenceWarning}`,
-      nextAction: action.outcome.next,
+      message: `${outcome.message}${persistenceWarning}`,
+      nextAction: outcome.next,
       continuation,
       responseBodyPreview: lastResponse?.text.slice(0, 500),
     };
@@ -1285,14 +1531,83 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       persistedSecrets[name] = String(value);
     }
   }
+  if (opts.signal?.aborted) return cancellationFailure();
   if (opts.persistAuthState !== false) {
     try {
-      await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets);
+      await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets, {
+        signal: opts.signal,
+      });
     } catch (err) {
-      return persistenceFailure('authenticated session state', err);
+      return opts.signal?.aborted
+        ? cancellationFailure()
+        : persistenceFailure('authenticated session state', err);
     }
   }
+  if (opts.signal?.aborted) return cancellationFailure();
+  observeAuthState(opts, {
+    ...liveCredentials,
+    values: { ...liveCredentials.values, ...persistedSecrets },
+  });
   return { ok: true, data: { authenticated: true } };
+}
+
+function observeAuthState(opts: ExecuteOptions, credentials: CredentialStore): void {
+  try {
+    opts.onAuthState?.(structuredClone(credentials));
+  } catch {
+    // Observation cannot change execution or persistence.
+  }
+}
+
+/** Offline synthetic fixture runner using the real action executor. Every call
+ * starts with empty response history, keeps only declared continuation and
+ * session mutations, and disables durable writes. It never contacts the network
+ * unless the fixture's explicit transport does so. */
+export function createAuthActionTestHarness(input: {
+  workflow: Workflow;
+  workflowPath?: string;
+  credentials?: CredentialStore;
+  respond: (
+    request: PreparedRequestObservation & { action: string },
+  ) => Response | Promise<Response>;
+  browser?: BrowserNavigationTransport;
+}): {
+  run: (
+    action: string,
+    parameters?: Record<string, string | number | boolean>,
+  ) => Promise<ToolResult>;
+} {
+  if (input.workflow.toolKind !== 'authenticate')
+    throw new Error('An authenticate workflow is required.');
+  let credentials = structuredClone(input.credentials ?? emptyStore(input.workflow.site));
+  let continuation: Record<string, unknown> | undefined;
+  return {
+    async run(action, parameters = {}) {
+      let prepared: PreparedRequestObservation | undefined;
+      const result = await executeWorkflow({
+        workflow: input.workflow,
+        workflowPath: input.workflowPath,
+        params: { ...parameters, action },
+        credentials,
+        initialState: continuation,
+        persistAuthState: false,
+        browser: input.browser,
+        onPreparedRequest: (request) => {
+          prepared = request;
+        },
+        onAuthState: (next) => {
+          credentials = next;
+        },
+        fetchImpl: (async (_input: Parameters<typeof fetch>[0], _init?: RequestInit) => {
+          if (!prepared)
+            throw new Error('Synthetic response requested without a prepared request.');
+          return await input.respond({ ...prepared, action });
+        }) as typeof fetch,
+      });
+      continuation = result.ok ? undefined : (result.continuation ?? continuation);
+      return result;
+    },
+  };
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
@@ -1602,6 +1917,12 @@ function collectStateCapabilities(workflow: Workflow): Map<string, StateCapabili
   for (const c of workflow.bootstrap?.captures ?? []) out.set(c.name, c.capability);
   for (const req of workflow.requests) {
     for (const c of req.captures ?? []) out.set(c.name, c.capability);
+  }
+  for (const action of Object.values(workflow.authConfig?.actions ?? {})) {
+    for (const step of action.steps) {
+      if (step.repeat) out.set(step.repeat.until.name, step.repeat.until.capability);
+    }
+    for (const { when } of action.branches ?? []) out.set(when.name, when.capability);
   }
   return out;
 }

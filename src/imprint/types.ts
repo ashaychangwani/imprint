@@ -365,6 +365,24 @@ export type NavigationNetworkResponseMatcher = NonNullable<
   NonNullable<WorkflowRequest['navigation']>['networkResponse']
 >;
 
+const AuthOutcomeSchema = z.discriminatedUnion('type', [
+  z
+    .object({
+      type: z.literal('pause'),
+      next: z.string().min(1),
+      evidence: z.array(z.string().min(1)).optional().default([]),
+      carry: z.array(z.string().min(1)).optional().default([]),
+      message: z.string().min(1),
+    })
+    .strict(),
+  z
+    .object({
+      type: z.literal('success'),
+      evidence: z.array(z.string().min(1)).optional().default([]),
+    })
+    .strict(),
+]);
+
 const AuthConfigSchema = z
   .object({
     /** Recording-grounded auth program. Action names, boundaries, evidence,
@@ -393,23 +411,13 @@ const AuthConfigSchema = z
                 .strict(),
             )
             .min(1),
-          outcome: z.discriminatedUnion('type', [
-            z
-              .object({
-                type: z.literal('pause'),
-                next: z.string().min(1),
-                evidence: z.array(z.string().min(1)).optional().default([]),
-                carry: z.array(z.string().min(1)).optional().default([]),
-                message: z.string().min(1),
-              })
-              .strict(),
-            z
-              .object({
-                type: z.literal('success'),
-                evidence: z.array(z.string().min(1)).optional().default([]),
-              })
-              .strict(),
-          ]),
+          /** First matching capture against this action's final step response
+           * selects an outcome. A match also supplies the named capture. */
+          branches: z
+            .array(z.object({ when: RequestCaptureSchema, outcome: AuthOutcomeSchema }).strict())
+            .optional(),
+          /** Fallback when no branch matches; its evidence is still required. */
+          outcome: AuthOutcomeSchema,
         })
         .strict(),
     ),
@@ -429,6 +437,10 @@ const AuthConfigSchema = z
   .strict()
   .optional();
 export type AuthConfig = z.infer<typeof AuthConfigSchema>;
+
+export function authActionOutcomes(action: NonNullable<AuthConfig>['actions'][string]) {
+  return [...(action.branches ?? []).map((branch) => branch.outcome), action.outcome];
+}
 
 export function persistedCaptureName(
   config: NonNullable<AuthConfig>,
@@ -538,7 +550,7 @@ export interface StateMissingItem {
  * values, and response content. */
 export interface RequestStageFact {
   requestIndex: number;
-  stage: 'preparation' | 'transform' | 'send';
+  stage: 'preparation' | 'transform' | 'send' | 'capture' | 'repeat' | 'outcome';
   outcome: 'passed' | 'failed' | 'skipped' | 'unavailable';
   /** Final body metadata at this stage. No body bytes are retained. */
   bodyPresent?: boolean;
@@ -547,6 +559,10 @@ export interface RequestStageFact {
   bodyChanged?: boolean;
   /** HTTP status proves transport completed without exposing response content. */
   httpStatus?: number;
+  /** One-based attempt within the declared step; no request or response values. */
+  attempt?: number;
+  stepIndex?: number;
+  transportInvoked?: boolean;
 }
 
 /** Discriminated union returned by every generated tool. */
@@ -582,6 +598,18 @@ export type ToolResult<T = unknown> =
       };
       /** Value-free stage receipts for requests attempted before this failure. */
       requestStageFacts?: RequestStageFact[];
+      /** Exact count plus bounded recent stage facts; retries remain model-authored. */
+      authExecution?: {
+        action: string;
+        stepIndex: number;
+        requestIndex: number;
+        attempts: number;
+        phase: RequestStageFact['stage'];
+        transportInvoked: boolean;
+        responseReceived: boolean;
+        httpStatus?: number;
+        lastFailure?: { error: string; message: string };
+      };
       /** Recording-derived state and generic action progress. Echo this object
        *  unchanged on the next auth call. */
       continuation?: Record<string, unknown>;

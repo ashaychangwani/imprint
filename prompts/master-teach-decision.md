@@ -66,6 +66,18 @@ Missing transport provenance, an unnecessary dependency, or newly available
 sibling bootstrap evidence changes the request plan: omit the old
 `implementationPlan` and re-plan the tool instead of using `recallToolNames`.
 
+Failed checks have a focused component recovery path before they return here.
+The agent can select the attached auth owner, the caller's retained compiler,
+a declared prerequisite compiler, or an explicitly registered shared runtime
+owner. State recovery retries the exact built caller; artifact repair retains
+the accepted contract and implementation plan, rebuilds the selected owner,
+and rechecks affected consumers using fresh producer outputs. This does not
+require a master or focused planner decision merely to renew state or repair
+an artifact. Unknown ownership or changes to contract, strategy, dependency
+graph, or scope still require your judgment. Invocation receipts preserve failed
+attempts as well as retries. A repaired component or auth navigation checkpoint
+never substitutes for a passing consumer call.
+
 The input may include `userGuidance`. It is an explicit human scope or priority,
 not recording evidence. Follow it when deciding which discovered operations
 belong in the plan. In particular, if the user names the operations they care
@@ -196,6 +208,18 @@ working tools remain intact. No fake candidate edit is needed. Keep the useful
 request as a starting point and distinguish an unproven research claim from an
 exhausted API route. Do not request research for an ordinary parser-only defect.
 
+Planning feedback may include a `plan_note` with
+`kind:"api_research_plan_difference"`. It names bounded field-level differences
+between a proposal and an earlier researched construction, with the exact plan,
+research and observation references. Missing values appear as `null`; omitted
+differences remain available in those references. This is advisory evidence,
+not an API failure or a reason to restart the entire wave. You may revise the
+affected plan, request focused research, or accept the revised construction for
+normal compilation and checks. No extra justification document is required.
+Keep each observation attached to the construction it executed; accepting a
+different construction never transfers the old call's proof to the new build.
+Preserve unrelated successful drafts and the explicit dependency edges.
+
 When `decisionPurpose` is `research_review`, this is the two-way checkpoint
 before final plan approval. Independent proven tools may already have focused
 plan proposals and compiled drafts while other research continues. Review every
@@ -304,10 +328,11 @@ no-op digest; it does not decide which semantic repair is best.
 During focused planning or a later repair, changing a required
 producer-consumer promise invalidates only the affected producer and consumer.
 A new or changed result path, consumer parameter, dependency, or supporting
-recorded request then needs focused proof. During `research_review`, do not make
+recorded request needs checks of the resulting construction. During `research_review`, do not make
 a speculative link edit merely to authorize a sibling follow-up. A genuine
-change to the core operation boundary or standalone request still needs new
-research. Removing an optional idea, editing prose, changing confidence, or
+change to the core operation boundary or standalone request may need focused
+research; choose that explicitly when its observations would resolve a gap.
+Removing an optional idea, editing prose, changing confidence, or
 changing an internal edge label does not justify disturbing unrelated proven
 tools.
 

@@ -2,6 +2,55 @@
 
 The predictable failure modes. Most error messages in Imprint already include a `→ next step:` hint — this doc is the longer form of those hints.
 
+## Authentication waits and construction failures
+
+Inspect the current authentication operation and context before deciding whether
+to wait, cancel, continue that context or start another. A pending operation is
+ongoing work; a transport timeout is not an authentication verdict. Questions
+still require the foreground terminal, and cancellation never supplies an answer.
+
+A failed normal teach call first reaches a focused component recovery agent.
+For `AUTH_EXPIRED`, it can request the existing auth owner and immediately retry
+the same compiled call. For a defective caller artifact or declared prerequisite,
+it can send the failure to that retained compiler, preserve the accepted contract,
+and recheck affected consumers with fresh producer outputs. Registered shared
+runtime owners use the same dispatch path. Every actual attempt remains recorded.
+Unknown ownership, a contract/dependency change, or unresolved unchanged repair
+returns to the master. A plain status code or filename does not select recovery.
+
+Shared modules need an explicit owner registration; a path resembling `_shared/`
+is insufficient. Runtime adapters verify and install their owned state. Generated
+artifact repairs must also update their normal manifest/build bindings and
+invalidate dependent proof; a successful callback alone is not data-tool proof.
+
+On repeated auth failure, inspect `authExecution` and `requestStageFacts`.
+Preparation/transform failures with `transportInvoked: false` never called the transport. An invoked transport alone does not establish network dispatch; HTTP response facts and optional browser wire observations provide separate evidence.
+The final repeated error retains its underlying cause and authored attempt count.
+Use `createAuthActionTestHarness` for synthetic multi-action fixtures with real
+carry/response scope; earlier-action responses are not available in later calls.
+
+For unexplained research success followed by a live HTTP rejection, set
+`IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH` to a private JSONL path before the fresh run.
+Compare load/commit revisions and response-bound dispatch identities inside the
+same scope. Browser-owned cookies are marked separately from prepared headers.
+No credential values or request bytes enter these diagnostics; retain the private
+sibling key locally. A revision match is an identity fact, not proof of validity.
+The `browser-state` events add per-scope keyed identities before cookie seeding,
+after bootstrap, and after the data request, plus acceptance/rejection counts.
+They contain no cookie names or values. Compare these boundaries when a working
+research browser differs from a fresh normal tool call. Successful calls save
+renewed cookies conditionally; a newer credential revision or failed seed leaves
+the saved snapshot untouched. HTTP 200, a user ID, or an accepted cookie seed
+does not establish a usable authenticated consumer session. A fully accepted
+seed can still lose state if an intermediate jar merges host-only and domain
+cookies. The runtime now retains both scopes and encodes domain cookies
+explicitly when restoring Chromium; use a synthetic same-name scope round trip
+when checking that boundary.
+
+Plan/evidence differences now identify the differing paths and observations.
+The master can repair the affected tool while unrelated work continues. A changed
+construction requires its own ordinary live checks; old proof is not transferred.
+
 ## Before anything else: `imprint doctor`
 
 ```bash
@@ -118,6 +167,11 @@ With a `playbook.yaml` present, the `auto` ladder escalates to a real DOM walk w
 
 ## Teach stalls or a check fails
 
+Detailed implementation planning and master reviews print their start, elapsed
+waiting updates every 30 seconds, and their finish or stop. This includes planning
+that happens after the overall tool and wave counts are printed. Waiting updates
+describe a pending stage; they do not claim a successful check or restart work.
+
 The foreground terminal shows which focused tool is being planned, compiled, or
 checked. The fresh run directory in the final summary retains the current plan,
 artifact history, host errors, and factual check receipts.
@@ -202,9 +256,64 @@ Authentication runs through the compiled `workflow.json` action program in one p
 - Authentication is complete only when an action with `outcome.type: "success"` returns `ok: true`.
 - If the recording changes, re-teach so the compile agent can derive a new action graph from the new assets.
 
+## "request transform failed"
+
+The generated request transform threw an exception or returned a rejected
+promise. Both auth and data execution return `BAD_RESPONSE` with the error and
+request index so the compile agent can repair the module and retry.
+
+`request-transform.ts` exports `transform(method, url, responses, params)` and
+may return its result directly or asynchronously. The first argument is the
+method string, not a request object; the current body and headers are not passed
+to the transform. The compile agent should use the same calling convention in
+its offline tests and construct replacements from the supported inputs.
+
 ## "Auth tool was planned but no credentials are available"
 
-Before compiling the auth tool, teach needs the login credentials. It uses, in order: credentials extracted from the recording, then the credential store, then — when interactive — it **prompts you** for exactly the credentials the detection LLM identified for this login (`authTool.credentialNames`), pre-filling the username it saw in the recording. This warning means all of those came up empty.
+Authentication needs login credentials. The auth compiler receives known values
+from the recording and credential store. Teaching agents can request the recorded
+authentication prerequisite with `authenticate`, then ask for missing values or
+MFA input through `prompt_user`. A question requires an interactive foreground
+terminal; it is not automatically sent to an enclosing chat application.
+
+If teaching looks idle, check the current compiler's `.compile-log.json` for
+`tool.started` and `tool.settled`, and the run's `native-agents/events.jsonl` for
+`assignment.tool.completed`. Thrown calls retain their error name/code and duration;
+process liveness alone does not establish progress. Native compiler local tools
+execute in the host. CLI compiler MCP servers close on a broken channel or malformed
+protocol input instead of leaving the connection apparently alive. An infrastructure
+failure is separate from an authentication or website response. Preserve the current
+run evidence and do not automatically repeat a potentially completed live action.
+
+Within one teach, later authentication requests retain the compiler conversation,
+browser and continuation for recovery. The agent first tries a proven
+noninteractive session check or context-restoration action before restarting
+login. A passing check returns to the caller's protected operation. A consumer's 401 is returned as
+`AUTH_EXPIRED`; that code alone does not identify why the consumer lacks access.
+Compare the actual failing action, browser context and exported state rather
+than treating every 401 as a failed MFA approval. A successful auth action still
+needs a separate successful check of the data operation.
+
+Repeated MFA can also come from a compiled login action that always delivers a
+factor, even while the browser still has usable access. Inspect which actions
+actually ran. Learn the current session and login responses, then use ordered
+action `branches` to finish on an observed usable session or continue a current
+challenge. Each condition is a normal capture of the final step's response;
+the fallback outcome still needs evidence for its state. Put factor delivery
+in a separate action because an outcome branch cannot undo requests already
+sent. An unknown response should return repair feedback rather than restart
+login or request another approval. Existing artifacts acquire these branches
+when regenerated; browser retention or a remember-me flag alone does not prove
+the site will omit MFA.
+
+When the site offers an MFA branch absent from the supplied recording, the auth
+compiler can use `interact_verification_browser` to inspect controls and capture
+the live UI's requests and responses. The original recording is a starting point,
+not a method whitelist. `.auth-evidence-session.json` contains the working
+recording plus live observations; `.auth-live-discovery.json` maps live source
+identities to its request sequences. Both remain private in the auth workspace.
+Inspect/wait again for traffic that finishes after an interaction. Discovery or
+manual session access alone does not establish that compiled login replay works.
 
 The recording may legitimately omit a credential because Imprint masks sensitive fields and some browser submissions have no request body available to the recorder. Run interactively and enter the missing value at the prompt, or set it up front and start a fresh teach:
 
@@ -215,6 +324,22 @@ imprint teach <site> --agent codex
 ```
 
 Inputs requested by a later auth action are not stored credentials; the compile agent requests them at the appropriate verification checkpoint. Already-stored credentials are reused automatically on later runs.
+
+An already-redacted recording can contain `${credential.username}` and
+`${credential.password}` rather than their values. These remain references to
+your local credential backend during teaching; they are not new secret values
+and cannot overwrite the stored entries. A missing entry should be provisioned
+with `imprint credential set`. After upgrading from a version that treated those
+references as literal inputs, start a fresh teach so verification reloads the
+correct values.
+
+If MFA never prompts, check that you started this version in a terminal without
+`--no-interactive`. Background runs and redirected stdin cannot collect answers.
+Agents receive an explicit unavailable result and must leave the blocked scope
+unverified. A new version cannot add tools to an already-running agent; start a
+fresh teach after code or prompt changes. Esc/Ctrl-C cancels the active question;
+cancellation is never approval. An agent must retry its data operation after
+authentication rather than counting login success as data-tool proof.
 
 ## "RATE_LIMITED" / 429
 
@@ -347,7 +472,7 @@ A tool whose parameter is an opaque token/id minted by a *sibling* tool (e.g. `g
 
 ## The provider is unavailable or refuses a request
 
-If Codex reports that `gpt-6-sol` is unsupported with a ChatGPT account, check
+If Codex reports that `gpt-6.1-sol` is unsupported with a ChatGPT account, check
 `codex --version` and update the CLI. The Codex app and an older CLI can have
 different model support. A model rejection is deterministic and should not be
 retried as a capacity failure.
@@ -469,3 +594,36 @@ A site has multiple tools (e.g., `search_flights` and `book_flight`) and you did
 If a recording crashes or is interrupted before clean shutdown, the session is left as a raw `.jsonl` stream rather than a finalized `.json` file.
 
 **Fix:** run `imprint assemble <path-to-file.jsonl>` to reconstruct the session from the stream.
+
+
+## Teach exits with a closed-page error in playwright-extra
+
+If the final stack points to the user-agent evasion's CDP send after a browser
+closes, use the current loader: it waits for that command inside the existing
+plugin hook and registers stealth once. A closed-page setup failure should be
+reported through the hook rather than terminating the process. Preserve the
+failed run and start a fresh teach after updating; never resume across code
+changes. A crash before terminal.json is not a completed or partial teach.
+
+
+## Teaching causes high memory or swap pressure
+
+Older runtimes stopped Chromium without removing its automatically created
+`imprint-chrome-*` profile directory. Hundreds of launches can therefore retain
+gigabytes of repeated Chrome component models, GPU caches, and HTTP caches.
+Current runtimes remove only profiles they created when the browser closes,
+including failed startup and normal host exit. Explicit `userDataDir` profiles
+and `record --persist-profile` are preserved. A force-killed host can leave a
+directory behind. Before reclaiming an older profile, confirm no process uses it
+and preserve any diagnostic state with a verified archive; do not remove
+recordings, teach evidence, or persistent profiles.
+
+Check free disk as well as RAM: concurrent browser checks can increase macOS
+swap enough to fill the disk and make browser startup time out. Preserve the
+run's evidence and stop it gracefully before exhausting the host. After capacity
+recovers, start a fresh isolated teach with `IMPRINT_TEACH_LOW_MEMORY=1`. This
+runs live data checks sequentially, retaining a warm browser for successive
+checks in the same research pass. A competing pass evicts the previous browser
+before starting its own context. MFA/authentication keeps its own persistent
+browser. The tradeoff is serialized checks and cold startup after eviction. It does not remove
+recordings, caches, or user files, and it does not narrow the operation scope.

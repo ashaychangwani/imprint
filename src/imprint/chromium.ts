@@ -6,12 +6,15 @@ import { type ChildProcess, spawnSync as nodeSpawnSync, spawn } from 'node:child
 import {
   closeSync,
   existsSync,
+  mkdtempSync,
   openSync,
   readFileSync,
   readdirSync,
+  rmSync,
   statSync,
   unlinkSync,
 } from 'node:fs';
+import { rm } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { createServer } from 'node:net';
 import { homedir, tmpdir } from 'node:os';
@@ -26,6 +29,7 @@ import { isDebug } from './log.ts';
  *  Chrome-launch module, a dependency leaf) rather than in backend-ladder so the
  *  ladder→cdp-browser-fetch import does not form a cycle. */
 const chromeProcessPids = new Set<number>();
+const chromeTemporaryProfiles = new Map<number, string>();
 
 /** Register a Chrome PID for exit-time cleanup. Called on launch. */
 export function __registerChromePid(pid: number): void {
@@ -47,8 +51,16 @@ process.on('exit', () => {
   for (const pid of chromeProcessPids) {
     try {
       process.kill(pid, 'SIGKILL');
-    } catch {
-      // Already dead or not owned by this process — ignore.
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') continue;
+    }
+    const profile = chromeTemporaryProfiles.get(pid);
+    if (profile) {
+      try {
+        rmSync(profile, { recursive: true, force: true });
+      } catch {
+        // A forced host exit cannot await cleanup; normal close reports errors.
+      }
     }
   }
 });
@@ -556,17 +568,18 @@ async function pickFreePort(): Promise<number> {
   });
 }
 
-async function waitForCdp(port: number, timeoutMs = 10_000): Promise<void> {
+async function waitForCdp(port: number, timeoutMs = 10_000, signal?: AbortSignal): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
+    signal?.throwIfAborted();
     try {
-      const res = await fetch(`http://127.0.0.1:${port}/json/version`);
+      const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal });
       if (res.ok) return;
     } catch (err) {
       lastError = err;
     }
-    await sleep(100);
+    await sleep(100, undefined, { signal });
   }
   throw new Error(
     `Chromium did not open CDP on port ${port} within ${timeoutMs}ms (${String(lastError)})`,
@@ -578,8 +591,9 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
     log: (message) => process.stderr.write(`[imprint] ${message}\n`),
   }).path;
   const port = opts.port ?? (await pickFreePort());
+  const ownsProfile = opts.userDataDir === undefined;
   const userDataDir =
-    opts.userDataDir ?? pathJoin(tmpdir(), `imprint-chrome-${Date.now()}-${process.pid}`);
+    opts.userDataDir ?? mkdtempSync(pathJoin(tmpdir(), `imprint-chrome-${process.pid}-`));
 
   const args = [
     `--remote-debugging-port=${port}`,
@@ -614,38 +628,88 @@ export async function launchChromium(opts: LaunchOptions = {}): Promise<Launched
   let xvfb: XvfbHandle | undefined;
   let display = opts.display ?? process.env.DISPLAY;
   if (process.platform === 'linux' && !opts.headless && !display) {
-    xvfb = await startXvfb();
-    display = xvfb.display;
+    try {
+      xvfb = await startXvfb();
+      display = xvfb.display;
+    } catch (error) {
+      if (ownsProfile) await rm(userDataDir, { recursive: true, force: true });
+      throw error;
+    }
   }
 
-  const child = spawn(exe, args, {
-    stdio: ['ignore', 'ignore', 'pipe'],
-    detached: false,
-    env: display ? { ...process.env, DISPLAY: display } : process.env,
-  });
+  let child: ChildProcess;
+  try {
+    child = spawn(exe, args, {
+      stdio: ['ignore', 'ignore', 'pipe'],
+      detached: false,
+      env: display ? { ...process.env, DISPLAY: display } : process.env,
+    });
+  } catch (error) {
+    await xvfb?.close().catch(() => {});
+    if (ownsProfile) await rm(userDataDir, { recursive: true, force: true });
+    throw error;
+  }
+  if (child.pid !== undefined) {
+    __registerChromePid(child.pid);
+    if (ownsProfile) chromeTemporaryProfiles.set(child.pid, userDataDir);
+  }
 
   // Chromium is noisy — only surface stderr under IMPRINT_DEBUG.
   if (isDebug()) {
     child.stderr?.on('data', (chunk) => process.stderr.write(chunk));
   }
 
-  const ready = waitForCdp(port);
-
-  let closed = false;
-  const close = async (): Promise<void> => {
-    if (closed) return;
-    closed = true;
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill('SIGTERM');
-      await Promise.race([
-        new Promise<void>((resolve) => child.once('exit', () => resolve())),
-        sleep(2000),
-      ]);
-      if (child.exitCode === null) child.kill('SIGKILL');
-    }
-    // Tear down the virtual display we started for this launch (if any).
-    await xvfb?.close().catch(() => {});
+  const startup = new AbortController();
+  let stopped = false;
+  let spawnError: Error | undefined;
+  const exit = Promise.withResolvers<void>();
+  let closing: Promise<void> | undefined;
+  const close = (): Promise<void> => {
+    closing ??= (async () => {
+      startup.abort(new Error('Chromium closed before CDP became ready'));
+      if (!stopped) {
+        child.kill('SIGTERM');
+        await Promise.race([exit.promise, sleep(2000)]);
+        if (!stopped) {
+          child.kill('SIGKILL');
+          await Promise.race([exit.promise, sleep(2000)]);
+        }
+      }
+      await xvfb?.close().catch(() => {});
+      if (!stopped) throw new Error('Chromium did not exit; preserving its profile');
+      if (ownsProfile) await rm(userDataDir, { recursive: true, force: true });
+      if (child.pid !== undefined) {
+        chromeTemporaryProfiles.delete(child.pid);
+        __unregisterChromePid(child.pid);
+      }
+    })();
+    return closing;
   };
+  child.once('error', (error) => {
+    spawnError = error;
+    if (child.pid === undefined) {
+      stopped = true;
+      exit.resolve();
+    }
+    startup.abort(error);
+  });
+  child.once('exit', () => {
+    stopped = true;
+    if (child.pid !== undefined) __unregisterChromePid(child.pid);
+    exit.resolve();
+    void close().catch((error) => {
+      process.stderr.write(`[imprint] browser cleanup: ${String(error)}\n`);
+    });
+  });
+  const ready = Promise.race([
+    waitForCdp(port, 10_000, startup.signal),
+    exit.promise.then(() => {
+      throw spawnError ?? new Error('Chromium exited before CDP became ready');
+    }),
+  ]).catch(async (error) => {
+    await close();
+    throw error;
+  });
 
   return { process: child, port, userDataDir, ready, close };
 }

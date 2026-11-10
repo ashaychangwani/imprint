@@ -1,5 +1,53 @@
 import { ensurePlaywrightChromiumInstalled } from './chromium.ts';
 
+interface CompatCdpClient {
+  send(method: string, parameters?: unknown): Promise<unknown>;
+}
+interface CompatPage {
+  _client(): CompatCdpClient;
+}
+interface PageSetupPlugin {
+  onPageCreated(page: CompatPage): Promise<void>;
+}
+
+/** Keep a plugin's fire-and-forget CDP calls inside its caught lifecycle hook. */
+export function awaitPluginPageSetup<T extends PageSetupPlugin>(plugin: T): T {
+  const original = plugin.onPageCreated.bind(plugin);
+  plugin.onPageCreated = async (page) => {
+    const commands: Promise<unknown>[] = [];
+    const guardedPage = new Proxy(page, {
+      get(target, property, receiver) {
+        if (property !== '_client') return Reflect.get(target, property, receiver);
+        return () => {
+          const client = target._client();
+          return new Proxy(client, {
+            get(clientTarget, clientProperty, clientReceiver) {
+              if (clientProperty !== 'send')
+                return Reflect.get(clientTarget, clientProperty, clientReceiver);
+              return (method: string, parameters?: unknown) => {
+                const command = clientTarget.send(method, parameters);
+                // Observe immediately, even if the hook yields before it returns.
+                void command.catch(() => {});
+                commands.push(command);
+                return command;
+              };
+            },
+          });
+        };
+      },
+    });
+    try {
+      await original(guardedPage);
+    } finally {
+      await Promise.all(commands);
+    }
+  };
+  return plugin;
+}
+
+let chromiumPromise: Promise<typeof import('playwright').chromium> | undefined;
+let stealthAvailable = false;
+
 /**
  * Shared loader for Playwright's chromium with the stealth plugin applied.
  *
@@ -18,13 +66,30 @@ import { ensurePlaywrightChromiumInstalled } from './chromium.ts';
  * thrown error into their own result shape.
  */
 export async function getStealthChromium(): Promise<typeof import('playwright').chromium> {
+  chromiumPromise ??= loadStealthChromium();
+  return await chromiumPromise;
+}
+
+async function loadStealthChromium(): Promise<typeof import('playwright').chromium> {
   try {
     const pwExtra = await import('playwright-extra');
     const stealthMod = await import('puppeteer-extra-plugin-stealth');
     const stealthFactory =
       (stealthMod as { default?: () => unknown }).default ??
       (stealthMod as unknown as () => unknown);
+    // This upstream evasion does not await client.send. Playwright-extra catches
+    // rejected hook promises, so attach the command to that hook rather than
+    // allowing a browser-close race to become an unhandled rejection.
+    const userAgentModule = await import(
+      // @ts-expect-error The upstream evasion does not publish TypeScript declarations.
+      'puppeteer-extra-plugin-stealth/evasions/user-agent-override/index.js'
+    );
+    const userAgentFactory = userAgentModule.default as (options: unknown) => PageSetupPlugin;
+    pwExtra.chromium.plugins.setDependencyResolution('stealth/evasions/user-agent-override', ((
+      options: unknown,
+    ) => awaitPluginPageSetup(userAgentFactory(options))) as never);
     pwExtra.chromium.use(stealthFactory() as never);
+    stealthAvailable = true;
     return pwExtra.chromium as unknown as typeof import('playwright').chromium;
   } catch {
     const pw = await import('playwright');
@@ -45,13 +110,8 @@ export async function getStealthChromium(): Promise<typeof import('playwright').
  * protection. Import resolution is cached, so probing here is cheap.
  */
 export async function isStealthPluginAvailable(): Promise<boolean> {
-  try {
-    await import('playwright-extra');
-    await import('puppeteer-extra-plugin-stealth');
-    return true;
-  } catch {
-    return false;
-  }
+  await getStealthChromium();
+  return stealthAvailable;
 }
 
 /**

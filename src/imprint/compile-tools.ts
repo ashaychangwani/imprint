@@ -1,3 +1,4 @@
+import { abortSignalError } from './concurrency.ts';
 /**
  * Shared compile-agent tool implementations.
  *
@@ -67,6 +68,7 @@ import {
   type Workflow,
   WorkflowSchema,
 } from './types.ts';
+import { userInteractionTools } from './user-interaction.ts';
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const MAX_SHARED_MODULE_SOURCE_CHARS = 50_000;
@@ -126,6 +128,7 @@ export function buildCompileTools(
       isIrreversibleRequest(request) && (!candidateSeqs || candidateSeqs.has(request.seq)),
   );
   const tools = [
+    ...userInteractionTools(context.signal),
     buildReadSessionSummaryTool(session, context, toolDir),
     buildReadRequestTool(session),
     buildInspectBodyStructureTool(session),
@@ -157,6 +160,8 @@ export function buildCompileTools(
 }
 
 export interface CompileToolContext {
+  /** Run/assignment lifetime; individual adapters also forward their request signal. */
+  signal?: AbortSignal;
   candidate?: ToolCandidate;
   sharedContext?: SharedCompileContext;
   teachCredentials?: { site: string; values: Record<string, string> };
@@ -2064,6 +2069,7 @@ async function runCommand(
 export async function typecheckArtifacts(
   dir: string,
   includes: string[],
+  signal?: AbortSignal,
 ): Promise<{ stdout: string; stderr: string; exitCode: number; timedOut: boolean }> {
   const configPath = pathJoin(dir, '.imprint-typecheck.tsconfig.json');
   const rootTsconfig = realpathSync(pathJoin(REPO_ROOT, 'tsconfig.json'));
@@ -2096,6 +2102,9 @@ export async function typecheckArtifacts(
       'bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json',
       dir,
       120000,
+      undefined,
+      undefined,
+      signal,
     );
     return JSON.parse(result.result) as {
       stdout: string;
@@ -2133,7 +2142,9 @@ export function buildRunTestsTool(
       properties: {},
       required: [],
     },
-    handler: async () => {
+    handler: async (_input, request) => {
+      const signal = request?.signal;
+      if (signal?.aborted) throw abortSignalError(signal);
       const testNames = ['parser.test.ts', 'request.test.ts'].filter((name) =>
         existsSync(pathJoin(toolDir, name)),
       );
@@ -2170,9 +2181,17 @@ export function buildRunTestsTool(
           isError: true,
         };
       }
-      const cmdResult = await runCommand(testCommand, toolDir, 120000, {
-        [SESSION_PATH_ENV]: sessionPath,
-      });
+      const cmdResult = await runCommand(
+        testCommand,
+        toolDir,
+        120000,
+        {
+          [SESSION_PATH_ENV]: sessionPath,
+        },
+        undefined,
+        signal,
+      );
+      if (signal?.aborted) throw abortSignalError(signal);
 
       const output = JSON.parse(cmdResult.result) as {
         stdout: string;
@@ -2193,7 +2212,7 @@ export function buildRunTestsTool(
       );
       const typecheck =
         typecheckIncludes.length > 0
-          ? await typecheckArtifacts(toolDir, typecheckIncludes)
+          ? await typecheckArtifacts(toolDir, typecheckIncludes, signal)
           : { stdout: '', stderr: '', exitCode: 0, timedOut: false };
       const typecheckFailed = typecheck.exitCode !== 0 || typecheck.timedOut;
 
@@ -2971,6 +2990,7 @@ export async function externalVerification(
   session: Session,
   sessionPath: string,
   opts: {
+    signal?: AbortSignal;
     expectedToolName?: string;
     candidateRequestSeqs?: number[];
     /** Build-plan-declared dependency seqs included in exact effect provenance. */
@@ -3001,6 +3021,7 @@ export async function externalVerification(
    * integration run. The caller hands these to the independent semantic agent. */
   integrationEvidence: LiveIntegrationEvidence[];
 }> {
+  if (opts.signal?.aborted) throw abortSignalError(opts.signal);
   const failures: string[] = [];
   const warnings: string[] = [];
   let integrationEvidence: LiveIntegrationEvidence[] = [];
@@ -3203,6 +3224,7 @@ export async function externalVerification(
       },
       {
         networkDisabled: safetyBlocked,
+        signal: opts.signal,
       },
     );
     if (run.exitCode !== 0) {
@@ -3234,6 +3256,7 @@ export async function externalVerification(
         },
         {
           networkDisabled: safetyBlocked,
+          signal: opts.signal,
         },
       );
       if (run.exitCode !== 0) {
@@ -3264,9 +3287,15 @@ export async function externalVerification(
     } catch {
       // Best-effort cleanup before the run.
     }
-    const run = await runBunTestWithResults(integrationTestPath, toolDir, verifierTimeoutMs, {
-      [LIVE_EVIDENCE_PATH_ENV]: evidencePath,
-    });
+    const run = await runBunTestWithResults(
+      integrationTestPath,
+      toolDir,
+      verifierTimeoutMs,
+      {
+        [LIVE_EVIDENCE_PATH_ENV]: evidencePath,
+      },
+      { signal: opts.signal },
+    );
     try {
       integrationEvidence = readLiveIntegrationEvidence(evidencePath);
     } catch (error) {
@@ -3292,7 +3321,11 @@ export async function externalVerification(
   }
 
   if (existsSync(parserPath) || existsSync(parserTestPath)) {
-    const output = await typecheckArtifacts(toolDir, ['parser.ts', 'request-transform.ts']);
+    const output = await typecheckArtifacts(
+      toolDir,
+      ['parser.ts', 'request-transform.ts'],
+      opts.signal,
+    );
     if (output.exitCode !== 0 || output.timedOut) {
       failures.push(
         `generated TypeScript artifacts failed typecheck (bunx tsc --noEmit -p .imprint-typecheck.tsconfig.json) exited ${output.exitCode}${output.timedOut ? ' after timing out' : ''}\nstdout:\n${output.stdout}\nstderr:\n${output.stderr}`,

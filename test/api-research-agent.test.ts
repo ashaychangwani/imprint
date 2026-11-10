@@ -11,6 +11,7 @@ import {
 import {
   type ApiResearchCandidate,
   ApiResearchHandoffSchema,
+  ApiResearchInputSchema,
 } from '../src/imprint/master-teach-agent-contracts.ts';
 import {
   SemanticAgentOutputError,
@@ -23,6 +24,7 @@ import { teachingPlanContentSha256 as digest } from '../src/imprint/master-teach
 import { PromptEvidenceProjectionSchema } from '../src/imprint/master-teach-prompt-projections.ts';
 import { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
 import { RunDeadline } from '../src/imprint/provider-retry.ts';
+import { type ResponseObservation, executeWorkflow } from '../src/imprint/runtime.ts';
 import { TeachResearchMemory } from '../src/imprint/teach-research-memory.ts';
 
 const recordingSha256 = `sha256:${'1'.repeat(64)}`;
@@ -792,6 +794,98 @@ describe('focused API research', () => {
       rmSync(toolDir, { recursive: true, force: true });
     }
   });
+  it('preserves runtime dispatch diagnostics through retained research and final handoff', async () => {
+    const toolDir = mkdtempSync(join(tmpdir(), 'imprint-research-dispatch-'));
+    const originalDiagnostics = process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH;
+    process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH = join(toolDir, 'credential-facts.jsonl');
+    const candidate = apiCandidate('dispatch');
+    let turns = 0;
+    try {
+      const outcome = await researchApiMvpCall({
+        run,
+        recordingIndex,
+        session,
+        tool,
+        evidence,
+        toolDir,
+        agent: {},
+        runDeadline: new RunDeadline(Date.now() + 60_000),
+        dependencies: {
+          requestStep: async (input) => {
+            const parsed = ApiResearchInputSchema.parse(input);
+            turns += 1;
+            if (turns === 1)
+              return { binding, action: 'test', candidate, reason: 'Test the synthetic call.' };
+            const observation = parsed.observations[0];
+            const dispatch = observation?.responseObservations[0]?.dispatch;
+            expect(dispatch?.cookieSource).toBe('runtime-prepared');
+            expect(dispatch?.credentials.cookieCount).toBe(1);
+            expect(dispatch?.effectiveCredentials?.cookieCount).toBe(1);
+            expect(typeof dispatch?.preparedCookieHeaderIdentity).toBe('string');
+            return parseApiResearchOutput(
+              JSON.stringify({
+                binding,
+                action: 'proven',
+                candidate,
+                basedOnObservationId: observation?.id,
+                reason: 'Synthetic records returned.',
+              }),
+              parsed,
+            );
+          },
+          runApiTool: async () => {
+            const responseObservations: ResponseObservation[] = [];
+            const result = await executeWorkflow({
+              workflow: candidate.workflow,
+              params: candidate.parameterValues,
+              credentials: {
+                site: 'fixture.invalid',
+                cookies: [
+                  {
+                    name: 'session',
+                    value: 'synthetic-session',
+                    domain: 'fixture.invalid',
+                    path: '/',
+                  },
+                ],
+                values: {},
+              },
+              fetchImpl: (async (_input: Parameters<typeof fetch>[0]) =>
+                Response.json({ records: [{ id: 'fixture-item' }] })) as typeof fetch,
+              onResponse: (observation) => responseObservations.push(observation),
+            });
+            return {
+              result,
+              executionMechanism: 'fetch',
+              responseObservations: responseObservations.map((observation) => ({
+                ...observation,
+                backend: 'fetch' as const,
+              })),
+            };
+          },
+        },
+      });
+      const handoff = ApiResearchHandoffSchema.parse({
+        toolName: tool.candidate.toolName,
+        researchInputsSha256: outcome.researchInputsSha256,
+        status: 'proven',
+        summary: outcome.summary,
+        candidate: outcome.candidate,
+        observation: outcome.observation,
+        observations: outcome.observations,
+      });
+      expect(turns).toBe(2);
+      expect(handoff.observation?.responseObservations[0]?.dispatch).toEqual(
+        outcome.observation.responseObservations[0]?.dispatch,
+      );
+    } finally {
+      // biome-ignore lint/performance/noDelete: process.env assignment coerces undefined to a string
+      if (originalDiagnostics === undefined) delete process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH;
+      else process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH = originalDiagnostics;
+      rmSync(toolDir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps request testing separate and hands only the proven request to compilation', async () => {
     const toolDir = mkdtempSync(join(tmpdir(), 'imprint-api-research-'));
     const first = apiCandidate('diagnostic');

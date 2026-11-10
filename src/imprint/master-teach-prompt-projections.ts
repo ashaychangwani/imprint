@@ -85,6 +85,8 @@ export const ReceiptFactSchema = z
       invocationIndex: z.number().int().nonnegative(),
       durationMs: z.number().nonnegative().optional(),
       executionMechanism: PromptMechanismSchema.optional(),
+      errorCode: z.string().min(1).max(128).optional(),
+      httpStatus: z.number().int().optional(),
     }),
     fact({ kind: z.literal('result'), resultCount: z.number().int().nonnegative() }),
     fact({

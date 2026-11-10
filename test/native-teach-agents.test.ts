@@ -2,9 +2,16 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { runNativeAgentPass } from '../src/imprint/native-agent-pass.ts';
-import { NativeTeachAgents, currentNativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
+import {
+  NativeTeachAgents,
+  createNativeTeachMcpBridge,
+  currentNativeTeachAgents,
+} from '../src/imprint/native-teach-agents.ts';
 import { RunDeadline } from '../src/imprint/provider-retry.ts';
+import { UserInteraction } from '../src/imprint/user-interaction.ts';
 
 function fixture() {
   const root = mkdtempSync(join(tmpdir(), 'imprint-native-family-'));
@@ -24,6 +31,412 @@ const tasks = async (family: NativeTeachAgents) =>
   };
 
 describe('native teach family bridge', () => {
+  it('cancels a timed-out HTTP question and lets its same-assignment retry reach the human queue', async () => {
+    const started: string[] = [];
+    const promptSignals: AbortSignal[] = [];
+    const settled: string[] = [];
+    const interaction = new UserInteraction(async (prompt, signal) => {
+      started.push(prompt.message);
+      if (!signal) throw new Error('Missing prompt signal');
+      promptSignals.push(signal);
+      if (prompt.message === 'First fixture question') {
+        try {
+          await new Promise<void>((resolve) =>
+            signal.addEventListener('abort', () => resolve(), { once: true }),
+          );
+          return { status: 'cancelled', reason: 'Fixture request ended' };
+        } finally {
+          settled.push(prompt.message);
+        }
+      }
+      return { status: 'answered', value: 'Ready' };
+    });
+    const { family, root } = interaction.run(fixture);
+    const bridge = await createNativeTeachMcpBridge((...args) => family.handle(...args));
+    const client = new Client({ name: 'fixture-native-http-cancellation', version: '1' });
+    try {
+      const assignment = family.submit('HTTP question ownership');
+      void assignment.catch(() => {});
+      const id = (await tasks(family)).tasks[0]?.id;
+      await client.connect(new StreamableHTTPClientTransport(new URL(bridge.url)));
+      await client.callTool({
+        name: 'read_assignment',
+        arguments: { id, agentId: '/root/http-question' },
+      });
+      await expect(
+        client.callTool(
+          { name: 'prompt_user', arguments: { id, message: 'First fixture question' } },
+          undefined,
+          { timeout: 80 },
+        ),
+      ).rejects.toThrow('timed out');
+      const retry = await client.callTool(
+        {
+          name: 'prompt_user',
+          arguments: { id, message: 'Retry fixture question', options: ['Ready', 'Unable'] },
+        },
+        undefined,
+        { timeout: 1_000 },
+      );
+      expect(retry).toMatchObject({
+        content: [{ type: 'text', text: JSON.stringify({ status: 'answered', value: 'Ready' }) }],
+      });
+      expect(started).toEqual(['First fixture question', 'Retry fixture question']);
+      expect(settled).toEqual(['First fixture question']);
+      expect(promptSignals.map(({ aborted }) => aborted)).toEqual([true, false]);
+      await client.callTool({
+        name: 'submit',
+        arguments: { id, text: 'Continued the retained assignment after request timeout' },
+      });
+      expect((await assignment).agentId).toBe('/root/http-question');
+    } finally {
+      await client.close();
+      await bridge.close();
+      await family.close();
+      await interaction.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps HTTP cancellation scoped to the client session that owns the matching request id', async () => {
+    const signals: Record<string, AbortSignal> = {};
+    let secondStarted: (() => void) | undefined;
+    const ready = new Promise<void>((resolve) => {
+      secondStarted = resolve;
+    });
+    let answerSecond: (() => void) | undefined;
+    const interaction = new UserInteraction(async (prompt, signal) => {
+      if (!signal) throw new Error('Missing fixture prompt signal');
+      signals[prompt.message] = signal;
+      if (prompt.message === 'Second client') {
+        secondStarted?.();
+        await new Promise<void>((resolve) => {
+          answerSecond = resolve;
+        });
+        return { status: 'answered', value: 'Ready' };
+      }
+      await new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      return { status: 'cancelled', reason: 'First client timed out' };
+    });
+    const { family, root } = interaction.run(fixture);
+    const bridge = await createNativeTeachMcpBridge((...args) => family.handle(...args));
+    const clients = ['first', 'second'].map(
+      (name) => new Client({ name: `fixture-native-${name}`, version: '1' }),
+    );
+    try {
+      const assignments = [family.submit('first client role'), family.submit('second client role')];
+      for (const assignment of assignments) void assignment.catch(() => {});
+      const ids = (await tasks(family)).tasks.map(({ id }) => id);
+      for (const [i, client] of clients.entries()) {
+        await client.connect(new StreamableHTTPClientTransport(new URL(bridge.url)));
+        await client.callTool({
+          name: 'read_assignment',
+          arguments: { id: ids[i], agentId: `/root/client-${i}` },
+        });
+      }
+      // Both clients have made the same number of calls, so these tool requests
+      // reuse the same JSON-RPC id in two distinct initialized sessions.
+      const first = clients[0]?.callTool(
+        { name: 'prompt_user', arguments: { id: ids[0], message: 'First client' } },
+        undefined,
+        { timeout: 80 },
+      );
+      const second = clients[1]?.callTool(
+        { name: 'prompt_user', arguments: { id: ids[1], message: 'Second client' } },
+        undefined,
+        { timeout: 1_000 },
+      );
+      await expect(first).rejects.toThrow('timed out');
+      await ready;
+      expect(signals['First client']?.aborted).toBe(true);
+      expect(signals['Second client']?.aborted).toBe(false);
+      answerSecond?.();
+      expect(await second).toMatchObject({
+        content: [{ type: 'text', text: JSON.stringify({ status: 'answered', value: 'Ready' }) }],
+      });
+      for (const [i, client] of clients.entries())
+        await client.callTool({ name: 'submit', arguments: { id: ids[i], text: `Result ${i}` } });
+      expect(await Promise.all(assignments)).toHaveLength(2);
+    } finally {
+      answerSecond?.();
+      await Promise.allSettled(clients.map((client) => client.close()));
+      await bridge.close();
+      await family.close();
+      await interaction.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('releases an outstanding HTTP question when its initialized client session is terminated', async () => {
+    let started: (() => void) | undefined;
+    const questionStarted = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let promptSignal: AbortSignal | undefined;
+    const interaction = new UserInteraction(async (prompt, signal) => {
+      if (prompt.message === 'After session termination')
+        return { status: 'answered', value: 'Ready' };
+      if (!signal) throw new Error('Missing fixture signal');
+      promptSignal = signal;
+      started?.();
+      await new Promise<void>((resolve) =>
+        signal.addEventListener('abort', () => resolve(), { once: true }),
+      );
+      return { status: 'cancelled', reason: 'Fixture client session ended' };
+    });
+    const bridge = await createNativeTeachMcpBridge(async (_name, args, signal) =>
+      interaction.request(
+        {
+          action: 'prompt_user',
+          prompt: { message: String((args as { message: string }).message), sensitive: false },
+        },
+        signal,
+      ),
+    );
+    const client = new Client({ name: 'fixture-session-termination', version: '1' });
+    const transport = new StreamableHTTPClientTransport(new URL(bridge.url));
+    try {
+      await client.connect(transport);
+      const question = client
+        .callTool(
+          { name: 'prompt_user', arguments: { message: 'Before session termination' } },
+          undefined,
+          { timeout: 1_000 },
+        )
+        .catch((error: unknown) => error);
+      await questionStarted;
+      await transport.terminateSession();
+      expect(promptSignal?.aborted).toBe(true);
+      await client.close();
+      expect(await question).toBeInstanceOf(Error);
+      expect(
+        await interaction.request({
+          action: 'prompt_user',
+          prompt: { message: 'After session termination', sensitive: false },
+        }),
+      ).toEqual({ status: 'answered', value: 'Ready' });
+    } finally {
+      await client.close();
+      await bridge.close();
+      await interaction.clear();
+    }
+  });
+
+  it('wakes an idle assignment wait immediately when independent work arrives', async () => {
+    const { family, root } = fixture();
+    try {
+      const first = family.submit('first role');
+      const firstId = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id: firstId, agentId: '/root/first' });
+      let returned = false;
+      const waiting = tasks(family).then((offered) => {
+        returned = true;
+        return offered;
+      });
+      await Promise.resolve();
+      expect(returned).toBeFalse();
+      const second = family.submit('second independent role');
+      const offered = await waiting;
+      const secondId = offered.tasks.find(({ id }) => id !== firstId)?.id;
+      expect(secondId).toBeDefined();
+      await family.handle('read_assignment', { id: secondId, agentId: '/root/second' });
+      await family.handle('submit', { id: firstId, text: 'first result' });
+      await family.handle('submit', { id: secondId, text: 'second result' });
+      expect(await Promise.all([first, second])).toHaveLength(2);
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('wakes assignment waits when a bound task is cancelled and when the family closes', async () => {
+    const { family, root } = fixture();
+    const abort = new AbortController();
+    try {
+      const pending = family
+        .submit('cancelled role', { signal: abort.signal })
+        .catch((error) => error);
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: '/root/cancelled' });
+      const waiting = tasks(family);
+      abort.abort(new Error('fixture task cancellation'));
+      expect((await waiting).tasks).toEqual([]);
+      expect(await pending).toBeInstanceOf(Error);
+      const closing = family.handle('assignments', {});
+      await family.close();
+      expect(await closing).toEqual({ stopped: true, tasks: [] });
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels an idle assignment wait even when no assignment owns the family signal', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'imprint-native-idle-cancel-'));
+    const abort = new AbortController();
+    const family = new NativeTeachAgents({
+      root,
+      model: 'fixture',
+      deadline: new RunDeadline(Date.now() + 10_000),
+      signal: abort.signal,
+    });
+    try {
+      const waiting = family.handle('assignments', {}).catch((error) => error);
+      abort.abort(new Error('fixture family cancellation'));
+      expect(((await waiting) as Error).message).toBe('fixture family cancellation');
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards request cancellation without cancelling the retained assignment', async () => {
+    const { family, root } = fixture();
+    const request = new AbortController();
+    let called: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => {
+      called = resolve;
+    });
+    try {
+      const pending = family.submit('retained host operations', {
+        contextRef: 'fixture-context',
+        call: async (name, _args, signal) => {
+          if (name === 'held') {
+            called?.();
+            return await new Promise((_resolve, reject) => {
+              signal?.addEventListener('abort', () => reject(signal.reason), { once: true });
+            });
+          }
+          expect(signal?.aborted).toBe(false);
+          return { observed: name };
+        },
+      });
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: '/root/retained' });
+      const held = family
+        .handle(
+          'call_assignment_tool',
+          {
+            id,
+            name: 'held',
+            args: { fixtureInput: 'do-not-journal-fixture-value' },
+          },
+          request.signal,
+        )
+        .catch((error: unknown) => error);
+      await started;
+      request.abort(new Error('fixture transport request cancelled'));
+      expect(((await held) as Error).message).toBe('fixture transport request cancelled');
+      expect(
+        await family.handle('call_assignment_tool', {
+          id,
+          name: 'recovery',
+          args: {},
+        }),
+      ).toEqual({ observed: 'recovery' });
+      await family.handle('submit', { id, text: 'Continued in the same assignment' });
+      expect((await pending).agentId).toBe('/root/retained');
+      const journal = readFileSync(join(root, 'events.jsonl'), 'utf8');
+      expect(journal).not.toContain('do-not-journal-fixture-value');
+      const events = journal
+        .trim()
+        .split('\n')
+        .map((line) => JSON.parse(line));
+      expect(events.filter(({ type }) => type === 'assignment.created')).toHaveLength(1);
+      expect(
+        events.find(({ type, name }) => type === 'assignment.tool.completed' && name === 'held'),
+      ).toMatchObject({ contextRef: 'fixture-context', status: 'cancelled' });
+    } finally {
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('forwards request cancellation to a human question while preserving its assignment', async () => {
+    const interaction = new UserInteraction(async () => await new Promise(() => {}));
+    const { family, root } = interaction.run(fixture);
+    const request = new AbortController();
+    try {
+      const pending = family.submit('question request ownership');
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: '/root/question' });
+      const question = family
+        .handle(
+          'prompt_user',
+          {
+            id,
+            message: 'Current fixture challenge',
+          },
+          request.signal,
+        )
+        .catch((error: unknown) => error);
+      await Promise.resolve();
+      request.abort(new Error('fixture question request cancelled'));
+      expect(await question).toBeInstanceOf(Error);
+      await family.handle('submit', { id, text: 'Question cancelled without approval' });
+      expect((await pending).agentId).toBe('/root/question');
+    } finally {
+      await family.close();
+      await interaction.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('cancels a pending user question with its requesting assignment', async () => {
+    const interaction = new UserInteraction(async () => await new Promise(() => {}));
+    const { family, root } = interaction.run(fixture);
+    const abort = new AbortController();
+    try {
+      const pending = family
+        .submit('fixture research', { signal: abort.signal })
+        .catch((error: unknown) => error);
+      const id = (await tasks(family)).tasks[0]?.id;
+      await family.handle('read_assignment', { id, agentId: '/root/researcher' });
+      const question = family
+        .handle('prompt_user', { id, message: 'Approve fixture action' })
+        .catch((error: unknown) => error);
+      await Promise.resolve();
+      abort.abort(new Error('Fixture assignment cancelled'));
+      expect(await pending).toBeInstanceOf(Error);
+      expect(await question).toBeInstanceOf(Error);
+    } finally {
+      await family.close();
+      interaction.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+  it('lets a bound research agent ask the parent UI without direct assignment tools', async () => {
+    const interaction = new UserInteraction(async () => ({
+      status: 'answered',
+      value: 'fixture-secret-otp',
+    }));
+    const { family, root } = interaction.run(fixture);
+    try {
+      const pending = family.submit('fixture research');
+      const id = (await tasks(family)).tasks[0]?.id;
+      await expect(
+        family.handle('prompt_user', { id, message: 'Enter code', sensitive: true }),
+      ).rejects.toThrow('Read this assignment');
+      await family.handle('read_assignment', { id, agentId: '/root/researcher' });
+      const answer = (await family.handle('prompt_user', {
+        id,
+        message: 'Enter code',
+        sensitive: true,
+      })) as { status: string; value: string };
+      expect(answer.status).toBe('answered');
+      expect(JSON.stringify(answer)).not.toContain('fixture-secret-otp');
+      expect(interaction.resolve(answer.value)).toBe('fixture-secret-otp');
+      await family.handle('submit', { id, text: 'Continued after input' });
+      await pending;
+      expect(readFileSync(join(root, 'events.jsonl'), 'utf8')).not.toContain('fixture-secret-otp');
+    } finally {
+      await family.close();
+      interaction.clear();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
   it('releases a validated pass when the child never acknowledges completion', async () => {
     const root = mkdtempSync(join(tmpdir(), 'imprint-native-ack-'));
     let assignmentId: string | undefined;

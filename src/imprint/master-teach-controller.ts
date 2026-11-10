@@ -84,6 +84,7 @@ import {
   apiResearchInputsSha256,
   apiResearchRequiredLinks,
   apiResearchStableInputsSha256,
+  focusedPlannerResearchContext,
   mechanicalProofFailures,
   requestApiResearchStep,
   requestBaselineMvpReview,
@@ -107,7 +108,6 @@ import {
   EditableTeachingPlanSchema,
   type EditableTeachingTool,
   type ImplementationPlanPayload,
-  ImplementationPlanPayloadSchema,
   bindImplementationPlanRef,
   canonicalTeachingPlanJson,
   chainInvocationForEdge,
@@ -163,9 +163,9 @@ import {
   recordingRequestPrecedingEvent,
   selectedRecordingEvidenceDocuments,
 } from './replay-evidence.ts';
-import { loadCredentialStore } from './runtime.ts';
 import { resolveExplicitTeachingRecordings, resolveTeachingRecording } from './session-merge.ts';
 import { TeachResearchMemory, readRunResearchJsonObject } from './teach-research-memory.ts';
+import { withTeachStageProgress } from './teach-stage-progress.ts';
 import { buildToolCandidatePayload, detectToolCandidates } from './tool-candidates.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
 import {
@@ -176,7 +176,22 @@ import {
   type Workflow,
 } from './types.ts';
 
+import { compileAuthAgent } from './auth-compile-agent.ts';
+import { attachRecordedAuthentication } from './authentication-interaction.ts';
+import {
+  type ComponentRecoveryOwner,
+  ComponentRecoveryQueue,
+  runWithComponentRecovery,
+} from './component-recovery.ts';
+import { selectLiveComponentRecovery } from './live-component-recovery.ts';
 import { NativeTeachAgents, currentNativeTeachAgents } from './native-teach-agents.ts';
+import { withTeachBrowserResources } from './teach-browser-resources.ts';
+import {
+  type OnUserPrompt,
+  UserInteraction,
+  currentUserInteraction,
+  withUserInteraction,
+} from './user-interaction.ts';
 
 const FOCUSED_COMPILE_CONCURRENCY = 4;
 const SPECULATIVE_PLANNING_MIN_REMAINING_MS = 180_000;
@@ -208,6 +223,10 @@ export function revisionSeedArtifactNames(
 }
 
 export interface FreshTeachOptions {
+  /** Explicit run-owned adapters supplied by component builders/hosts. */
+  componentRecoveryOwners?: readonly ComponentRecoveryOwner[];
+  /** Present a question in the caller's UI. Missing input is never approval. */
+  onPrompt?: OnUserPrompt;
   site?: string;
   url?: string;
   persistProfile?: boolean;
@@ -261,6 +280,7 @@ interface BuildWaveFailure {
   compilerSummary?: string;
   /** Bounded observations from the live backend that produced the failure. */
   liveResponseObservations?: BackendResponseObservation[];
+  componentRecoveries?: number;
 }
 
 interface BuildWaveResult<Value> {
@@ -567,6 +587,7 @@ export function consumerResearchForCompiler(
 
 /** Test seams are deliberately role-sized; production defaults use the shipped modules. */
 interface FreshTeachControllerDependencies {
+  compileAuthTool: typeof compileAuthAgent;
   now: () => Date;
   runId: () => string;
   record: typeof record;
@@ -595,6 +616,7 @@ interface FreshTeachControllerDependencies {
     priorToolDir?: string;
     apiResearchDir?: string;
     apiResearchSummary?: string;
+    apiResearchAdvisory?: ApiResearchPlanAdvisory;
     consumerResearch?: ConsumerResearchContext[];
     revisionGuidance?: string;
     revisionContext?: FocusedPlannerRevisionContext;
@@ -608,6 +630,7 @@ interface FreshTeachControllerDependencies {
   }) => Promise<CompiledFocusedTool>;
   runApiResearchTool: ApiToolRunner;
   runApiTool: ApiToolRunner;
+  selectLiveComponentRecovery: typeof selectLiveComponentRecovery;
   runPlaybookTool: (input: {
     playbookPath: string;
     site: string;
@@ -625,8 +648,12 @@ interface FreshTeachControllerDependencies {
   }) => Promise<void>;
 }
 
-const researchPoolContexts = new WeakMap<Map<string, CdpBrowserFetch>, Map<string, string>>();
-const runApiToolWithLadder: ApiToolRunner = async ({
+const runApiToolWithLadder: ApiToolRunner = async (input) =>
+  await withTeachBrowserResources(input.cdpPool, input.signal, (cdpPool) =>
+    executeApiToolWithLadder({ ...input, cdpPool }),
+  );
+
+const executeApiToolWithLadder: ApiToolRunner = async ({
   cdpPool,
   workflowPath,
   parameters,
@@ -636,25 +663,6 @@ const runApiToolWithLadder: ApiToolRunner = async ({
   onRawResponses,
   onResponseEvidence,
 }) => {
-  if (cdpPool) {
-    const tool = resolveWorkflowTool(workflowPath);
-    const context = teachingPlanContentSha256({
-      credentials: await loadCredentialStore(tool.site),
-      bootstrap: tool.workflow.bootstrap,
-      site: tool.site,
-      tool: tool.workflow.toolName,
-    });
-    const contexts = researchPoolContexts.get(cdpPool) ?? new Map<string, string>();
-    const prefix = `${tool.site}\u0000${tool.workflow.toolName}\u0000`;
-    const previous = contexts.get(prefix);
-    if (previous && previous !== context) {
-      const browsers = [...cdpPool.entries()].filter(([key]) => key.startsWith(prefix));
-      for (const [key] of browsers) cdpPool.delete(key);
-      await Promise.allSettled(browsers.map(([, browser]) => browser.close()));
-    }
-    contexts.set(prefix, context);
-    researchPoolContexts.set(cdpPool, contexts);
-  }
   const run = await runWorkflowWithLadder({
     cdpPool,
     workflowPath,
@@ -797,6 +805,7 @@ export async function verifyRecordingMvp(input: {
 }
 
 const defaultDependencies: FreshTeachControllerDependencies = {
+  compileAuthTool: compileAuthAgent,
   now: () => new Date(),
   runId: () => randomUUID(),
   record,
@@ -810,6 +819,7 @@ const defaultDependencies: FreshTeachControllerDependencies = {
   requestMasterDecision,
   requestBaselineMvpReview,
   verifyRecordingMvp,
+  selectLiveComponentRecovery,
   requestParameterSelectionAdvice,
   requestCompletionReview,
   compileFocusedTool: compileFocusedToolWithShippedAgent,
@@ -1642,6 +1652,7 @@ function verificationFailureProjection(
         failure.error instanceof Error ? failure.error.message : String(failure.error),
         12_000,
       ),
+      componentRecoveries: failure.componentRecoveries ?? 0,
       ...(failure.compilerSummary
         ? {
             compilerSummary: utf8Prefix(failure.compilerSummary, 8_000),
@@ -1990,6 +2001,7 @@ async function compileFocusedToolWithShippedAgent(input: {
   priorToolDir?: string;
   apiResearchDir?: string;
   apiResearchSummary?: string;
+  apiResearchAdvisory?: ApiResearchPlanAdvisory;
   consumerResearch?: ConsumerResearchContext[];
   revisionGuidance?: string;
   revisionContext?: FocusedPlannerRevisionContext;
@@ -2036,14 +2048,15 @@ async function compileFocusedToolWithShippedAgent(input: {
       ...(input.apiResearchSummary
         ? {
             apiResearchHandoff: {
-              status: 'proven',
+              status: 'prior_observation',
               instruction:
-                'Preserve the tested request construction. Focus on the parser, offline tests, integration case, and Imprint packaging. Change the request only if the accepted plan or artifact mechanics make the handoff impossible; report that exact contradiction to the master.',
+                'The seeded files and observations describe the researched construction, not proof of the current build. Use them as a starting point for the accepted implementation plan. Any plan/evidence differences below are advisory: implement the accepted construction and run the normal checks, or report a concrete contradiction for master repair. Do not attribute an older observation to changed bytes.',
               summary: input.apiResearchSummary,
               ...(researchEvidence ? { evidenceFiles: researchEvidence } : {}),
             },
           }
         : {}),
+      ...(input.apiResearchAdvisory ? { apiResearchAdvisory: input.apiResearchAdvisory } : {}),
       ...(input.revisionGuidance || input.revisionContext
         ? {
             revision: {
@@ -2152,13 +2165,163 @@ export function apiResearchMatchesPlan(
   );
 }
 
+type ResearchPlanSource = Pick<
+  ApiResearchHandoff,
+  'researchInputsSha256' | 'candidate' | 'observation'
+>;
+type ResearchPlanValue = string | number | null;
+
+export interface ApiResearchPlanDifference {
+  path: string;
+  planned: ResearchPlanValue;
+  researched: ResearchPlanValue;
+  /** Path inside researchRef, rather than an implied observation of the plan. */
+  reference: string;
+}
+
+export interface ApiResearchPlanAdvisory {
+  kind: 'api_research_plan_difference';
+  toolId: string;
+  toolName: string;
+  implementationPlanRef?: ContentAddressedRef;
+  researchRef?: ContentAddressedRef;
+  observationId?: string;
+  differences: ApiResearchPlanDifference[];
+  differenceCount: number;
+  omittedDifferenceCount: number;
+}
+
+/** Compare declared fields only. A different prior construction is context for
+ * the agents, never permission to compile or proof of the changed construction. */
+export function apiResearchPlanDifferences(
+  tool: EditableTeachingTool,
+  implementation: ImplementationPlanPayload,
+  research?: ResearchPlanSource,
+): ApiResearchPlanDifference[] {
+  if (tool.strategy?.kind !== 'api' || implementation.strategyKind !== 'api') return [];
+  const differences: ApiResearchPlanDifference[] = [];
+  const compare = (
+    path: string,
+    planned: ResearchPlanValue | undefined,
+    researched: ResearchPlanValue | undefined,
+    reference: string,
+  ) => {
+    if (planned !== researched)
+      differences.push({
+        path,
+        planned: planned ?? null,
+        researched: researched ?? null,
+        reference,
+      });
+  };
+  const workflow = research?.candidate?.workflow;
+  if (!workflow) {
+    compare('research.candidate', 'API implementation plan', undefined, 'candidate');
+    return differences;
+  }
+  compare(
+    'candidate.toolName',
+    tool.candidate.toolName,
+    workflow.toolName,
+    'candidate.workflow.toolName',
+  );
+  tool.candidate.likelyParams.forEach(({ name, type }, index) => {
+    const researchedIndex = workflow.parameters.findIndex((parameter) => parameter.name === name);
+    compare(
+      `candidate.likelyParams[${index}].type`,
+      type,
+      workflow.parameters[researchedIndex]?.type,
+      researchedIndex < 0
+        ? 'candidate.workflow.parameters'
+        : `candidate.workflow.parameters[${researchedIndex}].type`,
+    );
+  });
+  compare(
+    'requestProvenance.length',
+    implementation.requestProvenance.length,
+    workflow.requests.length,
+    'candidate.workflow.requests.length',
+  );
+  const requestCount = Math.max(implementation.requestProvenance.length, workflow.requests.length);
+  for (let index = 0; index < requestCount; index++) {
+    const planned = implementation.requestProvenance[index];
+    const researched = workflow.requests[index];
+    compare(
+      `requestProvenance[${index}].recordingRequestSeq`,
+      planned?.recordingRequestSeq,
+      researched?.recordingRequestSeq,
+      `candidate.workflow.requests[${index}].recordingRequestSeq`,
+    );
+    compare(
+      `requestProvenance[${index}].recordingResponseRequestSeq`,
+      planned?.recordingResponseRequestSeq,
+      researched?.navigation?.networkResponse?.recordingResponseRequestSeq,
+      `candidate.workflow.requests[${index}].navigation.networkResponse.recordingResponseRequestSeq`,
+    );
+  }
+  return differences;
+}
+
+function apiResearchPlanAdvisory(
+  tool: EditableTeachingTool,
+  implementation: ImplementationPlanPayload,
+  research: ResearchPlanSource | undefined,
+  store: (value: unknown) => ContentAddressedRef,
+): ApiResearchPlanAdvisory | undefined {
+  const differences = apiResearchPlanDifferences(tool, implementation, research);
+  if (differences.length === 0) return undefined;
+  // Bound prompt diagnostics, not the plan, investigation, or number of attempts.
+  const displayed = differences.slice(0, 32);
+  return {
+    kind: 'api_research_plan_difference',
+    toolId: tool.id,
+    toolName: tool.candidate.toolName,
+    ...(tool.implementationPlan ? { implementationPlanRef: tool.implementationPlan } : {}),
+    ...(research ? { researchRef: store(research) } : {}),
+    ...(research?.observation ? { observationId: research.observation.id } : {}),
+    differences: displayed,
+    differenceCount: differences.length,
+    omittedDifferenceCount: differences.length - displayed.length,
+  };
+}
+
+function plannerResearchAdvisoryProjection(input: {
+  planners: readonly HostedPlannerBundle[];
+  research: readonly ApiResearchHandoff[];
+  seeds: Map<string, FreshTeachBootstrapObject>;
+}): PromptEvidenceProjection | undefined {
+  const store = (value: unknown) => addBootstrap(input.seeds, jsonRef(value));
+  const entries: PromptEvidenceEntry[] = input.planners.flatMap(({ proposal }) => {
+    const tool = proposal.payload.tool;
+    const advisory = apiResearchPlanAdvisory(
+      tool,
+      proposal.payload.implementationPlan.payload,
+      input.research.find(({ toolName }) => toolName === tool.candidate.toolName),
+      store,
+    );
+    return advisory
+      ? [
+          {
+            kind: 'untrusted_redacted_quote',
+            provenance: 'plan_note',
+            ref: store(advisory),
+            quote: canonicalTeachingPlanJson(advisory),
+          },
+        ]
+      : [];
+  });
+  if (entries.length === 0) return undefined;
+  const payload = { entries };
+  return PromptEvidenceProjectionSchema.parse({ ref: store(payload), payload });
+}
+
 /**
  * Research is evidence for a public operation boundary, not for planner prose.
  * A later plan may narrow a proven operation by fixing researched parameters to
  * constants, but it may not add an unresearched public parameter or discard the
  * recorded request that actually passed. Additional recording references are
- * context, not additional executed requests; apiResearchMatchesPlan separately
- * checks the implementation's exact request provenance.
+ * context, not additional executed requests. This describes reuse of the old
+ * boundary evidence; it does not prohibit compiling a revised construction.
  */
 export function apiResearchCoversToolBoundary(
   tool: EditableTeachingTool,
@@ -2350,6 +2513,7 @@ type FocusedPlannerFailure = NonNullable<MasterDecisionInput['plannerFailures']>
 
 async function requestFocusedPlannerBundles(input: {
   onInvalidOutput?: (failure: FocusedPlannerFailure) => void;
+  report?: (message: string) => void;
   plan: EditableTeachingPlan;
   discoveryRun: ToolSelectionAdvisorInput['run'];
   recordingIndex: ToolSelectionAdvisorInput['recordingIndex'];
@@ -2428,7 +2592,17 @@ async function requestFocusedPlannerBundles(input: {
         evidence,
         ...(revisionContext ? { revisionContext } : {}),
       };
-      const output = await input.deps.requestFocusedPlan(plannerInput, input.agent);
+      Object.assign(
+        plannerInput,
+        focusedPlannerResearchContext(plannerInput, input.agent.sharedResearch),
+      );
+      const output = await withTeachStageProgress(
+        {
+          label: `${sourceTool.candidate.toolName}: implementation planning`,
+          report: input.report,
+        },
+        () => input.deps.requestFocusedPlan(plannerInput, input.agent),
+      );
       const authoredEdges = [
         ...input.plan.chainEdges.filter(({ consumerToolId }) => consumerToolId !== output.tool.id),
         ...output.chainEdges,
@@ -2775,33 +2949,90 @@ async function researchSelectedOperations(input: {
   const targetTools = input.plan.buildWaves.flat().flatMap((id) => selectedById.get(id) ?? []);
   const targetIds = new Set(targetTools.map(({ id }) => id));
   const idByName = new Map(input.plan.tools.map((tool) => [tool.candidate.toolName, tool.id]));
+  const predecessors = new Map(
+    targetTools.map((tool) => [
+      tool.id,
+      new Set([
+        ...tool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
+        ...input.plan.chainEdges
+          .filter(({ consumerToolId }) => consumerToolId === tool.id)
+          .map(({ producerToolId }) => producerToolId),
+      ]),
+    ]),
+  );
   const settled = new Map<string, Promise<void>>();
+  const settledResearch = new Set<string>();
   const settle = new Map<string, () => void>();
   for (const tool of targetTools)
     settled.set(tool.id, new Promise<void>((resolve) => settle.set(tool.id, resolve)));
   const queuedResearch = new Set(targetTools.map(({ id }) => id));
   const unfinishedResearch = new Set(queuedResearch);
-  // A last native researcher can overlap planning with master review when
-  // enough time remains. Ordinary drafts still overlap unfinished research.
+  // Prioritize research that can actually start. A consumer waiting on its
+  // producer must not prevent unrelated proven tools from preparing drafts.
   const canDraft = () =>
-    queuedResearch.size === 0 &&
+    !targetTools.some(
+      ({ id }) =>
+        queuedResearch.has(id) &&
+        [...(predecessors.get(id) ?? [])].every(
+          (producer) => !targetIds.has(producer) || settledResearch.has(producer),
+        ),
+    ) &&
     (unfinishedResearch.size > 0 ||
       (Boolean(currentNativeTeachAgents()) &&
         input.runDeadline.deadlineMs - Date.now() >= SPECULATIVE_PLANNING_MIN_REMAINING_MS));
   const completedHandoffs = new Map<string, ApiResearchHandoff>();
-  const researched = await compileEveryToolInBuildWaves(
+  const pendingDrafts = new Map<
+    string,
+    {
+      tool: EditableTeachingTool;
+      result: ApiResearchResult;
+      handoff: ApiResearchHandoff;
+      evidence: PromptEvidenceProjection;
+    }
+  >();
+  const draftAdmissions: Promise<void>[] = [];
+  let draftFailure: unknown;
+  const admitDrafts = () => {
+    if (!canDraft()) return;
+    for (const [id, pending] of pendingDrafts) {
+      // Give the master's dependent research its producer evidence first; its
+      // findings can change that producer contract. Independent drafts can run.
+      if (
+        targetTools.some(
+          (tool) => unfinishedResearch.has(tool.id) && predecessors.get(tool.id)?.has(id),
+        )
+      )
+        continue;
+      pendingDrafts.delete(id);
+      const admission = input.onProven?.(
+        pending.tool,
+        pending.result,
+        pending.handoff,
+        pending.evidence,
+        canDraft,
+        input.plan,
+        [
+          ...(input.previousHandoffs ?? []).filter(
+            (previous) => !completedHandoffs.has(previous.toolName),
+          ),
+          ...completedHandoffs.values(),
+        ],
+      );
+      if (admission)
+        draftAdmissions.push(
+          admission.catch((error) => {
+            draftFailure ??= error;
+          }),
+        );
+    }
+  };
+  const researchWork = compileEveryToolInBuildWaves(
     { tools: targetTools, buildWaves: [targetTools.map(({ id }) => id)] },
     {
       concurrency: FOCUSED_COMPILE_CONCURRENCY,
       compileTool: async (sourceTool) => {
-        const predecessorIds = new Set([
-          ...sourceTool.candidate.dependsOnTools.flatMap((name) => idByName.get(name) ?? []),
-          ...input.plan.chainEdges
-            .filter(({ consumerToolId }) => consumerToolId === sourceTool.id)
-            .map(({ producerToolId }) => producerToolId),
-        ]);
         await Promise.all(
-          [...predecessorIds]
+          [...(predecessors.get(sourceTool.id) ?? [])]
             .filter((id) => id !== sourceTool.id && targetIds.has(id))
             .map((id) => settled.get(id)),
         );
@@ -2840,7 +3071,7 @@ async function researchSelectedOperations(input: {
               : `${tool.candidate.toolName}: researching the minimum viable API call`,
           );
           try {
-            const outcome = await researchApiMvpCall({
+            const researching = researchApiMvpCall({
               run: input.run,
               recordingIndex: input.recordingIndex,
               session: input.triagedSession,
@@ -2947,6 +3178,9 @@ async function researchSelectedOperations(input: {
                 runApiTool: input.deps.runApiResearchTool,
               },
             });
+            // Offer ready research before releasing older proven drafts.
+            admitDrafts();
+            const outcome = await researching;
             unfinishedResearch.delete(sourceTool.id);
             if (isPartialApiResearch(outcome)) {
               input.report?.(`${tool.candidate.toolName}: API research is partial`);
@@ -2973,14 +3207,15 @@ async function researchSelectedOperations(input: {
               observations: outcome.observations,
             });
             completedHandoffs.set(handoff.toolName, handoff);
+            settledResearch.add(sourceTool.id);
             settle.get(sourceTool.id)?.();
-            if (canDraft())
-              await input.onProven?.(sourceTool, outcome, handoff, evidence, canDraft, input.plan, [
-                ...(input.previousHandoffs ?? []).filter(
-                  (previous) => !completedHandoffs.has(previous.toolName),
-                ),
-                ...completedHandoffs.values(),
-              ]);
+            pendingDrafts.set(sourceTool.id, {
+              tool: sourceTool,
+              result: outcome,
+              handoff,
+              evidence,
+            });
+            admitDrafts();
             return handoff;
           } catch (error) {
             unfinishedResearch.delete(sourceTool.id);
@@ -2997,11 +3232,17 @@ async function researchSelectedOperations(input: {
             });
           }
         } finally {
+          settledResearch.add(sourceTool.id);
           settle.get(sourceTool.id)?.();
+          admitDrafts();
         }
       },
     },
   );
+  const researched = await researchWork.finally(async () => {
+    await Promise.all(draftAdmissions);
+  });
+  if (draftFailure !== undefined) throw draftFailure;
   if (researched.failures.length > 0) {
     throwTerminalFanoutFailure(researched.failures, input.agent.signal);
     throw new AggregateError(
@@ -3186,11 +3427,14 @@ async function reviewApiResearchBeforePlanning(input: {
       apiResearch: currentHandoffs,
       ...(researchNoProgress.length > 0 ? { researchNoProgress } : {}),
     };
-    input.report?.('master: reviewing first-pass API research before planning');
-    const decision = await input.deps.requestMasterDecision(
-      decisionInput,
-      input.agent,
-      firstReview && input.selfContainedFirstReview ? { selfContained: true } : undefined,
+    const decision = await withTeachStageProgress(
+      { label: 'master: API research review', report: input.report },
+      () =>
+        input.deps.requestMasterDecision(
+          decisionInput,
+          input.agent,
+          firstReview && input.selfContainedFirstReview ? { selfContained: true } : undefined,
+        ),
     );
     firstReview = false;
     const decisionRef = addBootstrap(input.seeds, jsonRef(decision));
@@ -3412,6 +3656,7 @@ async function discoverAndPlan(input: {
   toolAdvice: ToolAdvice;
   apiResearch: ApiResearchHandoff[];
   apiResearchResults: Map<string, ApiResearchResult>;
+  researchFollowUps: ApiResearchFollowUpDirective[];
   earlyDrafts: Map<
     string,
     { compiled: CompiledFocusedTool; compileInputsSha256: string; implementationSha256: string }
@@ -3570,6 +3815,7 @@ async function discoverAndPlan(input: {
     try {
       const [bundle] = await requestFocusedPlannerBundles({
         plan: currentPlan,
+        report: input.report,
         discoveryRun: run,
         recordingIndex,
         triagedSession: input.triage.session,
@@ -3583,7 +3829,7 @@ async function discoverAndPlan(input: {
       });
       if (!bundle) return;
       const proposed = bundle.proposal.payload.tool;
-      if (!apiResearchMatchesPlan(proposed, bundle.output.implementationPlan, result)) return;
+      if (proposed.strategy?.kind !== 'api') return;
       earlyPlans.set(tool.id, {
         bundle,
         research: result,
@@ -3593,7 +3839,6 @@ async function discoverAndPlan(input: {
           evidenceRefs: [],
         }),
       });
-      if (!canDraft()) return;
       input.report?.(
         `${tool.candidate.toolName}: compiling a draft while other research continues`,
       );
@@ -3605,11 +3850,20 @@ async function discoverAndPlan(input: {
         stagingDir: pathJoin(input.stagingRoot, 'research-drafts', tool.id),
         apiResearchDir: result.toolDir,
         apiResearchSummary: result.summary,
+        apiResearchAdvisory: apiResearchPlanAdvisory(
+          proposed,
+          bundle.output.implementationPlan,
+          result,
+          (value) => addBootstrap(input.seeds, jsonRef(value)),
+        ),
         resumeSessionId: input.compileSessionsByToolId.get(tool.id),
         onSessionId: (id) => input.compileSessionsByToolId.set(tool.id, id),
         runDeadline: input.runDeadline,
         signal: input.signal,
       });
+      input.report?.(
+        `${tool.candidate.toolName}: draft generation finished; normal teaching checks and publication are pending`,
+      );
       earlyDrafts.set(tool.id, {
         compiled,
         compileInputsSha256: bundle.proposal.payload.binding.compileInputsSha256,
@@ -3704,6 +3958,7 @@ async function discoverAndPlan(input: {
     ...reusablePlans,
     ...(await requestFocusedPlannerBundles({
       plan: research.plan,
+      report: input.report,
       onInvalidOutput: (failure) => plannerFailures.push(failure),
       discoveryRun: run,
       recordingIndex,
@@ -3720,6 +3975,12 @@ async function discoverAndPlan(input: {
     })),
   ];
   const evidenceRefs = allEvidenceRefs(discoveryEvidence, plannerBundles);
+  const researchAdvisories = plannerResearchAdvisoryProjection({
+    planners: plannerBundles,
+    research: research.handoffs,
+    seeds: input.seeds,
+  });
+  if (researchAdvisories) evidenceRefs.push(...focusedEvidenceRefs(researchAdvisories));
   const prePlanObject = jsonRef(research.plan);
   addBootstrap(input.seeds, prePlanObject);
   const revisionInput: MasterDecisionInput = {
@@ -3743,16 +4004,21 @@ async function discoverAndPlan(input: {
     plannerProposals: plannerBundles.map(({ proposal }) => proposal),
     ...(plannerFailures.length ? { plannerFailures } : {}),
     apiResearch: research.handoffs,
+    ...(researchAdvisories ? { verificationFindings: researchAdvisories } : {}),
   };
-  const finalDecision = await input.deps.requestMasterDecision(
-    revisionInput,
-    input.agent,
-    input.selected ? { selfContained: true } : undefined,
+  const finalDecision = await withTeachStageProgress(
+    { label: 'master: overall plan review', report: input.report },
+    () =>
+      input.deps.requestMasterDecision(
+        revisionInput,
+        input.agent,
+        input.selected ? { selfContained: true } : undefined,
+      ),
   );
   const finalDecisionRef = addBootstrap(input.seeds, jsonRef(finalDecision));
   const proposalRefs = plannerBundles.map(({ proposal }) => proposal.ref);
   const plan = createEditableTeachingPlan(
-    finalDecision.desiredPlan,
+    desiredPlanAfterResearchRequest(finalDecision),
     {
       decision: planDecision(
         input.now,
@@ -3777,20 +4043,9 @@ async function discoverAndPlan(input: {
       discoveryCandidateNames: discoveryInput.discoveryCandidates.map(({ toolName }) => toolName),
     },
   );
-  for (const tool of plan.tools) {
-    if (!tool.implementationPlan || tool.strategy?.kind !== 'api') continue;
-    const seed = input.seeds.get(contentRefKey(tool.implementationPlan));
-    const implementation =
-      seed?.kind === 'json' ? ImplementationPlanPayloadSchema.safeParse(seed.value) : undefined;
-    const result = research.resultsByToolId.get(tool.id);
-    if (
-      !implementation?.success ||
-      !result ||
-      !apiResearchMatchesPlan(tool, implementation.data, result)
-    ) {
-      tool.implementationPlan = undefined;
-    }
-  }
+  // The master may deliberately accept a construction different from research.
+  // Keep its accepted plan; the journal validates refs/schema and each new build
+  // receives its own normal checks rather than inheriting the old observation.
   return {
     plan,
     discoveryInput,
@@ -3808,11 +4063,18 @@ async function discoverAndPlan(input: {
     toolAdvice: advice,
     apiResearch: research.handoffs,
     apiResearchResults: research.resultsByToolId,
+    researchFollowUps: finalDecision.researchFollowUps ?? [],
     earlyDrafts,
   };
 }
 
 interface CheckedBuilds {
+  componentRepairs: Array<{
+    toolId: string;
+    componentId: string;
+    sourceToolId: string;
+    reason: string;
+  }>;
   compiledByToolId: Map<string, CompiledFocusedTool>;
   revisionSourceByToolId: Map<string, CompiledFocusedTool>;
   draftSourceByToolStrategy: Map<string, CompiledFocusedTool>;
@@ -3859,6 +4121,7 @@ function checkFailure(
     | 'chainEdgeIds'
     | 'compilerSummary'
     | 'liveResponseObservations'
+    | 'componentRecoveries'
   > = {},
 ): BuildWaveFailure {
   return {
@@ -4124,6 +4387,7 @@ function receiptPassed(facts: readonly ReceiptFact[]): boolean {
 }
 
 async function compileAndCheckCurrentPlan(input: {
+  componentRecoveryOwners?: readonly ComponentRecoveryOwner[];
   journal: FreshTeachJournal;
   triage: TriageResult;
   sessionPath: string;
@@ -4173,6 +4437,7 @@ async function compileAndCheckCurrentPlan(input: {
 }): Promise<CheckedBuilds> {
   const plan = input.journal.currentPlan();
   const initialState = input.journal.readState();
+  const componentRecoveryQueue = new ComponentRecoveryQueue();
   const initialBuildRefs = new Map(
     initialState.tools.flatMap(({ toolId, buildRef }) => (buildRef ? [[toolId, buildRef]] : [])),
   );
@@ -4285,15 +4550,15 @@ async function compileAndCheckCurrentPlan(input: {
       );
       return early.compiled;
     }
-    let apiResearch: ApiResearchResult | undefined;
-    if (tool.strategy.kind === 'api') {
-      apiResearch = input.apiResearchByToolId?.get(tool.id);
-      if (!apiResearch || !apiResearchMatchesPlan(tool, implementation, apiResearch)) {
-        throw new Error(
-          `API plan for "${tool.candidate.toolName}" does not match a proven pre-plan request; revise the plan from the research handoff before compiling`,
-        );
-      }
-    }
+    const apiResearch =
+      tool.strategy.kind === 'api' ? input.apiResearchByToolId?.get(tool.id) : undefined;
+    const researchAdvisory = apiResearchPlanAdvisory(tool, implementation, apiResearch, (value) =>
+      input.journal.storeJson(value),
+    );
+    if (researchAdvisory)
+      input.report?.(
+        `${tool.candidate.toolName}: ${researchAdvisory.differenceCount} advisory plan/research difference(s); compiling the accepted construction with fresh checks`,
+      );
     // A master revision gets new bytes at a new module path. This keeps a
     // failed parser or transform from leaking into the next compile and also
     // avoids Bun's local TypeScript module cache returning the prior build.
@@ -4315,6 +4580,7 @@ async function compileAndCheckCurrentPlan(input: {
             (tool.strategy.kind === 'api' ? early?.compiled.toolDir : undefined)),
       apiResearchDir: apiResearch?.toolDir,
       apiResearchSummary: apiResearch?.summary,
+      apiResearchAdvisory: researchAdvisory,
       consumerResearch: consumerResearchForCompiler(tool.id, plan, input.apiResearchByToolId),
       revisionGuidance: input.revisionGuidanceByToolId?.get(tool.id),
       revisionContext: input.revisionContextByToolId?.get(tool.id),
@@ -4526,6 +4792,73 @@ async function compileAndCheckCurrentPlan(input: {
     return unavailable;
   };
 
+  const componentRepairs: CheckedBuilds['componentRepairs'] = [];
+  const selectRecovery = async (
+    tool: EditableTeachingTool,
+    parameters: Record<string, string | number | boolean>,
+    failed: { result: ToolResult<unknown> },
+    previousRecoveries: number,
+    phase = 'live',
+  ) => {
+    if (failed.result.ok) return undefined;
+    input.report?.(`checking component recovery for ${tool.candidate.toolName}`);
+    const context = tool.compileContext as SharedCompileContext;
+    const liveInvocation = phase === 'live' || phase === 'chain';
+    const owners: ComponentRecoveryOwner[] = liveInvocation
+      ? [...(input.componentRecoveryOwners ?? [])]
+      : [];
+    const ownerToolIds = new Set([tool.id]);
+    // Walk only the accepted dependency graph, including transitive producers.
+    for (const id of ownerToolIds) {
+      const dependency = plan.tools.find((candidate) => candidate.id === id);
+      if (dependency)
+        for (const producer of declaredProducerIdsFor(dependency)) ownerToolIds.add(producer);
+    }
+    for (const id of ownerToolIds) {
+      const target = plan.tools.find((candidate) => candidate.id === id);
+      if (!target?.implementationPlan || !target.strategy) continue;
+      owners.push({
+        id: `tool:${id}`,
+        kind: id === tool.id ? 'artifact' : 'prerequisite',
+        label: target.candidate.toolName,
+        toolIds: [tool.id],
+        recover: async ({ reason }) => {
+          if (!componentRepairs.some((repair) => repair.toolId === id))
+            componentRepairs.push({
+              toolId: id,
+              componentId: `tool:${id}`,
+              sourceToolId: tool.id,
+              reason,
+            });
+          return false; // Its retained compiler runs before the caller is retried.
+        },
+      });
+    }
+    return input.deps.selectLiveComponentRecovery({
+      toolId: tool.id,
+      toolName: tool.candidate.toolName,
+      phase,
+      allowAuthentication: liveInvocation,
+      parameters,
+      owners,
+      failure: {
+        error: failed.result.error,
+        status: failed.result.status,
+        message: utf8Prefix(failed.result.message, 2_000),
+        missing: failed.result.missing,
+        requestStageFacts: failed.result.requestStageFacts,
+      },
+      previousRecoveries,
+      recordedAuthentication: {
+        credentialRequestSeqs: context.loginRequestSeqs,
+        authRequestSeqs: context.authRequestSeqs,
+        credentialNames: context.credentialNames,
+        notes: context.authNotes,
+      },
+      agent: { ...input.agent, signal: input.signal ?? input.agent.signal },
+    });
+  };
+
   const runStandaloneCase = async (
     tool: EditableTeachingTool,
     focused: CompiledFocusedTool,
@@ -4539,19 +4872,52 @@ async function compileAndCheckCurrentPlan(input: {
       .filter(({ check }) => check === 'live')
       .findIndex(({ id }) => id === verification.id);
     let observed: UnboundLiveCheckResult;
+    let lastReceipt: ReturnType<FreshTeachJournal['issueReceipt']> | undefined;
+    let completedComponentRecoveries = 0;
     const apiResearch = input.apiResearchByToolId?.get(tool.id);
+    const invocationParameters = structuredClone(
+      parameters ?? verificationParameters(verification),
+    );
     try {
-      observed = await runLiveCheck({
-        tool,
-        compiled: focused,
-        implementation,
-        deps: input.deps,
-        runDeadline: input.runDeadline,
+      observed = await runWithComponentRecovery({
+        queue: componentRecoveryQueue,
+        invoke: () =>
+          runLiveCheck({
+            tool,
+            compiled: focused,
+            implementation,
+            deps: input.deps,
+            runDeadline: input.runDeadline,
+            signal: input.signal,
+            maxDurationMs: input.maxDurationMs,
+            apiResearch,
+            verification,
+            parameters: structuredClone(invocationParameters),
+          }),
+        select: (failed, previousRecoveries) =>
+          selectRecovery(tool, invocationParameters, failed, previousRecoveries),
+        onAttempt: (attempt, previousRecoveries) => {
+          completedComponentRecoveries = previousRecoveries;
+          const directory = pathJoin(focused.toolDir, '.live-checks');
+          mkdirSync(directory, { recursive: true });
+          writeJsonAtomic(pathJoin(directory, `${verification.id}-${randomUUID()}.json`), {
+            ...attempt,
+            componentRecoveries: previousRecoveries,
+          });
+          lastReceipt = input.journal.issueReceipt({
+            toolId: tool.id,
+            check: 'live',
+            ...(primary ? {} : { verificationCaseId: verification.id }),
+            facts: invocationOutcomeCheck({
+              subject: 'live',
+              invocationIndex,
+              outcome: { kind: 'returned', result: attempt.result },
+              durationMs: attempt.durationMs,
+              executionMechanism: attempt.executionMechanism,
+            }).facts,
+          });
+        },
         signal: input.signal,
-        maxDurationMs: input.maxDurationMs,
-        apiResearch,
-        verification,
-        parameters,
       });
     } catch (error) {
       const check = invocationOutcomeCheck({
@@ -4577,10 +4943,6 @@ async function compileAndCheckCurrentPlan(input: {
       return undefined;
     }
 
-    const liveEvidenceDir = pathJoin(focused.toolDir, '.live-checks');
-    mkdirSync(liveEvidenceDir, { recursive: true });
-    writeJsonAtomic(pathJoin(liveEvidenceDir, `${verification.id}-${randomUUID()}.json`), observed);
-
     const check = invocationOutcomeCheck({
       subject: 'live',
       invocationIndex,
@@ -4588,12 +4950,8 @@ async function compileAndCheckCurrentPlan(input: {
       durationMs: observed.durationMs,
       executionMechanism: observed.executionMechanism,
     });
-    const receipt = input.journal.issueReceipt({
-      toolId: tool.id,
-      check: 'live',
-      ...(primary ? {} : { verificationCaseId: verification.id }),
-      facts: check.facts,
-    });
+    const receipt = lastReceipt;
+    if (!receipt) throw new Error('Live invocation completed without an attempt receipt');
     if (!receiptPassed(check.facts)) {
       failures.push(
         checkFailure(
@@ -4611,6 +4969,7 @@ async function compileAndCheckCurrentPlan(input: {
             receiptRef: receipt.ref,
             compilerSummary: focused.compilerSummary,
             liveResponseObservations: observed.responseObservations,
+            componentRecoveries: completedComponentRecoveries,
           },
         ),
       );
@@ -4732,6 +5091,8 @@ async function compileAndCheckCurrentPlan(input: {
     if (new Set(edges.map(({ consumerParameter }) => consumerParameter)).size !== edges.length)
       throw new Error(`chain check for "${tool.id}" repeated a consumer parameter`);
     input.report?.(`checking chain ${edges.map(({ id }) => id).join(', ')}`);
+    let returnedReceipts: Array<ReturnType<FreshTeachJournal['issueReceipt']>> | undefined;
+    let completedComponentRecoveries = 0;
     let outcome:
       | {
           kind: 'returned';
@@ -4877,38 +5238,80 @@ async function compileAndCheckCurrentPlan(input: {
       };
     } else {
       try {
-        const startedAt = Date.now();
+        let attemptStartedAt = Date.now();
+        let attemptDurationMs = 0;
         const apiResearch = input.apiResearchByToolId?.get(tool.id);
         let rawResponses: unknown[] | undefined;
-        const chained =
-          tool.strategy?.kind === 'playbook_fallback'
-            ? await runPlaybookToolCheck({
-                deps: input.deps,
-                playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
-                site: focused.workflow.site,
-                parameters,
-                runDeadline: input.runDeadline,
-                signal: input.signal,
-                maxDurationMs: input.maxDurationMs,
-                label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
-              })
-            : await runApiToolCheck({
-                deps: input.deps,
-                runDeadline: input.runDeadline,
-                label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
-                workflowPath: focused.workflowPath,
-                onRawResponses: (responses) => {
-                  rawResponses = responses;
-                },
-                parameters,
-                ...(apiResearch?.backend ? { backend: apiResearch.backend } : {}),
-                signal: input.signal,
-              });
+        const invocationParameters = structuredClone(parameters);
+        const chained = await runWithComponentRecovery({
+          queue: componentRecoveryQueue,
+          invoke: async () => {
+            attemptStartedAt = Date.now();
+            rawResponses = undefined;
+            return tool.strategy?.kind === 'playbook_fallback'
+              ? await runPlaybookToolCheck({
+                  deps: input.deps,
+                  playbookPath: pathJoin(focused.toolDir, 'playbook.yaml'),
+                  site: focused.workflow.site,
+                  parameters: structuredClone(invocationParameters),
+                  runDeadline: input.runDeadline,
+                  signal: input.signal,
+                  maxDurationMs: input.maxDurationMs,
+                  label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
+                })
+              : await runApiToolCheck({
+                  deps: input.deps,
+                  runDeadline: input.runDeadline,
+                  label: `chain check "${edges.map(({ id }) => id).join(', ')}"`,
+                  workflowPath: focused.workflowPath,
+                  onRawResponses: (responses) => {
+                    rawResponses = responses;
+                  },
+                  parameters: structuredClone(invocationParameters),
+                  ...(apiResearch?.backend ? { backend: apiResearch.backend } : {}),
+                  signal: input.signal,
+                });
+          },
+          select: (failed, previousRecoveries) =>
+            selectRecovery(tool, invocationParameters, failed, previousRecoveries),
+          onAttempt: (attempt, previousRecoveries) => {
+            completedComponentRecoveries = previousRecoveries;
+            attemptDurationMs = Date.now() - attemptStartedAt;
+            const directory = pathJoin(focused.toolDir, '.live-checks');
+            mkdirSync(directory, { recursive: true });
+            writeJsonAtomic(pathJoin(directory, `chain-${randomUUID()}.json`), {
+              kind: 'returned',
+              result: attempt.result,
+              mechanism: attempt.executionMechanism,
+              backendAttempts: attempt.backendAttempts,
+              rawResponses,
+              durationMs: attemptDurationMs,
+              componentRecoveries: previousRecoveries,
+              parameters: invocationParameters,
+            });
+            const check = invocationOutcomeCheck({
+              subject: 'chain',
+              invocationIndex: 0,
+              outcome: { kind: 'returned', result: attempt.result },
+              durationMs: attemptDurationMs,
+              executionMechanism: attempt.executionMechanism,
+            });
+            returnedReceipts = edges.map((edge) =>
+              input.journal.issueReceipt({
+                toolId: tool.id,
+                check: 'chain',
+                chainEdgeId: edge.id,
+                facts: check.facts,
+              }),
+            );
+          },
+          signal: input.signal,
+        });
         outcome = {
           kind: 'returned',
           rawResponses,
           result: chained.result,
-          durationMs: Date.now() - startedAt,
+          durationMs: attemptDurationMs,
           mechanism: chained.executionMechanism,
           backendAttempts: chained.backendAttempts,
           responseObservations:
@@ -4924,7 +5327,8 @@ async function compileAndCheckCurrentPlan(input: {
 
     const chainEvidenceDir = pathJoin(focused.toolDir, '.live-checks');
     mkdirSync(chainEvidenceDir, { recursive: true });
-    writeJsonAtomic(pathJoin(chainEvidenceDir, `chain-${randomUUID()}.json`), outcome);
+    if (outcome.kind !== 'returned')
+      writeJsonAtomic(pathJoin(chainEvidenceDir, `chain-${randomUUID()}.json`), outcome);
 
     const check = invocationOutcomeCheck({
       subject: 'chain',
@@ -4949,14 +5353,16 @@ async function compileAndCheckCurrentPlan(input: {
     // A binding failure proves only the exact edge that failed. Once every
     // binding succeeds, the consumer call factually exercises the whole group.
     const checkedEdges = bindingFailure ? [bindingFailure.edge] : edges;
-    const receipts = checkedEdges.map((edge) => ({
+    const receipts = checkedEdges.map((edge, index) => ({
       edge,
-      receipt: input.journal.issueReceipt({
-        toolId: tool.id,
-        check: 'chain',
-        chainEdgeId: edge.id,
-        facts: check.facts,
-      }),
+      receipt:
+        (outcome.kind === 'returned' && returnedReceipts?.[index]) ||
+        input.journal.issueReceipt({
+          toolId: tool.id,
+          check: 'chain',
+          chainEdgeId: edge.id,
+          facts: check.facts,
+        }),
     }));
     const primary = receipts[0];
     if (!primary) throw new Error(`chain check for "${tool.id}" issued no receipts`);
@@ -4978,6 +5384,7 @@ async function compileAndCheckCurrentPlan(input: {
           compilerSummary: focused.compilerSummary,
           liveResponseObservations:
             outcome.kind === 'returned' ? outcome.responseObservations : undefined,
+          componentRecoveries: completedComponentRecoveries,
           ...(bindingFailure
             ? { chainEdgeId: bindingFailure.edge.id }
             : { chainEdgeIds: edges.map(({ id }) => id) }),
@@ -5357,6 +5764,50 @@ async function compileAndCheckCurrentPlan(input: {
     }
   }
 
+  for (const failure of failures) {
+    if (
+      componentRepairs.some(({ sourceToolId }) => sourceToolId === failure.toolId) ||
+      ['live', 'chain'].includes(failure.stage) ||
+      ['cancelled', 'provider_unavailable'].includes(
+        terminalStatusForError(failure.error, input.signal),
+      )
+    )
+      continue;
+    const tool = plan.tools.find((tool) => tool.id === failure.toolId);
+    if (!tool) continue;
+    try {
+      const selection = await selectRecovery(
+        tool,
+        {},
+        {
+          result: {
+            ok: false,
+            error: 'UNKNOWN',
+            message: failure.error instanceof Error ? failure.error.message : String(failure.error),
+          },
+        },
+        0,
+        failure.stage,
+      );
+      if (selection)
+        await selection.owner.recover({
+          failure: { ok: false, error: 'UNKNOWN', message: String(failure.error) },
+          previousRecoveries: 0,
+          reason: selection.reason,
+        });
+    } catch (error) {
+      if (
+        ['cancelled', 'provider_unavailable'].includes(terminalStatusForError(error, input.signal))
+      )
+        throw error;
+      // Preserve the original construction failure for master review if the
+      // focused role cannot produce a usable owner decision.
+      input.report?.(
+        `component recovery could not resolve ${tool.candidate.toolName}; returning its failure to the master`,
+      );
+    }
+  }
+
   return {
     compiledByToolId,
     revisionSourceByToolId,
@@ -5366,6 +5817,7 @@ async function compileAndCheckCurrentPlan(input: {
     chainByEdgeId,
     verifiedToolIds,
     failures,
+    componentRepairs,
   };
 }
 
@@ -5697,6 +6149,7 @@ async function ensureCurrentImplementationPlans(
     const plannerFailures: FocusedPlannerFailure[] = [];
     const planners = await requestFocusedPlannerBundles({
       plan: current.plan,
+      report: context.report,
       onInvalidOutput: (failure) => plannerFailures.push(failure),
       discoveryRun: context.discoveryInput.run,
       recordingIndex: context.discoveryInput.recordingIndex,
@@ -5721,6 +6174,11 @@ async function ensureCurrentImplementationPlans(
       );
     }
     reviewedProposalStates.add(proposalStateSha256);
+    const researchAdvisories = plannerResearchAdvisoryProjection({
+      planners,
+      research: context.apiResearch,
+      seeds,
+    });
     persistSeeds(context.journal, seeds);
     for (const planner of planners) {
       context.focusedEvidence.set(planner.output.tool.id, planner.evidence);
@@ -5728,6 +6186,7 @@ async function ensureCurrentImplementationPlans(
     const evidenceRefs = uniqueRefs([
       ...revisionEvidenceRefs(context),
       ...allEvidenceRefs(context.discoveryEvidence, planners),
+      ...(researchAdvisories ? focusedEvidenceRefs(researchAdvisories) : []),
     ]);
     const decisionInput: MasterDecisionInput = {
       phase: 'revision',
@@ -5741,8 +6200,18 @@ async function ensureCurrentImplementationPlans(
       plannerProposals: planners.map(({ proposal }) => proposal),
       ...(plannerFailures.length ? { plannerFailures } : {}),
       apiResearch: [...context.apiResearch],
+      ...(researchAdvisories ? { verificationFindings: researchAdvisories } : {}),
     };
-    const decision = await context.deps.requestMasterDecision(decisionInput, context.agent);
+    const toolNames = missingToolIds.map(
+      (id) => current.plan.tools.find((tool) => tool.id === id)?.candidate.toolName ?? id,
+    );
+    const decision = await withTeachStageProgress(
+      {
+        label: `master: implementation plan review for ${toolNames.join(', ')}`,
+        report: context.report,
+      },
+      () => context.deps.requestMasterDecision(decisionInput, context.agent),
+    );
     const decisionRef = context.journal.storeJson(decision);
     context.journal.revisePlan(desiredPlanAfterResearchRequest(decision), {
       expectedRevision: current.plan.revision,
@@ -6406,6 +6875,11 @@ export async function runFreshMasterTeach(
   opts: FreshTeachOptions,
   overrides: Partial<FreshTeachControllerDependencies> = {},
 ): Promise<FreshTeachTerminalResult> {
+  if (!currentUserInteraction()) {
+    return await withUserInteraction(new UserInteraction(opts.onPrompt, opts.signal), () =>
+      runFreshMasterTeach(opts, overrides),
+    );
+  }
   const deps = { ...defaultDependencies, ...overrides };
   const site = assertSiteName(opts.site);
   const runId = deps.runId();
@@ -6416,6 +6890,7 @@ export async function runFreshMasterTeach(
   const deadline = opts.unbounded
     ? new RollingRunDeadline()
     : new RunDeadline(Date.now() + (opts.maxDurationMs ?? 12 * 60 * 60_000));
+  currentUserInteraction()?.setRunControl(deadline);
   const work = () =>
     runScheduledFreshTeach(opts, deps, { site, runId, runRoot, stagingRoot, deadline });
   if (providerForFreshTeach(opts) !== 'codex-cli') return await work();
@@ -6466,6 +6941,16 @@ async function runScheduledFreshTeach(
     reportProgress(opts, 'resolving the latest recording');
     const recording = await resolveRecordingForFreshRun(opts, site, deps);
     const redacted = redactRecording(recording, runRoot);
+    attachRecordedAuthentication({
+      session: redacted.session,
+      sessionPath: redacted.path,
+      root: pathJoin(runRoot, 'authentication'),
+      values: redacted.credentialValues,
+      llmConfig: llmOptions(opts),
+      runDeadline: deadline,
+      compile: deps.compileAuthTool,
+      report: (message) => reportProgress(opts, message),
+    });
     const runApiResearchTool = deps.runApiResearchTool;
     deps.runApiResearchTool = async (input) => ({
       ...(await runApiResearchTool(input)),
@@ -6661,6 +7146,7 @@ async function runScheduledFreshTeach(
       >
     >();
     const attemptedRepairStates = new Set<string>();
+    const attemptedComponentRepairStates = new Set<string>();
     const semanticReviewHistory: NonNullable<CompletionReviewInput['semanticReviewHistory']> = [];
     const revisionContext = (): MasterRevisionContext => ({
       journal: activeJournal,
@@ -6709,6 +7195,7 @@ async function runScheduledFreshTeach(
       plannedTools = activeJournal.currentPlan().tools.length;
     };
 
+    let pendingPlanningResearch = planned.researchFollowUps;
     while (true) {
       const currentPlan = activeJournal.currentPlan();
       plannedTools = currentPlan.tools.length;
@@ -6738,10 +7225,12 @@ async function runScheduledFreshTeach(
         continue;
       }
 
-      await ensureCurrentImplementationPlans(revisionContext());
+      await ensureCurrentImplementationPlans(revisionContext(), pendingPlanningResearch);
+      pendingPlanningResearch = [];
       let checked: CheckedBuilds;
       try {
         checked = await compileAndCheckCurrentPlan({
+          componentRecoveryOwners: opts.componentRecoveryOwners,
           journal: activeJournal,
           triage: fullScope,
           sessionPath: redacted.path,
@@ -7004,6 +7493,60 @@ async function runScheduledFreshTeach(
             currentFailures,
             latestFailureEvidenceByToolName,
           );
+          const componentRepairs = checked.componentRepairs;
+          const componentState = `${repairStateSha256(activeJournal, currentFailures)}:${componentRepairs
+            .map(({ componentId }) => componentId)
+            .sort()
+            .join(',')}`;
+          if (componentRepairs.length > 0 && !attemptedComponentRepairStates.has(componentState)) {
+            attemptedComponentRepairStates.add(componentState);
+            const plan = activeJournal.currentPlan();
+            const { version: _version, revision, decision: _decision, ...desired } = plan;
+            const targetIds = [...new Set(componentRepairs.map(({ toolId }) => toolId))];
+            const repairRef = activeJournal.storeJson({
+              type: 'component_repair',
+              requests: componentRepairs,
+              failureEvidenceRef: currentFailures.ref,
+            });
+            const focusedFailuresByToolId = new Map(
+              targetIds.map((toolId) => {
+                const requests = componentRepairs.filter((repair) => repair.toolId === toolId);
+                const relevantToolIds = new Set([
+                  toolId,
+                  ...requests.map(({ sourceToolId }) => sourceToolId),
+                ]);
+                return [
+                  toolId,
+                  verificationFailureProjection(
+                    activeJournal,
+                    checked.failures.filter(({ toolId }) => relevantToolIds.has(toolId)),
+                  ),
+                ] as const;
+              }),
+            );
+            activeJournal.revisePlan(desired, {
+              expectedRevision: revision,
+              forceRecompileToolIds: targetIds,
+              decision: planDecision(
+                deps.now(),
+                'revised',
+                'Repair the selected components while retaining the accepted tool contracts and dependencies.',
+                [repairRef],
+                [currentFailures.ref],
+              ),
+            });
+            for (const toolId of targetIds) {
+              const previous = compiledByToolId.get(toolId);
+              if (previous) revisionSourceByToolId.set(toolId, previous);
+              const requests = componentRepairs.filter((repair) => repair.toolId === toolId);
+              revisionGuidanceByToolId.set(
+                toolId,
+                `Repair this component under its existing accepted implementation plan; preserve its public contract. Consumer failures: ${JSON.stringify(requests)}. Failure evidence: ${JSON.stringify(focusedFailuresByToolId.get(toolId))}.`,
+              );
+            }
+            reportProgress(opts, `repairing selected components: ${targetIds.join(', ')}`);
+            continue;
+          }
           await repair(currentFailures);
         }
         continue;

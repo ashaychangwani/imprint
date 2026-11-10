@@ -13,17 +13,21 @@
  *   - anthropic-api (or any ToolUseProvider): drive in-process via runAgentLoop.
  */
 
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import {
   type AgentProgress,
   type AgentResult,
   type AgentTool,
+  type ConversationLogEntry,
   doneTool,
   giveUpTool,
   runAgentLoop,
 } from './agent.ts';
+import { AuthBrowserActionSchema } from './auth-browser-discovery.ts';
 import {
+  AUTH_CHECKPOINT_TOOLS,
   AUTH_COMPILE_TOOL_NAMES,
   AUTH_VERIFICATION_ATTEMPT_SENTINEL,
   authExternalVerification,
@@ -31,18 +35,22 @@ import {
   authWorkflowHash,
   authWorkflowPreflightFailures,
   buildAuthCompileTools,
+  parseAuthCheckpoint,
 } from './auth-compile-tools.ts';
+import { AuthDiscoveryEvidence } from './auth-discovery-evidence.ts';
 import { type AuthActionResult, AuthVerifier } from './auth-verifier.ts';
 import type { AuthToolPlan } from './build-plan.ts';
 import { compileAuthViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
 import type {
   AuthCheckpoint,
+  AuthCheckpointResult,
   CompileAgentProgress,
   CompileAgentResult,
 } from './compile-agent-types.ts';
 import { runCompileWithProviderRecovery } from './compile-provider-recovery.ts';
 import { abortSignalError, abortableDelay, withAbortSignal } from './concurrency.ts';
+import { isCredentialReference } from './credential-extract.ts';
 import {
   type LLMOptions,
   type ToolUseProvider,
@@ -58,15 +66,278 @@ import {
   providerControlError,
   resolvedRunDeadline,
 } from './provider-retry.ts';
-import { loadCredentialStore } from './runtime.ts';
+import { type CredentialStore, loadCredentialStore } from './runtime.ts';
 import { type Session, WorkflowSchema } from './types.ts';
+import { requestAgentInteraction, resolveUserInput } from './user-interaction.ts';
 
 const log = createLog('auth-compile-agent');
 
 const REPO_ROOT = pathJoin(import.meta.dir, '..', '..');
 const PROMPTS_DIR = pathJoin(REPO_ROOT, 'prompts');
 
+async function loadAuthCredentials(
+  site: string,
+  recordedValues: Record<string, string>,
+): Promise<CredentialStore> {
+  const stored = await loadCredentialStore(site);
+  // Already-redacted recordings can reach the compiler through other callers.
+  // Never let their references shadow real values from the credential backend.
+  const literalValues = Object.fromEntries(
+    Object.entries(recordedValues).filter(([, value]) => !isCredentialReference(value)),
+  );
+  return {
+    site,
+    cookies: stored?.cookies ?? [],
+    storage: stored?.storage ?? [],
+    values: { ...stored?.values, ...literalValues },
+  };
+}
+
+async function promptAuthUser(
+  message: string,
+  options?: string[],
+  signal?: AbortSignal,
+): Promise<string> {
+  const result = await requestAgentInteraction(
+    {
+      action: 'prompt_user',
+      prompt: { message, options, sensitive: options === undefined },
+    },
+    signal,
+  );
+  if (result.status !== 'answered' || !('value' in result)) {
+    throw new Error('reason' in result ? result.reason : 'User input is unavailable');
+  }
+  return await resolveUserInput(result.value);
+}
+
+interface AuthCheckpointExecutorOptions {
+  context: AuthCompileContext;
+  session: Session;
+  sessionPath: string;
+  toolDir: string;
+  authToolPlan: NonNullable<AuthToolPlan>;
+  verifier: AuthVerifier;
+  signal?: AbortSignal;
+  deadline?: () => number | undefined;
+  onPrompt?: CompileAuthAgentOptions['onPrompt'];
+  onCooldown?: CompileAuthAgentOptions['onCooldown'];
+  onVerification?: (action: string, result: AuthActionResult) => void;
+}
+
+/** One operation owns its current human references. All provider adapters execute
+ * the same host actions; native/API calls await them without ending an assignment. */
+function createAuthCheckpointExecutor(options: AuthCheckpointExecutorOptions) {
+  const promptSecrets = new Map<string, string>();
+  const lifetime = new AbortController();
+  return {
+    dispose: () => {
+      promptSecrets.clear();
+      lifetime.abort(new Error('Authentication checkpoint operation ended'));
+    },
+    async execute(cp: AuthCheckpoint, requestSignal?: AbortSignal): Promise<AuthCheckpointResult> {
+      const signal = AbortSignal.any(
+        [lifetime.signal, options.signal, requestSignal].filter(
+          (value): value is AbortSignal => value !== undefined,
+        ),
+      );
+      try {
+        if (signal?.aborted) throw abortSignalError(signal);
+        if (cp.kind === 'prompt_user') {
+          const answer = await withAbortSignal(
+            () =>
+              options.onPrompt
+                ? options.onPrompt(cp.message, cp.options)
+                : promptAuthUser(cp.message, cp.options, signal),
+            signal,
+          );
+          if (cp.options?.includes(answer))
+            return {
+              result: JSON.stringify({ status: 'answered', kind: 'choice', value: answer }),
+            };
+          const reference = `\${prompt.${randomUUID()}}`;
+          promptSecrets.set(reference, answer);
+          return {
+            result: answer
+              ? `The user response is stored locally as ${reference}. Pass that exact reference as the appropriate run_verification parameter value; the host resolves it without exposing the answer to the model.`
+              : 'The user provided no input.',
+          };
+        }
+        if (cp.kind === 'inspect_verification_page') {
+          const inspected = await options.verifier.inspectPage({
+            maxChars: cp.maxChars,
+            includeCookies: cp.includeCookies,
+            signal,
+          });
+          return {
+            result: inspected.ok
+              ? `Current verification page snapshot:\n${JSON.stringify(inspected, null, 2)}`
+              : `Verification page inspection was unavailable: ${inspected.message ?? 'unknown reason'}`,
+          };
+        }
+        if (cp.kind === 'interact_verification_browser') {
+          const action = AuthBrowserActionSchema.parse(cp);
+          if ('value' in action)
+            action.value = await resolveUserInput(
+              promptSecrets.get(action.value) ?? action.value,
+              signal,
+            );
+          return {
+            result: options.context
+              .discoveryEvidence(options.session, options.toolDir)
+              .append(await options.verifier.interactBrowser(action, signal)),
+          };
+        }
+        if (cp.kind === 'wait_for_cooldown') {
+          await withAbortSignal(
+            () =>
+              options.onCooldown
+                ? options.onCooldown(cp.minutes, cp.reason, signal)
+                : abortableDelay(cp.minutes * 60_000, signal),
+            signal,
+          );
+          return {
+            result: `Requested delay of ~${cp.minutes} min completed; no live action ran during the wait.`,
+          };
+        }
+        const failures = await authLivePreflightFailures(
+          options.toolDir,
+          options.session,
+          options.authToolPlan.credentialNames,
+          [...options.authToolPlan.credentialRequestSeqs, ...options.authToolPlan.authRequestSeqs],
+          options.sessionPath,
+        );
+        if (signal?.aborted) throw abortSignalError(signal);
+        const deadline = options.deadline?.();
+        if (deadline !== undefined && Date.now() >= deadline)
+          throw new ProviderDeadlineError(deadline);
+        if (failures.length)
+          return {
+            result: `run_verification was blocked before any live login was fired because workflow.json failed auth preflight:\n${failures.map((failure) => `- ${failure}`).join('\n')}`,
+            isError: true,
+          };
+        const workflowHash = authWorkflowHash(
+          WorkflowSchema.parse(
+            JSON.parse(readFileSync(pathJoin(options.toolDir, 'workflow.json'), 'utf8')),
+          ),
+        );
+        if (cp.freshSession || cp.cleanSession) promptSecrets.clear();
+        const parameters = await resolveUserInput(
+          Object.fromEntries(
+            Object.entries(cp.parameters ?? {}).map(([name, value]) => [
+              name,
+              typeof value === 'string' && promptSecrets.has(value)
+                ? (promptSecrets.get(value) ?? value)
+                : value,
+            ]),
+          ),
+          signal,
+        );
+        const result = await options.verifier.runAction(cp.action, parameters, {
+          freshSession: cp.freshSession,
+          cleanSession: cp.cleanSession,
+          signal,
+        });
+        writeFileSync(
+          pathJoin(options.toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL),
+          JSON.stringify({
+            action: cp.action,
+            ok: result.ok,
+            status: result.status,
+            error: result.error,
+            backend: result.usedBackend,
+            workflowHash,
+            timestamp: Date.now(),
+          }),
+          { mode: 0o600 },
+        );
+        options.onVerification?.(cp.action, result);
+        return { result: formatVerifyResult(cp.action, result) };
+      } catch (error) {
+        if (signal?.aborted) throw abortSignalError(signal, 'Auth checkpoint cancelled');
+        const control = providerControlError(error);
+        if (control) throw control;
+        return {
+          result: `The host could not perform ${cp.kind}: ${error instanceof Error ? error.message : String(error)}`,
+          isError: true,
+        };
+      }
+    },
+  };
+}
+
+function liveAuthTools(executor: ReturnType<typeof createAuthCheckpointExecutor>): AgentTool[] {
+  return AUTH_CHECKPOINT_TOOLS.map((definition) => ({
+    ...definition,
+    description: `${definition.description} Await the host result and continue in this assignment.`,
+    handler: async (input, request) =>
+      executor.execute(parseAuthCheckpoint(definition.name, input), request?.signal),
+  }));
+}
+
+/** Run-local ownership, never persisted or shared across teach runs. */
+export class AuthCompileContext {
+  readonly #abort = new AbortController();
+  #verifier?: AuthVerifier;
+  #workflowPath?: string;
+  #evidence?: AuthDiscoveryEvidence;
+  #dispose?: Promise<void>;
+  cliSession?: { driver: 'claude-cli' | 'codex-cli'; sessionId: string };
+  history: ConversationLogEntry[] = [];
+  previousResult?: Pick<CompileAgentResult, 'outcome' | 'message'>;
+
+  get signal(): AbortSignal {
+    return this.#abort.signal;
+  }
+
+  async verifier(
+    workflowPath: string,
+    credentials: () => Promise<CredentialStore>,
+    discoveryUrl?: string,
+  ): Promise<AuthVerifier> {
+    if (this.signal.aborted) throw abortSignalError(this.signal);
+    if (this.#workflowPath && this.#workflowPath !== workflowPath)
+      throw new Error('An authentication context belongs to one workflow workspace');
+    this.#workflowPath = workflowPath;
+    const values = await credentials();
+    if (this.signal.aborted) throw abortSignalError(this.signal);
+    if (this.#verifier) this.#verifier.updateCredentials(values);
+    else this.#verifier = new AuthVerifier(workflowPath, values, discoveryUrl);
+    return this.#verifier;
+  }
+
+  discoveryEvidence(session: Session, toolDir: string): AuthDiscoveryEvidence {
+    this.#evidence ??= new AuthDiscoveryEvidence(session, toolDir);
+    return this.#evidence;
+  }
+
+  recoveryMessage(plan: NonNullable<AuthToolPlan>): string {
+    return `Continue the existing authentication task in this same workspace and browser.
+Existing artifacts and earlier observations remain available; do not repeat the initial recording read by default.
+Current request: ${JSON.stringify(plan)}
+Previous compiler outcome: ${this.previousResult?.outcome ?? 'interrupted'}
+Previous report: ${this.previousResult?.message ?? '(no terminal report)'}
+Current verification metadata: ${JSON.stringify(this.#verifier?.state ?? {})}
+Earlier human-response references have expired. Ask for fresh input when an action requires it.
+First run a proven noninteractive session check or context-restoration action in the retained browser. If it passes, return the result so the caller can retry its own protected operation. Before starting another login or delivering a factor, inspect current evidence that the existing access is unusable and the new login/challenge is required. Revise the procedure with response-based branches when needed. A prior auth success does not prove the caller's data operation works.`;
+  }
+
+  dispose(): Promise<void> {
+    if (this.#dispose) return this.#dispose;
+    this.#abort.abort(new DOMException('Authentication context closed', 'AbortError'));
+    this.cliSession = undefined;
+    this.history = [];
+    this.previousResult = undefined;
+    this.#dispose = this.#verifier?.drain() ?? Promise.resolve();
+    return this.#dispose;
+  }
+}
+
 interface CompileAuthAgentOptions {
+  /** Keep a teach's internal authentication build in its run staging directory. */
+  outDir?: string;
+  /** Keep browser and provider conversation for later recovery in this teach. */
+  context?: AuthCompileContext;
   site: string;
   session: Session;
   sessionPath: string;
@@ -131,11 +402,38 @@ MANDATORY FIRST ACTION: call read_session_summary now. Do not write prose, do no
 }
 
 export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<CompileAgentResult> {
+  const context = opts.context ?? new AuthCompileContext();
+  try {
+    const result = await compileAuthWithContext({
+      ...opts,
+      context,
+      signal: opts.signal ? AbortSignal.any([opts.signal, context.signal]) : context.signal,
+    });
+    context.previousResult = { outcome: result.outcome, message: result.message };
+    return result;
+  } catch (error) {
+    context.previousResult = {
+      outcome: 'error',
+      message:
+        'The previous authentication request was interrupted; its retained state is available for inspection.',
+    };
+    throw error;
+  } finally {
+    if (!opts.context) await context.dispose();
+  }
+}
+
+async function compileAuthWithContext(
+  input: CompileAuthAgentOptions & { context: AuthCompileContext },
+): Promise<CompileAgentResult> {
   const startTime = Date.now();
-  const { site, session, authToolPlan } = opts;
+  const { site, authToolPlan } = input;
   const toolName = authToolPlan.toolName;
-  const toolDir = localToolDir(site, toolName);
+  const toolDir = input.outDir ?? localToolDir(site, toolName);
   mkdirSync(toolDir, { recursive: true });
+  const evidence = input.context.discoveryEvidence(input.session, toolDir);
+  const opts = { ...input, session: evidence.session, sessionPath: evidence.sessionPath };
+  const session = evidence.session;
 
   const systemPromptPath = pathJoin(PROMPTS_DIR, 'auth-compile-agent.md');
   if (!existsSync(systemPromptPath)) {
@@ -146,7 +444,10 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     opts.runDeadline,
     opts.deadlineMs ?? Date.now() + (opts.maxDurationMs ?? 10 * 60 * 1000),
   );
-  const initialUserMessage = buildAuthInitialMessage({ site, toolName, toolDir, authToolPlan });
+  const recovering = opts.context.cliSession !== undefined || opts.context.history.length > 0;
+  const initialUserMessage = recovering
+    ? opts.context.recoveryMessage(authToolPlan)
+    : buildAuthInitialMessage({ site, toolName, toolDir, authToolPlan });
 
   // Provider dispatch mirrors compile-agent.ts. CLI providers don't implement
   // messageWithTools — shell out with the auth toolset as a stdio MCP server.
@@ -158,6 +459,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     if (resolved.name === 'claude-cli') {
       return await runAuthSegmentLoop({
         driver: 'claude-cli',
+        context: opts.context,
         site,
         session,
         sessionPath: opts.sessionPath,
@@ -180,6 +482,7 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
     if (resolved.name === 'codex-cli') {
       return await runAuthSegmentLoop({
         driver: 'codex-cli',
+        context: opts.context,
         site,
         session,
         sessionPath: opts.sessionPath,
@@ -211,108 +514,147 @@ export async function compileAuthAgent(opts: CompileAuthAgentOptions): Promise<C
   }
 
   // ─── In-process runAgentLoop path (anthropic-api / injected provider) ───────
-  const systemPrompt = `${readFileSync(systemPromptPath, 'utf8')}\n\nToday's date is ${new Date().toISOString().slice(0, 10)}.`;
-  const tools: AgentTool[] = [
-    ...buildAuthCompileTools(session, toolDir, opts.sessionPath, opts.teachCredentials),
-    doneTool(),
-    giveUpTool(),
-  ];
+  const active = combinedDeadlineSignal(
+    runDeadline,
+    undefined,
+    opts.signal,
+    Date.now,
+    undefined,
+    opts.onDeadlineReached,
+  );
+  const attemptPath = pathJoin(toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
+  if (existsSync(attemptPath)) unlinkSync(attemptPath);
+  const verifier = await opts.context.verifier(
+    pathJoin(toolDir, 'workflow.json'),
+    () => loadAuthCredentials(site, opts.teachCredentials.values),
+    session.url,
+  );
+  const checkpointExecutor = createAuthCheckpointExecutor({
+    ...opts,
+    toolDir,
+    verifier,
+    signal: active.signal,
+    deadline: () => runDeadline?.deadlineMs,
+  });
+  try {
+    const systemPrompt = `${readFileSync(systemPromptPath, 'utf8')}\n\nToday's date is ${new Date().toISOString().slice(0, 10)}.`;
+    const tools: AgentTool[] = [
+      ...buildAuthCompileTools(session, toolDir, opts.sessionPath, opts.teachCredentials),
+      ...liveAuthTools(checkpointExecutor),
+      doneTool(),
+      giveUpTool(),
+    ];
 
-  const conversationLogPath = pathJoin(toolDir, '.compile-log.json');
+    const conversationLogPath = pathJoin(toolDir, '.compile-log.json');
 
-  let totalTurns = 0;
-  let totalInputTokens = 0;
-  let totalOutputTokens = 0;
-  let outcome: AgentResult['outcome'] = 'error';
-  let message = '';
-  let conversationLog: AgentResult['conversationLog'] = [];
+    let totalTurns = 0;
+    let totalInputTokens = 0;
+    let totalOutputTokens = 0;
+    let outcome: AgentResult['outcome'] = 'error';
+    let message = '';
+    let conversationLog: AgentResult['conversationLog'] = [...opts.context.history];
 
-  let verificationCycle = 0;
-  let currentInitialMessage = initialUserMessage;
+    let verificationCycle = 0;
+    let currentInitialMessage = initialUserMessage;
 
-  while (true) {
-    verificationCycle++;
+    while (true) {
+      verificationCycle++;
+      conversationLog = completeAuthHistory(conversationLog);
 
-    const userOnProgress = opts.onProgress;
-    const wrappedOnProgress = userOnProgress
-      ? (p: AgentProgress) =>
-          userOnProgress({
-            ...p,
-            verificationCycle,
-          })
-      : undefined;
+      const userOnProgress = opts.onProgress;
+      const wrappedOnProgress = userOnProgress
+        ? (p: AgentProgress) =>
+            userOnProgress({
+              ...p,
+              verificationCycle,
+            })
+        : undefined;
 
-    const result = await runAgentLoop({
-      systemPrompt,
-      initialUserMessage: currentInitialMessage,
-      tools,
-      deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
-      runDeadline,
-      softTurnCap: 30,
-      llm: provider,
-      onProgress: wrappedOnProgress,
-      onConversationUpdate: (currentCycleLog) => {
-        const fullLog = [...conversationLog, ...currentCycleLog];
-        writeFileSync(conversationLogPath, JSON.stringify(fullLog, null, 2), 'utf8');
-      },
-      onDeadlineReached: opts.onDeadlineReached,
-      signal: opts.signal,
-    });
+      const result = await runAgentLoop({
+        systemPrompt,
+        initialUserMessage: currentInitialMessage,
+        tools,
+        deadlineMs: runDeadline?.deadlineMs ?? Date.now(),
+        runDeadline,
+        softTurnCap: 30,
+        llm: {
+          ...provider,
+          messageWithTools: (input) =>
+            provider.messageWithTools({
+              ...input,
+              messages: [...authHistoryMessages(conversationLog), ...input.messages],
+            }),
+        },
+        onProgress: wrappedOnProgress,
+        onConversationUpdate: (currentCycleLog) => {
+          const fullLog = [...conversationLog, ...currentCycleLog];
+          opts.context.history = fullLog;
+          writeFileSync(conversationLogPath, JSON.stringify(fullLog, null, 2), 'utf8');
+        },
+        onDeadlineReached: opts.onDeadlineReached,
+        signal: active.signal,
+      });
 
-    totalTurns += result.turns;
-    totalInputTokens += result.inputTokens;
-    totalOutputTokens += result.outputTokens;
-    conversationLog = [...conversationLog, ...result.conversationLog];
+      totalTurns += result.turns;
+      totalInputTokens += result.inputTokens;
+      totalOutputTokens += result.outputTokens;
+      conversationLog = [...conversationLog, ...result.conversationLog];
+      opts.context.history = conversationLog;
 
-    outcome = result.outcome;
+      outcome = result.outcome;
 
-    if (result.outcome !== 'done') {
-      message = buildMessageFromOutcome(result);
-      break;
-    }
+      if (result.outcome !== 'done') {
+        message = buildMessageFromOutcome(result);
+        break;
+      }
 
-    const failures = authExternalVerification(
-      toolDir,
-      (authToolPlan.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
-      {
-        requireLiveAttempt: true,
-        requiredCredentialNames: authToolPlan.credentialNames,
-      },
-    );
+      const failures = authExternalVerification(
+        toolDir,
+        (authToolPlan.captures ?? []).map((c) => ({ name: c.name, usedAs: c.usedAs })),
+        {
+          requireLiveAttempt: true,
+          requiredCredentialNames: authToolPlan.credentialNames,
+        },
+      );
 
-    if (failures.length === 0) {
-      message = result.doneSummary ?? 'Auth tool compiled';
-      break;
-    }
+      if (failures.length === 0) {
+        message = result.doneSummary ?? 'Auth tool compiled';
+        break;
+      }
 
-    log(`auth verification failed (cycle ${verificationCycle}), resuming agent loop...`);
-    currentInitialMessage = `You called done but verification failed:
+      log(`auth verification failed (cycle ${verificationCycle}), resuming agent loop...`);
+      currentInitialMessage = `You called done but verification failed:
 
 ${failures.map((f) => `- ${f}`).join('\n')}
 
 Fix the issues in workflow.json, re-test with run_verification, and call done again.`;
+    }
+
+    writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
+
+    const workflowPath = pathJoin(toolDir, 'workflow.json');
+
+    return {
+      success: outcome === 'done',
+      outcome,
+      workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
+      message,
+      conversationLogPath,
+      turns: totalTurns,
+      durationMs: Date.now() - startTime,
+      inputTokens: totalInputTokens,
+      outputTokens: totalOutputTokens,
+      cacheReadInputTokens: 0,
+      cacheCreationInputTokens: 0,
+    };
+  } finally {
+    checkpointExecutor.dispose();
+    active.dispose();
   }
-
-  writeFileSync(conversationLogPath, JSON.stringify(conversationLog, null, 2), 'utf8');
-
-  const workflowPath = pathJoin(toolDir, 'workflow.json');
-
-  return {
-    success: outcome === 'done',
-    outcome,
-    workflowPath: existsSync(workflowPath) ? workflowPath : undefined,
-    message,
-    conversationLogPath,
-    turns: totalTurns,
-    durationMs: Date.now() - startTime,
-    inputTokens: totalInputTokens,
-    outputTokens: totalOutputTokens,
-    cacheReadInputTokens: 0,
-    cacheCreationInputTokens: 0,
-  };
 }
 
 interface AuthSegmentLoopOptions {
+  context: AuthCompileContext;
   driver: 'claude-cli' | 'codex-cli';
   site: string;
   session: Session;
@@ -341,6 +683,10 @@ function verifyFacts(r: AuthActionResult): string {
   if (typeof r.status === 'number') parts.push(`httpStatus=${r.status}`);
   if (r.error) parts.push(`error=${r.error}`);
   let s = `[${parts.join(' | ')}]`;
+  if (r.requestStageFacts) s += `\nRequest stages: ${JSON.stringify(r.requestStageFacts)}`;
+  if (r.authExecution) s += `\nAction execution: ${JSON.stringify(r.authExecution)}`;
+  if (r.responseObservations)
+    s += `\nResponse observations: ${JSON.stringify(r.responseObservations)}`;
   if (r.responseBodyPreview) s += `\nResponse body (truncated): ${r.responseBodyPreview}`;
   return s;
 }
@@ -367,7 +713,7 @@ function formatVerifyResult(action: string, r: AuthActionResult): string {
  * page inspection on the persistent AuthVerifier session, prompt_user via the
  * TUI bridge, or a cool-off wait — then feeds the result into the next segment.
  * The ONE stateful thing (the live browser) lives in the AuthVerifier and is
- * drained at the end. CLI conversation state is carried by provider-native resume
+ * retained until its owning context closes. CLI conversation state uses provider-native resume
  * (`claude --resume`, `codex exec resume`), not retained here.
  */
 async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<CompileAgentResult> {
@@ -383,28 +729,15 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
   const workflowPath = pathJoin(opts.toolDir, 'workflow.json');
   const verificationAttemptPath = pathJoin(opts.toolDir, AUTH_VERIFICATION_ATTEMPT_SENTINEL);
   if (existsSync(verificationAttemptPath)) unlinkSync(verificationAttemptPath);
-  const storedCredentials = await loadCredentialStore(opts.site);
-  const credsForRun = {
-    site: opts.site,
-    cookies: storedCredentials?.cookies ?? [],
-    values: { ...(storedCredentials?.values ?? {}), ...opts.teachCredentials.values },
-    storage: storedCredentials?.storage ?? [],
-  };
-  const verifier = new AuthVerifier(workflowPath, credsForRun);
-  const authMode = {
-    site: opts.site,
-    authPlanJson: JSON.stringify(opts.authToolPlan),
-    allowedTools: AUTH_COMPILE_TOOL_NAMES,
-    initialPrompt: opts.initialPrompt,
-  };
-
-  const onPrompt = opts.onPrompt ?? (async () => '');
-  const onCooldown =
-    opts.onCooldown ??
-    (async (minutes: number, _reason?: string, signal?: AbortSignal) =>
-      abortableDelay(minutes * 60_000, signal));
-
-  let resume: { sessionId: string; message: string } | undefined;
+  const verifier = await opts.context.verifier(
+    workflowPath,
+    () => loadAuthCredentials(opts.site, opts.teachCredentials.values),
+    opts.session.url,
+  );
+  let resume: { sessionId: string; message: string } | undefined =
+    opts.context.cliSession?.driver === opts.driver
+      ? { sessionId: opts.context.cliSession.sessionId, message: opts.initialPrompt }
+      : undefined;
   let last: CompileAgentResult | undefined;
   let totalTurns = 0;
   let totalInputTokens = 0;
@@ -415,8 +748,42 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
   // line so a failure (e.g. a 403) is visible the instant it happens.
   let lastVerification: CompileAgentProgress['lastVerification'];
   let segment = 0;
-  const promptSecrets = new Map<string, string>();
-  let promptSecretSequence = 0;
+  const checkpointExecutor = createAuthCheckpointExecutor({
+    ...opts,
+    verifier,
+    signal: active.signal,
+    deadline: () => runDeadline?.deadlineMs ?? opts.deadlineMs,
+    onVerification: (action, result) => {
+      lastVerification = {
+        action,
+        ok: result.ok,
+        status: result.status,
+        error: result.error,
+        backend: result.usedBackend,
+        durationMs: result.durationMs,
+        checkpoint: 'run_verification',
+      };
+      opts.onProgress?.({
+        turn: totalTurns,
+        phase: 'tool',
+        elapsedMs: Date.now() - opts.startTime,
+        budgetMs: Math.max(0, (runDeadline?.deadlineMs ?? opts.deadlineMs) - Date.now()),
+        inputTokens: totalInputTokens,
+        outputTokens: totalOutputTokens,
+        verificationCycle: 1,
+        segment,
+        lastVerification,
+      });
+    },
+  });
+  const authMode = {
+    site: opts.site,
+    contextRef: opts.authToolPlan.contextRef,
+    authPlanJson: JSON.stringify(opts.authToolPlan),
+    allowedTools: AUTH_COMPILE_TOOL_NAMES,
+    initialPrompt: opts.initialPrompt,
+    executeCheckpoint: checkpointExecutor.execute,
+  };
 
   try {
     while (true) {
@@ -467,6 +834,8 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
             : compileViaCodexCli(common);
         },
       });
+      if (result.sessionId)
+        opts.context.cliSession = { driver: opts.driver, sessionId: result.sessionId };
       last = result;
       totalTurns += result.turns;
       totalInputTokens += result.inputTokens;
@@ -507,116 +876,8 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
         break;
       }
 
-      const cp: AuthCheckpoint = result.checkpoint;
-      let resultMsg: string;
-      try {
-        if (cp.kind === 'run_verification') {
-          const preflightFailures = await authLivePreflightFailures(
-            opts.toolDir,
-            opts.session,
-            opts.authToolPlan.credentialNames,
-            [...opts.authToolPlan.credentialRequestSeqs, ...opts.authToolPlan.authRequestSeqs],
-            opts.sessionPath,
-          );
-          if (Date.now() >= (runDeadline?.deadlineMs ?? opts.deadlineMs)) {
-            throw new ProviderDeadlineError(runDeadline?.deadlineMs ?? opts.deadlineMs);
-          }
-          if (preflightFailures.length > 0) {
-            resultMsg = `run_verification was blocked before any live login was fired because workflow.json failed auth preflight:\n${preflightFailures
-              .map((failure) => `- ${failure}`)
-              .join('\n')}`;
-          } else {
-            const verifiedWorkflowHash = authWorkflowHash(
-              WorkflowSchema.parse(
-                JSON.parse(readFileSync(pathJoin(opts.toolDir, 'workflow.json'), 'utf8')),
-              ),
-            );
-            const resolvedParameters = Object.fromEntries(
-              Object.entries(cp.parameters ?? {}).map(([name, value]) => [
-                name,
-                typeof value === 'string' && promptSecrets.has(value)
-                  ? (promptSecrets.get(value) ?? '')
-                  : value,
-              ]),
-            );
-            const r = await verifier.runAction(cp.action, resolvedParameters, {
-              freshSession: cp.freshSession,
-              cleanSession: cp.cleanSession,
-              signal: active.signal,
-            });
-            writeFileSync(
-              verificationAttemptPath,
-              JSON.stringify(
-                {
-                  action: cp.action,
-                  ok: r.ok,
-                  status: r.status,
-                  error: r.error,
-                  backend: r.usedBackend,
-                  workflowHash: verifiedWorkflowHash,
-                  timestamp: Date.now(),
-                },
-                null,
-                2,
-              ),
-              'utf8',
-            );
-            // Record + immediately surface the result so the spinner reflects a
-            // failure the moment it happens — not only on the next agent turn.
-            lastVerification = {
-              action: cp.action,
-              ok: r.ok,
-              status: r.status,
-              error: r.error,
-              backend: r.usedBackend,
-              durationMs: r.durationMs,
-              checkpoint: 'run_verification',
-            };
-            opts.onProgress?.({
-              turn: totalTurns,
-              phase: 'tool',
-              elapsedMs: Date.now() - opts.startTime,
-              budgetMs: Math.max(0, (runDeadline?.deadlineMs ?? opts.deadlineMs) - Date.now()),
-              inputTokens: totalInputTokens,
-              outputTokens: totalOutputTokens,
-              verificationCycle: 1,
-              segment,
-              lastVerification,
-            });
-            resultMsg = formatVerifyResult(cp.action, r);
-          }
-        } else if (cp.kind === 'inspect_verification_page') {
-          const inspected = await verifier.inspectPage({
-            maxChars: cp.maxChars,
-            includeCookies: cp.includeCookies,
-            signal: active.signal,
-          });
-          resultMsg = inspected.ok
-            ? `Current verification page snapshot:\n${JSON.stringify(inspected, null, 2)}`
-            : `Verification page inspection was unavailable: ${inspected.message ?? 'unknown reason'}`;
-        } else if (cp.kind === 'prompt_user') {
-          const answer = await withAbortSignal(
-            () => onPrompt(cp.message, cp.options),
-            active.signal,
-          );
-          const reference = `\${prompt.${++promptSecretSequence}}`;
-          promptSecrets.set(reference, answer);
-          resultMsg = answer
-            ? `The user response is stored locally as ${reference}. Pass that exact reference as the appropriate run_verification parameter value; the orchestrator resolves it without exposing the answer to the model.`
-            : 'The user provided no input.';
-        } else {
-          await withAbortSignal(
-            () => onCooldown(cp.minutes, cp.reason, active.signal),
-            active.signal,
-          );
-          resultMsg = `Requested delay of ~${cp.minutes} min completed; no live action ran during the wait.`;
-        }
-      } catch (err) {
-        if (opts.signal?.aborted) throw abortSignalError(opts.signal, 'Auth compile cancelled');
-        const control = providerControlError(active.signal?.aborted ? active.signal.reason : err);
-        if (control) throw control;
-        resultMsg = `The orchestrator could not perform ${cp.kind}: ${err instanceof Error ? err.message : String(err)}`;
-      }
+      const cp = result.checkpoint;
+      const { result: resultMsg } = await checkpointExecutor.execute(cp);
 
       const resumeMessage = `[orchestrator result for your ${cp.kind} request]\n${resultMsg}\n\nContinue from the recording and observed result. You control the next action or checkpoint.`;
       resume = {
@@ -626,7 +887,7 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
     }
   } finally {
     active.dispose();
-    await verifier.drain();
+    checkpointExecutor.dispose();
   }
 
   if (!last) {
@@ -654,6 +915,34 @@ async function runAuthSegmentLoop(opts: AuthSegmentLoopOptions): Promise<Compile
     cacheReadInputTokens: totalCacheReadInputTokens,
     cacheCreationInputTokens: totalCacheCreationInputTokens,
   };
+}
+
+/** Complete terminal tool calls before a later API recovery turn. */
+function completeAuthHistory(history: ConversationLogEntry[]): ConversationLogEntry[] {
+  const last = history.at(-1);
+  if (last?.role !== 'assistant' || !Array.isArray(last.content)) return history;
+  const calls = last.content.filter((block) => block.type === 'tool_use');
+  if (!calls.length) return history;
+  return [
+    ...history,
+    {
+      turn: last.turn,
+      role: 'user',
+      content: calls.map((block) => ({
+        type: 'tool_result',
+        tool_use_id: block.id,
+        content: 'Previous authentication request ended. Continue from current evidence.',
+      })),
+    },
+  ];
+}
+
+function authHistoryMessages(
+  history: ConversationLogEntry[],
+): Parameters<ToolUseProvider['messageWithTools']>[0]['messages'] {
+  return completeAuthHistory(history).map(({ role, content }) => ({ role, content })) as Parameters<
+    ToolUseProvider['messageWithTools']
+  >[0]['messages'];
 }
 
 function buildMessageFromOutcome(result: AgentResult): string {

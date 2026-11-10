@@ -53,6 +53,52 @@ function resolvedAuditTool(
 }
 
 describe('partitionAuditTools', () => {
+  it('excludes auth with a conditional human continuation even when its fallback succeeds', () => {
+    const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-audit-conditional-auth-'));
+    try {
+      const tool = resolvedAuditTool(dir, 'authenticate_conditional', {
+        toolKind: 'authenticate',
+        authConfig: {
+          entry: 'resume',
+          persist: [],
+          crossOriginCookieReinjection: false,
+          actions: {
+            resume: {
+              parameters: [],
+              steps: [{ request: 0, onError: 'fail' }],
+              branches: [
+                {
+                  when: {
+                    source: 'json',
+                    name: 'challenge',
+                    path: 'challenge',
+                    required: true,
+                    capability: 'ordinary_http',
+                  },
+                  outcome: {
+                    type: 'pause',
+                    next: 'resume',
+                    evidence: ['challenge'],
+                    carry: [],
+                    message: 'Approve the current challenge.',
+                  },
+                },
+              ],
+              outcome: { type: 'success', evidence: [] },
+            },
+          },
+        },
+      });
+      const partition = partitionAuditTools([tool]);
+      expect(partition.eligible).toEqual([]);
+      expect(partition.skippedInteractiveAuth[0]?.reason).toContain(
+        'Approve the current challenge',
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('keeps data and direct-success auth eligible while excluding pause auth', () => {
     const dir = mkdtempSync(pathJoin(tmpdir(), 'imprint-audit-auth-'));
     try {

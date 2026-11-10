@@ -1,5 +1,183 @@
 # Imprint architecture
 
+Long detailed-planning and master-review calls emit named start and settlement
+messages, plus elapsed pending updates every 30 seconds. Each concurrent stage
+owns its reporting timer and clears it on either return or throw. Reporting adds
+no execution deadline, retry, or scheduling decision, and no request/response
+payloads are included in these messages.
+
+Browser launch owns a unique temporary Chrome profile unless a caller supplies
+`userDataDir`. Normal close waits for Chrome to exit before removing only that
+owned profile; startup failures and the host's exit backstop also clean it up.
+Explicit recorder profiles remain on disk. Recordings, captured network evidence,
+and teach journals live outside these temporary profiles. An uncatchable host
+termination can still leave a temporary directory for later inspection.
+
+## Agent questions and authentication
+
+`user-interaction.ts` owns a run-local input queue, cancellation, deadlines, and
+temporary secret references. Native teaching agents expose `prompt_user` and
+`authenticate` directly; semantic role responses can request the same actions
+with an interaction envelope before continuing their retained conversation.
+Ordinary compilers expose the same tools through their existing tool interfaces.
+`authentication-interaction.ts` attaches the existing recorded auth compiler to
+the full selected recording. Its verification checkpoints preserve the browser
+and continuation across OTP or approval prompts. Auth builds stay in private run
+staging, and authentication success does not replace data-operation verification.
+A run-owned `AuthCompileContext` retains the verifier, continuation and provider
+conversation between recovery requests. Recovery inputs supply current factual
+metadata and the caller's new observation instead of restarting the initial
+recording walkthrough. The agent remains free to revise the program or request
+a fresh browser/login when current evidence warrants it. Recovery guidance first
+uses a proven noninteractive session check or context-restoration action; it does
+not restart credential login solely because a consumer failed. Host shutdown
+disposes the retained contexts. Identical
+concurrent authentication requests share the active work, with separate caller
+cancellation; distinct requests remain serialized and completed success is not
+cached as proof of another caller's operation.
+
+Failed master-flow checks reach a focused component recovery decision before
+broader master repair. The agent sees the typed failure, value-free missing-state
+and request-stage facts, and explicit owner descriptors. It chooses authentication,
+a supplied component id, or escalation. Error text, status, site names, filenames,
+and cookie names do not select an owner in runtime code.
+
+`component-recovery.ts` supplies the common repair-and-retry engine. The auth
+adapter calls the existing recording-grounded owner; after success it retries
+the same compiled invocation with unchanged parameters, backend, and producer
+bindings. `tool:<id>` owners refer to accepted caller/prerequisite contracts.
+Their repair is deferred to the retained compiler: the journal keeps the same
+accepted plan and implementation plans, invalidates the selected build and its
+dependent receipts, and rechecks consumers with fresh producer results. It does
+not call the master or focused planner merely to repair that artifact.
+
+Shared runtime components can register explicit run-owned adapters through
+`FreshTeachOptions.componentRecoveryOwners`. An adapter declares its consumer
+ids, verifies and installs its owned replacement, and reports success only then.
+The current master flow does not discover shared-module owners automatically.
+Generated shared artifact edits must go through their builder's normal manifest
+and build invalidation; the recovery engine is not permission to mutate bound
+artifact bytes in place. An undeclared owner or a necessary contract, strategy,
+or dependency change goes to the master.
+
+Each actual caller invocation retains a separate receipt with its original error
+code and HTTP status. Repair completion is not consumer proof. Cancellation and
+provider failures retain their existing handling. Per-component ownership keeps
+state repair and immediate retry together; waiting sibling calls recheck renewed
+state before requesting another repair. Independent component ids do not share
+recovery, and queues are local to this run's check pass. There is no numeric retry
+limit. Repeated identical artifact repair with unchanged facts returns to broader
+master review rather than looping over unchanged work.
+
+Authentication context identity is independent of the generated tool label.
+Agents can list factual context metadata and explicitly select a context reference;
+omitting the reference preserves the legacy label-based behavior. Contexts are
+never merged by endpoint or name similarity. Native auth checkpoints await the
+shared host executor in the ongoing assignment; checkpoint/resume adapters use
+the same executor when their driver requires an assignment boundary.
+
+Long authentication work has a stable owned operation identity. Tool callers can
+inspect, await or cancel it explicitly. A transport wait ending is distinct from
+an authentication result. Per-request cancellation travels through MCP, remote
+interaction and host execution; queued cancellation and cleanup retain ownership.
+The native HTTP MCP bridge retains one protocol server per initialized client
+session. Cancellation is routed to the original request owner, including while
+a question waits in the human input queue. Closing one client session does not
+cancel another client's request with the same JSON-RPC ID. Declared fixed choices
+return typed values; secret and free-text auth answers remain host-held references.
+
+Browser-backed data execution keeps each tool's browser and artifact cache
+separate. A credential load also carries a durable snapshot version. After a
+successful call, the host conditionally saves the complete updated cookie jar,
+including removals and independent HTTP cookie changes. A shared credential-store
+lock protects the version comparison and write against newer authentication;
+stale writers leave the current store untouched. Explicit synthetic overrides
+without a durable read version do not write to the credential store. Rejected
+or failed cookie seeds prevent wholesale writeback from a partial snapshot.
+Cookie scope is preserved: host-only cookies are planted without a Domain
+attribute, and Chrome's acceptance response is checked. None of these facts
+establishes that the website will accept the resulting session.
+
+Auth compilers also expose `interact_verification_browser` through the same API,
+CLI and native checkpoints. The agent chooses browser actions to investigate a
+flow absent from the original recording. `auth-browser-discovery.ts` captures
+requests, redirects and completed response bodies in that retained CDP session,
+including traffic between checkpoints. `auth-discovery-evidence.ts` appends
+observations with distinct sequences to a private working session; ordinary
+recording readers, provenance checks and `IMPRINT_SESSION_PATH` tests see it.
+The source recordings remain unchanged. A browser opened for discovery is
+adopted by compiled auth replay, unless the agent requests a fresh session.
+Discovery does not write a successful verification receipt. Reusable auth still
+requires execution of the agent's declared action program.
+
+CDP cookie snapshots cover the isolated target's complete cookie partition,
+including earlier origins and other paths. Snapshot errors remain visible.
+Cookie identity includes host-only scope alongside name, normalized domain and
+path. Chromium can retain both same-name scopes; runtime reconciliation, seed
+deduplication and durable writeback preserve both. CDP domain cookies are encoded
+with a leading dot even when the runtime stores a normalized bare domain.
+Runtime reconciles observed browser changes and removals while preserving
+independent HTTP cookie updates. Data replay caches a full cookie snapshot
+against the credential input's content hash. Recreating a browser reuses that
+snapshot only while its credential input still matches, so rotations and
+deletions survive without mixing in an older durable value. A credential change
+invalidates a data browser/cache; the auth verifier retains control of its own
+explicit resets. These are transport facts rather than cookie-name classifiers.
+
+Both auth and data request transforms receive `(method, url, responses, params)`.
+The runtime awaits their results inside the request's error handler. Synchronous
+exceptions and rejected promises return `BAD_RESPONSE` feedback to the compiler,
+which owns repair and retry decisions.
+
+Auth responses and transforms see only the current action's response history.
+Cross-action values come from declared carry or persisted inputs. Optional
+`createAuthActionTestHarness` from `imprint-mcp/runtime` runs synthetic fixtures
+through this actual executor and disables durable credential writes. It carries
+only declared continuation and session changes; it cannot inject prior responses.
+Repeat exhaustion preserves the last concrete error, HTTP status, step/attempt
+count and bounded preparation/dispatch/capture facts without changing the
+agent-authored repeat policy.
+
+`IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH` enables private JSONL credential path facts.
+A private sibling `.key` file scopes keyed identities to this observation run,
+including across child processes. Load/commit events and response-bound dispatch
+facts report opaque material revisions, source, counts and a prepared request
+identity. The effective runtime jar is reported separately from the loaded
+credential revision. CDP network header events add opaque wire/cookie identities,
+joined by opaque browser request IDs and target identities; unavailable Cookie
+headers stay unobserved. They contain no credential or request values. Browser-owned cookies are
+explicitly distinguished from runtime-prepared headers; a prepared request hash
+is not a browser wire capture. These facts never decide session validity. Optional dispatch metadata is accepted
+by the retained research input and final handoff contracts, so enabling private
+diagnostics does not invalidate an otherwise valid observation.
+
+The CLI supplies `terminalUserPrompt`: choices, ordinary text, or masked secret
+input on the parent foreground terminal. Concurrent questions are serialized and
+progress output is buffered during each prompt. Piped compiler processes use a
+run-local loopback bridge instead of reading their own stdin. API auth compilers
+execute the same live checkpoints directly. Library callers may supply `onPrompt`;
+without it, or with `--no-interactive`/non-TTY input, agents receive unavailable.
+Cancellation or unavailable input never counts as approval. The bridge closes
+and secret references expire when the run ends.
+
+Stealth Chromium is initialized once per process. The user-agent evasion
+owns its CDP command inside the plugin hook, so a page closing during setup
+returns through the existing plugin error handler instead of leaving an
+unhandled rejection that terminates the teach.
+
+`teach-browser-resources.ts` provides an opt-in host budget for live data
+checks (`IMPRINT_TEACH_LOW_MEMORY=1`). It serializes those checks, observes queued
+cancellation, and leases one retained caller-owned data pool. Successive checks
+in the same pass reuse it; a different pass drains the previous pool before
+admission, without transferring its browser. Only the latest browser context is
+retained after a check. Unowned pools, cancelled work and thrown errors drain
+immediately; the pass also drains its own pool on exit. The host's reference is
+weak, so it does not extend the pass lifetime. Competing contexts are evicted
+before browser launch, and cancellation is checked again after that cleanup.
+Agent admission and scheduling stay with the native provider. AuthVerifier
+uses its own persistent pool outside this data-check budget, preserving MFA
+continuation. The default continues to reuse caller-owned browser state.
+
 ## The core idea
 
 Imprint records a real browser session and turns every credible recorded
@@ -14,8 +192,10 @@ strategies. The teaching agents choose the tool design; the runtime only
 executes and checks the artifacts.
 
 Research remains reusable when planning rewrites auth or token explanations.
-The master requests fresh research for a real strategy change; note wording
-alone does not rerun a proven call.
+Plan/research construction differences are returned as bounded field-level
+advisories. The master can revise, research or compile the current construction;
+prior success stays attached to the construction it actually executed. File,
+schema, hash and receipt integrity remain mechanical checks.
 The completion reviewer also receives the original human guidance: explicit
 scope exclusions are valid, and a requested connected workflow needs compatible
 producer/consumer evidence, not just two standalone successes.
@@ -24,6 +204,12 @@ content within the same run and analyzer conversation. Delivery fingerprints
 advance after a validated response. Stateless and self-contained calls retain
 the full input, and host validation always checks the complete current evidence.
 Prior research stays in the conversation; this does not reset agent history.
+Sibling deliveries within a retained conversation similarly send unchanged
+handoffs as fingerprints plus immutable shared-research references. The agent
+can read the exact retained payload; new conversations and hosts without shared
+retrieval receive the full evidence. Host validation retains all original bytes.
+Native assignment waits wake on work or cancellation and otherwise wait up to
+45 seconds, below the existing MCP request timeout.
 Focused planners share the accepted plan and research, rather than consuming each
 other's output. Codex delegates their work within one native agent family;
 compilation and execution retain the master's dependency waves.
@@ -396,7 +582,25 @@ An explicit `workflow.bootstrap.url` is resolved before inspecting later request
 
 **Authenticate-tool execution.** Authentication never uses the DOM playbook rung. The live verifier runs the compiled workflow in one headed `cdp-replay` browser and keeps that browser open across checkpoints. The browser transport supplies ordinary fetch, top-level navigation, cookies, and page-owned state; it does not interpret the site's authentication protocol.
 
+Credential extraction preserves existing `${credential.NAME}` references in
+already-redacted recordings and omits them from extracted literal values.
+Both auth compiler providers load stored credentials through the same helper,
+which also excludes reference strings from recording-value overrides. Actual
+literal recording inputs remain available; absent referenced values retain the
+runtime's missing-credential result instead of being submitted as placeholders.
+
 **Auth is an agent-compiled action program.** Candidate detection supplies neutral credential-request and related-auth-request evidence. The auth compile agent reads the recording and defines `authConfig.entry` plus arbitrary named actions. Each action lists its scalar parameters and ordered request steps. A step can declare error handling and a recording-grounded `repeat.until` capture with its own interval and attempt bound. Outcomes may declare required capture evidence and are either `pause` (with the next action, exact carried state names, and a caller message) or `success`. `persist` names non-cookie captures that become durable credentials; cookies persist automatically. There are no runtime push/OTP types, phase boundaries, implicit delivery checks, cookie-based completion guesses, or site-shaped auth heuristics.
+
+An action may also declare ordered `branches`: each `when` uses the ordinary
+request-capture schema against the final step's current response. The first
+matching condition contributes its named capture and selects a `pause` or
+`success` outcome. Otherwise the existing `outcome` applies, including its
+required evidence. Failed or skipped final steps cannot select a branch from an
+earlier response, and stale carried predicate values cannot select a branch.
+New request captures replace older values of those names. The compiler separates
+session checks, credential submission and factor delivery so it can finish on
+usable access before sending another challenge. The runtime does not choose
+authentication semantics, infer device trust, or insert login requests.
 
 **Compile and verification are separate jobs.** A focused compiler writes the
 artifacts for one tool. The foreground controller then runs the applicable
@@ -640,7 +844,9 @@ The public teaching path is one fresh foreground controller:
    source context. Matching strings alone cannot establish a field's meaning
    or which nested record owns it; unsupported metadata returns to the master.
    A proven independent tool can plan and compile a draft while another tool
-   continues researching. Native admission stays with Codex; other providers
+   continues researching, including when unrelated queued research waits on a
+   producer. Deferred drafts are reconsidered when admission opens. Native
+   admission stays with Codex; other providers
    retain the existing four-worker bound. Declared consumers wait for the normal producer-first
    build waves. The final master review can replace an early proposal; a draft
    is reused only when both its compile inputs and implementation plan match.
@@ -1044,3 +1250,20 @@ planning after compatible recording-scope changes. The retained result must matc
 the proven handoff's exact candidate and observation; the original hashes/history
 are preserved. Consumer research executes that producer again for fresh values.
 A sibling summary or compatible endpoint alone never becomes execution proof.
+
+### Compiler execution and channel failures
+
+`compile-tool-executor.ts` owns the existing recording readers, file tools, tests,
+and completion handlers. Native compilers invoke it in the teach host, using the
+current retained evidence object; live discoveries are available to the next read.
+`mcp-compile-server.ts` exposes the same executor for CLI providers. It closes its
+lifetime on input EOF, output closure/error, or malformed protocol input, aborts
+pending requests and drains owned work. These are infrastructure failures, not
+website observations, and do not silently replay an action.
+
+Native compiler logs record `tool.started` and `tool.settled` with a call ID,
+duration, outcome and safe error name/code even when execution throws. Native
+assignment events also carry a matching call ID and failure facts. Exception
+messages are excluded from those facts. A failed call does not discard the model
+conversation or the authentication browser. Existing action/network limits remain;
+this adds no whole-teach deadline, strategy rule, model retry cap or publication gate.

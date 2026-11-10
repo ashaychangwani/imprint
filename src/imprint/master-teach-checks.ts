@@ -328,7 +328,14 @@ export function invocationOutcomeCheck(input: {
     );
   } else {
     facts.push(
-      ReceiptFactSchema.parse({ ...invocationBase, status: 'failed' }),
+      ReceiptFactSchema.parse({
+        ...invocationBase,
+        status: 'failed',
+        errorCode: input.outcome.result.error,
+        ...(input.outcome.result.status === undefined
+          ? {}
+          : { httpStatus: input.outcome.result.status }),
+      }),
       ReceiptFactSchema.parse({
         kind: 'result',
         subject: input.subject,

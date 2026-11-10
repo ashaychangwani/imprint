@@ -2,6 +2,7 @@
 import { z } from 'zod';
 import type { BackendAttemptFact } from './backend-ladder.ts';
 import type { BodyComparison } from './body-structure.ts';
+import type { CredentialObservation, DispatchObservation } from './credential-observation.ts';
 import {
   ChainEdgeSchema,
   ConcreteTeachingParameterSchema,
@@ -113,10 +114,25 @@ export const FocusedPlannerInputSchema = strictObject({
   siblingToolEvidence: z.array(SiblingToolEvidenceSchema),
   incomingChainEdges: z.array(ChainEdgeSchema),
   outgoingChainEdges: z.array(ChainEdgeSchema),
-  /** Completed request research for every selected operation. Planning runs
-   * only after these handoffs exist so cross-tool dependencies can be chosen
-   * from tested calls and response shapes rather than guesses. */
+  /** Exact research for this tool and its declared dependencies. Other
+   * completed operations remain discoverable through apiResearchIndex. */
   apiResearch: z.array(z.lazy(() => ApiResearchHandoffSchema)).default([]),
+  apiResearchIndex: z
+    .array(
+      strictObject({
+        toolName: SemanticToolCandidateSchema.shape.toolName,
+        researchInputsSha256: PromptShaSchema,
+        status: z.enum(['proven', 'partial', 'blocked']),
+        summary: utf8Text(1, 2_000),
+        observationId: PromptIdSchema.optional(),
+        executionMechanism: utf8Text(1, 128).optional(),
+        resultOk: z.boolean().optional(),
+        /** Read the exact handoff through run-local shared research only
+         * when its details matter to a proposed dependency or boundary. */
+        handoffRef: ContentAddressedRefSchema.optional(),
+      }),
+    )
+    .default([]),
   evidence: PromptEvidenceProjectionSchema,
   /** Optional input-only handoff from the immediately preceding failed
    * attempt. The planner never echoes this object. */
@@ -141,6 +157,26 @@ export const ApiResearchCandidateSchema = strictObject({
     .optional(),
 });
 export type ApiResearchCandidate = z.infer<typeof ApiResearchCandidateSchema>;
+// Runtime diagnostics cross the same retained research/input/handoff boundary.
+// Keep their typed wire shape aligned without interpreting credential validity.
+const CredentialObservationSchema: z.ZodType<CredentialObservation> = strictObject({
+  scope: z.string(),
+  revision: z.string(),
+  source: z.string(),
+  cookieCount: z.number().int().nonnegative(),
+  valueCount: z.number().int().nonnegative(),
+  storageCount: z.number().int().nonnegative(),
+});
+const DispatchObservationSchema: z.ZodType<DispatchObservation> = strictObject({
+  invocationId: z.string(),
+  requestIndex: z.number().int().nonnegative(),
+  credentials: CredentialObservationSchema,
+  effectiveCredentials: CredentialObservationSchema.optional(),
+  preparedRequestIdentity: z.string(),
+  requestTargetIdentity: z.string(),
+  preparedCookieHeaderIdentity: z.string().optional(),
+  cookieSource: z.enum(['browser-owned', 'runtime-prepared']),
+});
 const BackendResponseObservationSchema = strictObject({
   backend: z.enum(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']),
   requestIndex: z.number().int().nonnegative(),
@@ -151,6 +187,7 @@ const BackendResponseObservationSchema = strictObject({
   valueType: z.enum(['null', 'array', 'object', 'string', 'number', 'boolean']),
   topLevelKeys: z.array(utf8Text(0, 200)).max(32).optional(),
   arrayLength: z.number().int().nonnegative().optional(),
+  dispatch: DispatchObservationSchema.optional(),
 });
 const PreparedRequestComparisonSchema = strictObject({
   backend: z.enum(['fetch', 'fetch-bootstrap', 'cdp-replay', 'stealth-fetch', 'playbook']),

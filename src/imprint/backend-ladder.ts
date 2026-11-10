@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { basename, dirname, resolve as pathResolve } from 'node:path';
 import type { Page } from 'playwright';
+import { AUTH_DISCOVERY_POOL_KEY } from './auth-browser-discovery.ts';
 import { loadBackendsCacheStatus } from './backend-cache.ts';
 import {
   type CdpBrowserFetch,
@@ -34,7 +35,9 @@ import {
 } from './cdp-jar-cache.ts';
 import { proxyUrl } from './chromium.ts';
 import { abortSignalError, abortableDelay, withAbortSignal } from './concurrency.ts';
-import { RuntimeCookieJar } from './cookie-jar.ts';
+import { RuntimeCookieJar, cookieScopeKey } from './cookie-jar.ts';
+import { recordBrowserCookieState } from './credential-observation.ts';
+import { compareAndSwapSiteCookies } from './credential-store.ts';
 import { redactFreeformText } from './freeform-redact.ts';
 import { createLog } from './log.ts';
 import { runPlaybook } from './playbook-runner.ts';
@@ -57,6 +60,7 @@ import {
   createStealthFetch,
 } from './stealth-fetch.ts';
 import { clearCachedToken, loadCachedToken, saveCachedToken } from './stealth-token-cache.ts';
+import { prepareTeachBrowserContext } from './teach-browser-resources.ts';
 import type { ResolvedTool } from './tool-loader.ts';
 import { WorkflowSchema } from './types.ts';
 import type {
@@ -475,6 +479,7 @@ export async function runWithLadder(
             options?.onResponse ? onResponse : undefined,
             options?.onPreparedRequest ? onPreparedRequest : undefined,
             options?.signal,
+            options?.cdpPool,
           );
           break;
         case 'cdp-replay':
@@ -491,7 +496,12 @@ export async function runWithLadder(
           break;
         case 'stealth-fetch': {
           const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
-          const sf = await ensureStealthFetch(tool, stealthCache, paramsWithDefaults);
+          const sf = await ensureStealthFetch(
+            tool,
+            stealthCache,
+            paramsWithDefaults,
+            options?.signal,
+          );
           // When the workflow declares a bootstrap block, mint its declared
           // session-token state (CSRF cookies etc.) from the SAME stealth
           // session that provides the transport cookies. Without this, a
@@ -810,8 +820,14 @@ async function getOrMintCdpJar(
   cacheDir: string,
   recordingDir: string,
   forceFresh: boolean,
+  cdpPool?: Map<string, CdpBrowserFetch>,
+  signal?: AbortSignal,
 ): Promise<MintedJar | null> {
-  if (cdpJarMinterForTest) return cdpJarMinterForTest(baseUrl, bootstrapUrl);
+  if (cdpJarMinterForTest) {
+    await prepareTeachBrowserContext(cdpPool);
+    if (signal?.aborted) throw abortSignalError(signal);
+    return cdpJarMinterForTest(baseUrl, bootstrapUrl);
+  }
   if (!forceFresh) {
     let cached = loadJar(cacheDir);
     // A recording NEWER than the cached jar supersedes it — e.g. the user
@@ -843,6 +859,8 @@ async function getOrMintCdpJar(
   }
   let cf: CdpBrowserFetch | undefined;
   try {
+    await prepareTeachBrowserContext(cdpPool);
+    if (signal?.aborted) throw abortSignalError(signal);
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
     const jar = await cf.mintJar();
     if (jar.abckFlag !== '0') {
@@ -905,7 +923,7 @@ function jarLikelyStale(result: ToolResult): boolean {
 
 function credentialSeedCookies(credentials: CredentialStore): MintedJar['cookies'] {
   return credentials.cookies
-    .filter((c) => c.name && c.value && c.domain)
+    .filter((c) => c.name && c.value && c.domain && !c.httpResponse?.deleted)
     .map((c) => ({
       name: c.name,
       value: c.value,
@@ -915,6 +933,7 @@ function credentialSeedCookies(credentials: CredentialStore): MintedJar['cookies
       httpOnly: c.httpOnly,
       secure: c.secure,
       sameSite: c.sameSite,
+      hostOnly: c.hostOnly,
     }));
 }
 
@@ -922,10 +941,37 @@ function uniqueSeedCookies(cookies: MintedJar['cookies']): MintedJar['cookies'] 
   if (cookies.length === 0) return undefined;
   const byScope = new Map<string, MintedJar['cookies'][number]>();
   for (const c of cookies) {
-    byScope.set(`${c.domain}\t${c.path ?? '/'}\t${c.name}`, c);
+    byScope.set(cookieScopeKey({ ...c, path: c.path ?? '/' }), c);
   }
   return [...byScope.values()];
 }
+
+/** Content identity only: no cookie names or values imply session semantics. */
+function credentialStateHash(credentials: CredentialStore): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, entry]) => [key, canonical(entry)]),
+      );
+    return value;
+  };
+  return createHash('sha256')
+    .update(
+      JSON.stringify(
+        canonical({
+          cookies: credentials.cookies,
+          values: credentials.values,
+          storage: credentials.storage ?? [],
+        }),
+      ),
+    )
+    .digest('hex');
+}
+
+const cdpCredentialStates = new WeakMap<CdpBrowserFetch, string>();
 
 /**
  * fetch-bootstrap rung — the API anti-bot path. Mint a validated session jar via
@@ -946,9 +992,10 @@ async function runFetchBootstrap(
   onResponse?: (observation: ResponseObservation) => void,
   onPreparedRequest?: (observation: PreparedRequestObservation) => void,
   signal?: AbortSignal,
+  cdpPool?: Map<string, CdpBrowserFetch>,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
-    (await loadCredentialStore(tool.site)) ?? {
+    (await loadCredentialStore(tool.site, signal)) ?? {
       site: tool.site,
       cookies: [],
       values: {},
@@ -978,7 +1025,15 @@ async function runFetchBootstrap(
   );
 
   for (let attempt = 0; attempt < 2; attempt++) {
-    const jar = await getOrMintCdpJar(baseUrl, bootstrapUrl, cacheDir, recordingDir, attempt > 0);
+    const jar = await getOrMintCdpJar(
+      baseUrl,
+      bootstrapUrl,
+      cacheDir,
+      recordingDir,
+      attempt > 0,
+      cdpPool,
+      signal,
+    );
     if (signal?.aborted) throw abortSignalError(signal);
     if (!jar) {
       // Couldn't even launch the bootstrap browser → let the ladder escalate.
@@ -1078,7 +1133,7 @@ async function runCdpReplay(
   onPreparedRequest?: (observation: PreparedRequestObservation) => void,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
-    (await loadCredentialStore(tool.site)) ?? {
+    (await loadCredentialStore(tool.site, signal)) ?? {
       site: tool.site,
       cookies: [],
       values: {},
@@ -1101,9 +1156,36 @@ async function runCdpReplay(
     : undefined;
 
   const recordingDir = pathResolve(tool.dir, '..');
-  const cacheDir = compileBackendStateDir(tool.dir, 'cdp-replay');
+  const cacheDir = pathResolve(
+    compileBackendStateDir(tool.dir, 'cdp-replay'),
+    createHash('sha256')
+      .update(bootstrapUrl ?? baseUrl)
+      .digest('hex'),
+  );
   const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
-  const pooled = cdpPool?.get(poolKey);
+  if (tool.workflow.toolKind !== 'authenticate') await prepareTeachBrowserContext(cdpPool, poolKey);
+  if (signal?.aborted) throw abortSignalError(signal);
+  const credentialHash = credentialStateHash(credentials);
+  let pooled = cdpPool?.get(poolKey);
+  // A compiler may discover the live login before it has written a workflow.
+  // Adopt that same run-owned browser for its first compiled action.
+  if (!pooled && tool.workflow.toolKind === 'authenticate') {
+    pooled = cdpPool?.get(AUTH_DISCOVERY_POOL_KEY);
+    if (pooled) {
+      cdpPool?.delete(AUTH_DISCOVERY_POOL_KEY);
+      cdpPool?.set(poolKey, pooled);
+    }
+  }
+  if (
+    pooled &&
+    tool.workflow.toolKind !== 'authenticate' &&
+    cdpCredentialStates.has(pooled) &&
+    cdpCredentialStates.get(pooled) !== credentialHash
+  ) {
+    cdpPool?.delete(poolKey);
+    await pooled.close();
+    pooled = undefined;
+  }
   const ownsSession = !pooled;
 
   let cf: CdpBrowserFetch;
@@ -1111,7 +1193,7 @@ async function runCdpReplay(
     log('cdp-replay: reusing pooled Chrome session');
     cf = pooled;
   } else {
-    const seeds: MintedJar['cookies'] = [];
+    let seeds = credentialSeedCookies(credentials);
     // Cached replay jars are recording-derived and may be stale, so authenticate
     // workflows do not inherit them implicitly. Current credential-store cookies
     // are different: they represent durable device/session state and remain
@@ -1123,13 +1205,26 @@ async function runCdpReplay(
         if (cached && rec && rec.mtimeMs > cached.bootstrapEpoch) cached = null;
         if (!cached && seedJarFromRecording(cacheDir, rec, bootstrapUrl))
           cached = loadJar(cacheDir);
-        if (cached?.cookies.length) seeds.push(...cached.cookies);
+        const emptyCredentials =
+          !credentials.cookies.length &&
+          !Object.keys(credentials.values).length &&
+          !credentials.storage?.length;
+        if (
+          cached &&
+          (cached.credentialStateHash === credentialHash ||
+            (cached.credentialStateHash === undefined && emptyCredentials))
+        ) {
+          // A retained full snapshot is authoritative, including its removals.
+          // A credential refresh invalidates it rather than mixing sessions.
+          seeds = cached.cookies;
+        }
       } catch {
         // best-effort
       }
     }
-    seeds.push(...credentialSeedCookies(credentials));
     const seedCookies = uniqueSeedCookies(seeds);
+    recordBrowserCookieState({ ...credentials, cookies: seedCookies ?? [] }, 'cdp-before-seed');
+    if (signal?.aborted) throw abortSignalError(signal);
     cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
       baseUrl,
       bootstrapUrl,
@@ -1146,6 +1241,7 @@ async function runCdpReplay(
       // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
       reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,
     });
+    cdpCredentialStates.set(cf, credentialHash);
     // Register immediately so caller cancellation can close a browser that is
     // still launching or minting its first jar.
     if (cdpPool) cdpPool.set(poolKey, cf);
@@ -1154,22 +1250,27 @@ async function runCdpReplay(
   try {
     const jar = await cf.mintJar();
     if (signal?.aborted) throw abortSignalError(signal);
+    const observedCookies = jar.cookies.map((c) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain,
+      path: c.path,
+      expires: c.expires,
+      httpOnly: c.httpOnly,
+      secure: c.secure,
+      sameSite: c.sameSite,
+      hostOnly: c.hostOnly ?? !c.domain.startsWith('.'),
+    }));
+    recordBrowserCookieState(
+      { ...credentials, cookies: observedCookies },
+      'cdp-after-bootstrap',
+      jar.seedCookieDiagnostics,
+    );
+    const replayCookies = new RuntimeCookieJar(credentials.cookies);
+    replayCookies.restoreBrowserSnapshot(observedCookies);
     const bootstrappedCredentials: CredentialStore = {
       ...credentials,
-      cookies: [
-        ...credentials.cookies,
-        ...jar.cookies.map((c) => ({
-          name: c.name,
-          value: c.value,
-          domain: c.domain,
-          path: c.path,
-          expires: c.expires,
-          httpOnly: c.httpOnly,
-          secure: c.secure,
-          sameSite: c.sameSite,
-          hostOnly: !c.domain.startsWith('.'),
-        })),
-      ],
+      cookies: replayCookies.toJSON(),
     };
     const captureResult = jarBootstrapCaptureState(
       tool.workflow.bootstrap,
@@ -1182,6 +1283,7 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
+    let runtimeCookies: CredentialStore['cookies'] | undefined;
     let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
@@ -1191,21 +1293,96 @@ async function runCdpReplay(
           ? {
               navigate: cf.navigate.bind(cf),
               snapshotCookies: cf.snapshotCookies.bind(cf),
+              initialCookies: observedCookies,
             }
           : undefined,
       signal,
+      onCookieState: (cookies: CredentialStore['cookies']) => {
+        runtimeCookies = cookies;
+      },
       ...(onResponse ? { onResponse } : {}),
       ...(onPreparedRequest ? { onPreparedRequest } : {}),
     });
 
     if (signal?.aborted) throw abortSignalError(signal);
+    if (!result.ok && cf.snapshotExistingCookies) {
+      try {
+        const snapshotExistingCookies = cf.snapshotExistingCookies.bind(cf);
+        const snapshotSignal = AbortSignal.timeout(3_000);
+        const cookies = await withAbortSignal(
+          snapshotExistingCookies,
+          signal ? AbortSignal.any([signal, snapshotSignal]) : snapshotSignal,
+        );
+        if (cookies) {
+          recordBrowserCookieState(
+            { ...credentials, cookies },
+            'cdp-after-request',
+            jar.seedCookieDiagnostics,
+          );
+        }
+      } catch {
+        if (signal?.aborted) throw abortSignalError(signal);
+        // A failed diagnostic must preserve the original consumer failure.
+      }
+    }
+    if (jarLikelyStale(result)) clearJar(cacheDir);
     if (result.ok) {
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(cacheDir, postJar);
-      } catch {
-        // best-effort
+        recordBrowserCookieState(
+          { ...credentials, cookies: postJar.cookies },
+          'cdp-after-request',
+          postJar.seedCookieDiagnostics,
+        );
+        let postCredentialHash = credentialHash;
+        // Only a host-loaded durable snapshot opts into writeback. Synthetic
+        // overrides and auth actions retain their existing persistence contract.
+        // A partial seed must never turn restoration failures into deletions.
+        if (
+          tool.workflow.toolKind !== 'authenticate' &&
+          credentials.durableRevision &&
+          !postJar.seedCookieDiagnostics?.rejected &&
+          !postJar.seedCookieDiagnostics?.failed
+        ) {
+          const finalCookies = new RuntimeCookieJar(runtimeCookies ?? credentials.cookies);
+          finalCookies.restoreBrowserSnapshot(
+            postJar.cookies.map((cookie) => ({
+              ...cookie,
+              hostOnly: cookie.hostOnly ?? !cookie.domain.startsWith('.'),
+            })),
+          );
+          // Insertion counters belong to this runtime jar. Do not rotate the
+          // durable version merely because another process reconstructed it.
+          const previousScopes = new Map(
+            credentials.cookies.map((cookie) => [cookieScopeKey(cookie), cookie]),
+          );
+          const cookies = finalCookies.toJSON().map((entry) => {
+            const { creationIndex: _creationIndex, ...cookie } = entry;
+            const previous = previousScopes.get(cookieScopeKey(cookie));
+            return previous?.creationIndex === undefined
+              ? cookie
+              : { ...cookie, creationIndex: previous.creationIndex };
+          });
+          const update = await compareAndSwapSiteCookies(
+            tool.site,
+            credentials.durableRevision,
+            cookies,
+            { signal },
+          );
+          if (update.status !== 'stale') {
+            postCredentialHash = credentialStateHash({ ...credentials, cookies });
+            cdpCredentialStates.set(cf, postCredentialHash);
+          }
+          log(`cdp-replay: durable browser cookies ${update.status}`);
+        }
+        saveJar(cacheDir, { ...postJar, credentialStateHash: postCredentialHash });
+      } catch (err) {
+        if (signal?.aborted) throw abortSignalError(signal);
+        clearJar(cacheDir);
+        log(
+          `cdp-replay post-run cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
       } finally {
         if (!cdpPool && ownsSession) await cf.close();
       }
@@ -1215,9 +1392,12 @@ async function runCdpReplay(
       if (ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await cf.mintJar();
-        saveJar(cacheDir, postJar);
-      } catch {
-        // best-effort
+        saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
+      } catch (err) {
+        clearJar(cacheDir);
+        log(
+          `cdp-replay paused cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        );
       }
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else if (cdpPool) {
@@ -1275,6 +1455,7 @@ async function runCdpReplay(
       }
     }
 
+    if (signal?.aborted) throw abortSignalError(signal);
     return result;
   } catch (err) {
     // Session is dead — evict from pool so the next call creates a fresh one.
@@ -1549,8 +1730,9 @@ async function ensureStealthFetch(
   tool: ResolvedTool,
   cache: Map<string, StealthFetch>,
   params: Record<string, string | number | boolean>,
+  signal?: AbortSignal,
 ): Promise<StealthFetch> {
-  const credentials = (await loadCredentialStore(tool.site)) ?? {
+  const credentials = (await loadCredentialStore(tool.site, signal)) ?? {
     site: tool.site,
     cookies: [],
     values: {},
@@ -1910,6 +2092,7 @@ export function resolveWorkflowTool(
             initialState?: Record<string, unknown>;
             credentials?: CredentialStore;
             signal?: AbortSignal;
+            onCookieState?: (cookies: CredentialStore['cookies']) => void;
             onResponse?: (observation: ResponseObservation) => void;
             onPreparedRequest?: (observation: PreparedRequestObservation) => void;
             onResponseEvidence?: (evidence: ResponseEvidence) => void;
@@ -1924,6 +2107,7 @@ export function resolveWorkflowTool(
         browser: o?.browser,
         initialState: o?.initialState,
         signal: o?.signal,
+        onCookieState: o?.onCookieState,
         onResponse: o?.onResponse,
         onPreparedRequest: o?.onPreparedRequest,
         onResponseEvidence: o?.onResponseEvidence,

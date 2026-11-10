@@ -13,6 +13,8 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
 import { z } from 'zod';
+import { AuthCaptureSchema, AuthToolPlanSchema } from './auth-plan.ts';
+export { AuthToolPlanSchema, type AuthToolPlan } from './auth-plan.ts';
 import { compactUrlForLlm } from './llm-url.ts';
 import { localSiteDir } from './paths.ts';
 import { detectPageMintedHeaders } from './redact.ts';
@@ -48,16 +50,6 @@ export const SharedModuleSpecSchema = z.object({
   dependsOn: z.array(z.string()).default([]),
 });
 export type SharedModuleSpec = z.infer<typeof SharedModuleSpecSchema>;
-
-const AuthCaptureSchema = z.object({
-  name: z.string().min(1),
-  /** Capture source: json | response_header | cookie | text_regex. */
-  source: z.string().min(1),
-  /** Path / header name / cookie name / regex that locates the value. */
-  locator: z.string().min(1),
-  /** Where the captured value is injected downstream, e.g. "header:Authorization". */
-  usedAs: z.string().default(''),
-});
 
 const AuthRecipeSchema = z
   .object({
@@ -193,18 +185,6 @@ const PerToolPlanSchema = z.object({
   requiredInputs: z.array(RequiredInputSchema).default([]),
 });
 type PerToolPlan = z.infer<typeof PerToolPlanSchema>;
-
-export const AuthToolPlanSchema = z
-  .object({
-    toolName: z.string(),
-    credentialRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
-    authRequestSeqs: z.array(z.number().int().nonnegative()).default([]),
-    credentialNames: z.array(z.string()).default([]),
-    captures: z.array(AuthCaptureSchema).default([]),
-    notes: z.string().default(''),
-  })
-  .optional();
-export type AuthToolPlan = z.infer<typeof AuthToolPlanSchema>;
 
 export const BuildPlanSchema = z
   .object({
