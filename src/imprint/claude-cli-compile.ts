@@ -85,6 +85,8 @@ const MAX_VERIFICATION_CYCLES = 5;
 /** Data-compile tools exposed to claude-cli. Keep this list in one exported
  * place so tests catch prompt/tool drift before a real teach run does. */
 export const DATA_COMPILE_TOOL_NAMES = [
+  'prompt_user',
+  'authenticate',
   'read_session_summary',
   'search_requests',
   'read_request',

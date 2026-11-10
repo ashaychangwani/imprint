@@ -6,7 +6,7 @@ import { basename, dirname, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { IS_COMPILED_BINARY } from './imprint/is-compiled.ts';
 import type { ProviderName } from './imprint/llm.ts';
-import { isDebug } from './imprint/log.ts';
+import { createLog, isDebug } from './imprint/log.ts';
 import type { FreshTeachTerminalResult } from './imprint/master-teach-controller.ts';
 import { shutdownTracing, traced } from './imprint/tracing.ts';
 import { VERSION } from './imprint/version.ts';
@@ -142,7 +142,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--from-session <path>',
         description:
-          'Use one exact recording. Repeat the flag to explicitly combine selected recordings. Without it, the newest raw recording is used.',
+          'Use one exact recording. Repeat the flag to explicitly combine selected recordings. Existing login references use stored credentials. Without it, the newest raw recording is used.',
       },
       {
         name: '--from-candidates <run-id>',
@@ -157,7 +157,8 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       { name: '--persist-profile', description: 'Reuse a stable Chrome profile for this site.' },
       {
         name: '--no-interactive',
-        description: 'Run without prompts. Every tool in the master plan is still built.',
+        description:
+          'Disable terminal questions, including MFA/OTP input. Missing user input is reported as unavailable; the complete tool scope remains planned.',
       },
       {
         name: '--agent codex',
@@ -172,7 +173,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
       {
         name: '--model <name>',
         description:
-          'Override the teaching-agent model (e.g. claude-sonnet-4-6). Otherwise the provider default is used.',
+          'Override the teaching-agent model (e.g. claude-sonnet-4-6). Codex defaults to gpt-6.1-sol; otherwise the provider default is used.',
       },
       {
         name: '--timeout <duration>',
@@ -851,22 +852,29 @@ async function main(argv: string[]): Promise<number> {
       // piped, backgrounded) get visibility instead of silence.
       let lastActivity = '';
       const compileStart = Date.now();
+      const compileLog = createLog('compile');
       const onDeadlineReached = process.stdin.isTTY
         ? async (): Promise<number | null> => {
-            const { createInterface } = await import('node:readline');
+            const { requestAgentInteraction } = await import('./imprint/user-interaction.ts');
             const elapsed = Math.round((Date.now() - compileStart) / 60000);
-            const rl = createInterface({ input: process.stdin, output: process.stderr });
-            const answer = await new Promise<string>((resolve) => {
-              rl.question(
-                `[imprint compile] Timeout reached after ${elapsed} minutes. Give it 10 more minutes? [Y/n] `,
-                resolve,
-              );
+            const answer = await requestAgentInteraction({
+              action: 'prompt_user',
+              prompt: {
+                message: `Timeout reached after ${elapsed} minutes. Give the compiler 10 more minutes?`,
+                options: ['Continue for 10 minutes', 'Stop'],
+                sensitive: false,
+              },
             });
-            rl.close();
-            return answer.trim().toLowerCase().startsWith('n') ? null : 10 * 60 * 1000;
+            return answer.status === 'answered' &&
+              'value' in answer &&
+              answer.value === 'Continue for 10 minutes'
+              ? 10 * 60 * 1000
+              : null;
           }
         : undefined;
+      const { terminalUserPrompt } = await import('./imprint/terminal-user-prompt.ts');
       const result = await generate({
+        onPrompt: terminalUserPrompt,
         sessionPath,
         outPath: values.out,
         maxDurationMs,
@@ -878,9 +886,7 @@ async function main(argv: string[]): Promise<number> {
           if (activity === lastActivity) return;
           lastActivity = activity;
           const retry = p.verificationCycle > 1 ? ` (retry ${p.verificationCycle - 1})` : '';
-          process.stderr.write(
-            `[imprint compile] ${formatElapsed(p.elapsedMs)} — ${activity}${retry}\n`,
-          );
+          compileLog(`${formatElapsed(p.elapsedMs)} — ${activity}${retry}`);
         },
       });
       console.log('');
@@ -1564,6 +1570,7 @@ async function main(argv: string[]): Promise<number> {
 
       try {
         const { teach } = await import('./imprint/teach.ts');
+        const { terminalUserPrompt } = await import('./imprint/terminal-user-prompt.ts');
         const result = await traced(
           'cli.teach',
           'AGENT',
@@ -1591,13 +1598,14 @@ async function main(argv: string[]): Promise<number> {
               persistProfile: values['persist-profile'],
               signal: ctrl.signal,
               noInteractive: values['no-interactive'],
+              onPrompt: values['no-interactive'] ? undefined : terminalUserPrompt,
               provider: values.provider as ProviderName | undefined,
               model: values.model,
               maxDurationMs: teachTimeoutMs,
               unbounded: values.unbounded,
               keepTest: values['keep-test'] || process.env.IMPRINT_KEEP_TEST === '1',
               agent: values.agent === 'codex' ? 'codex' : undefined,
-              onProgress: (message) => console.error(`[imprint teach] ${message}`),
+              onProgress: createLog('teach'),
             }),
         );
         const summary = formatFreshTeachSummary(result);

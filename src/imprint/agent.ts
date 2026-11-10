@@ -20,17 +20,8 @@ import {
 } from './provider-retry.ts';
 import { setSpanAttributes, traceToolIoEnabled, traced } from './tracing.ts';
 
-export interface AgentTool {
-  name: string;
-  description: string;
-  input_schema: {
-    type: 'object';
-    properties?: Record<string, unknown>;
-    required?: string[];
-    [k: string]: unknown;
-  };
-  handler: (input: unknown) => Promise<{ result: string; isError?: boolean }>;
-}
+import type { AgentTool } from './agent-tool.ts';
+export type { AgentTool } from './agent-tool.ts';
 
 export interface AgentProgress {
   /** 1-based turn number (turn 1 is the first LLM call). */

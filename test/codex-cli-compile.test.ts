@@ -168,7 +168,9 @@ describe('compiler process termination', () => {
         expect(Number.isInteger(grandchildPid)).toBe(true);
         expect(() => process.kill(grandchildPid, 0)).toThrow();
       }
-    });
+      // This stress case starts and reaps forty real processes. Keep the
+      // termination grace above strict, while allowing host startup variance.
+    }, 30_000);
   }
 });
 

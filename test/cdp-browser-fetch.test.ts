@@ -14,11 +14,304 @@ import {
   normalizeCdpResponseHeaders,
   parseCdpPageInspectionResult,
   parseSetCookieForCdp,
+  readCdpCookieSnapshot,
+  seedCdpCookies,
   validateFormPostNavigationHeaders,
 } from '../src/imprint/cdp-browser-fetch.ts';
+import { RuntimeCookieJar } from '../src/imprint/cookie-jar.ts';
 import { WorkflowSchema } from '../src/imprint/types.ts';
 
-const browserIt = process.env.CI !== 'true' || process.env.RUN_BROWSER_TESTS === '1' ? it : it.skip;
+// Real Chromium startup belongs to these integration fixtures, not Bun's
+// five-second unit-test budget. Explicit per-test budgets still take precedence.
+function browserIt(...[label, body, options]: Parameters<typeof it>): void {
+  const register =
+    process.env.CI !== 'true' || process.env.RUN_BROWSER_TESTS === '1' ? it : it.skip;
+  register(
+    label,
+    body,
+    typeof options === 'number' ? options : { ...options, timeout: options?.timeout ?? 30_000 },
+  );
+}
+type CookieSeedParams = Parameters<Parameters<typeof seedCdpCookies>[0]['setCookie']>[0];
+
+describe('complete CDP cookie snapshots', () => {
+  browserIt(
+    'exports other origins and paths, preserves removals, and isolates browser contexts',
+    async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const context = await browser.newContext();
+        await context.route('**/*', (route) => route.fulfill({ body: '<html>fixture</html>' }));
+        const foreign = await browser.newContext();
+        await foreign.addCookies([
+          { name: 'foreign', value: 'fixture-other-context', url: 'https://travel.fixture.test/' },
+        ]);
+        await context.addCookies([
+          {
+            name: 'login_session',
+            value: 'fixture-login',
+            domain: 'login.fixture.test',
+            path: '/',
+          },
+          {
+            name: 'path_session',
+            value: 'fixture-account',
+            domain: 'travel.fixture.test',
+            path: '/account',
+          },
+          {
+            name: 'travel_session',
+            value: 'fixture-travel',
+            domain: 'travel.fixture.test',
+            path: '/',
+          },
+        ]);
+        const page = await context.newPage();
+        await page.goto('https://travel.fixture.test/search');
+        const session = await context.newCDPSession(page);
+        const network = {
+          getAllCookies: () => session.send('Network.getAllCookies'),
+        } as Parameters<typeof readCdpCookieSnapshot>[0];
+        const cookies = await readCdpCookieSnapshot(network, 2000);
+        expect(cookies.map((cookie) => cookie.name).sort()).toEqual([
+          'login_session',
+          'path_session',
+          'travel_session',
+        ]);
+        const restored = await browser.newContext();
+        await restored.addCookies(
+          cookies.map((cookie) => ({
+            ...cookie,
+            sameSite: cookie.sameSite as 'Strict' | 'Lax' | 'None' | undefined,
+          })),
+        );
+        expect((await restored.cookies()).map((cookie) => cookie.name).sort()).toEqual([
+          'login_session',
+          'path_session',
+          'travel_session',
+        ]);
+        await context.clearCookies({ name: 'login_session' });
+        expect(
+          (await readCdpCookieSnapshot(network, 2000)).map((cookie) => cookie.name).sort(),
+        ).toEqual(['path_session', 'travel_session']);
+      } finally {
+        await browser.close();
+      }
+    },
+  );
+
+  it('preserves a failed snapshot instead of returning an empty jar', async () => {
+    const network = {
+      getAllCookies: async () => {
+        throw new Error('fixture snapshot unavailable');
+      },
+    } as Parameters<typeof readCdpCookieSnapshot>[0];
+    await expect(readCdpCookieSnapshot(network, 50)).rejects.toThrow(
+      'fixture snapshot unavailable',
+    );
+  });
+});
+
+describe('CDP cookie restoration', () => {
+  it('reports rejected and failed planting without counting fulfillment as acceptance', async () => {
+    const sent: CookieSeedParams[] = [];
+    const network = {
+      setCookie: async (cookie: CookieSeedParams) => {
+        sent.push(cookie);
+        if (cookie.name === 'rejected') return { success: false };
+        if (cookie.name === 'failed') throw new Error('fixture CDP failure with private details');
+        if (cookie.name === 'unconfirmed') return {} as { success: boolean };
+        return { success: true };
+      },
+    } as Parameters<typeof seedCdpCookies>[0];
+    const facts = await seedCdpCookies(
+      network,
+      [
+        {
+          name: '__Host-accepted',
+          value: 'fixture-private-cookie',
+          domain: 'travel.fixture.test',
+          path: '/',
+          secure: true,
+          httpOnly: true,
+          hostOnly: true,
+        },
+        {
+          name: 'rejected',
+          value: 'fixture-rejected',
+          domain: '.fixture.test',
+          path: '/account',
+          expires: 2_000_000_000,
+          hostOnly: false,
+        },
+        { name: 'failed', value: 'fixture-failed', domain: 'travel.fixture.test' },
+        { name: 'unconfirmed', value: 'fixture-unknown', domain: 'travel.fixture.test' },
+      ],
+      100,
+    );
+    expect(facts).toEqual({
+      attempted: 4,
+      accepted: 1,
+      rejected: 1,
+      failed: 2,
+      issues: [
+        { index: 1, outcome: 'rejected' },
+        { index: 2, outcome: 'error' },
+        { index: 3, outcome: 'error' },
+      ],
+      issuesTruncated: false,
+    });
+    expect(sent[0]).toMatchObject({
+      url: 'https://travel.fixture.test/',
+      path: '/',
+      secure: true,
+      httpOnly: true,
+    });
+    expect(sent[0]).not.toHaveProperty('domain');
+    expect(sent[0]).not.toHaveProperty('expires');
+    expect(sent[1]).toMatchObject({ domain: '.fixture.test', expires: 2_000_000_000 });
+    expect(sent[2]).not.toHaveProperty('domain');
+    expect(JSON.stringify(facts)).not.toContain('fixture');
+  });
+
+  browserIt(
+    'preserves same-name host/domain cookies through the runtime jar and fresh Chromium import',
+    async () => {
+      const browser = await chromium.launch({ headless: true });
+      try {
+        const source = await browser.newContext();
+        const page = await source.newPage();
+        const session = await source.newCDPSession(page);
+        const network = {
+          setCookie: (cookie: CookieSeedParams) => session.send('Network.setCookie', cookie),
+          getAllCookies: () => session.send('Network.getAllCookies'),
+        } as Parameters<typeof seedCdpCookies>[0] & Parameters<typeof readCdpCookieSnapshot>[0];
+        await seedCdpCookies(
+          network,
+          [
+            {
+              name: 'sid',
+              value: 'fixture-host',
+              domain: 'fixture.test',
+              path: '/',
+              secure: true,
+              hostOnly: true,
+            },
+            {
+              name: 'sid',
+              value: 'fixture-domain',
+              domain: '.fixture.test',
+              path: '/',
+              secure: true,
+              hostOnly: false,
+            },
+          ],
+          2_000,
+        );
+        const snapshot = await readCdpCookieSnapshot(network, 2_000);
+        expect(snapshot).toHaveLength(2);
+        const jar = new RuntimeCookieJar(snapshot);
+        expect(jar.toJSON()).toHaveLength(2);
+        const restored = await browser.newContext();
+        const restoredPage = await restored.newPage();
+        const restoredSession = await restored.newCDPSession(restoredPage);
+        const restoredNetwork = {
+          setCookie: (cookie: CookieSeedParams) =>
+            restoredSession.send('Network.setCookie', cookie),
+          getAllCookies: () => restoredSession.send('Network.getAllCookies'),
+        } as Parameters<typeof seedCdpCookies>[0] & Parameters<typeof readCdpCookieSnapshot>[0];
+        expect(await seedCdpCookies(restoredNetwork, jar.toJSON(), 2_000)).toMatchObject({
+          accepted: 2,
+          rejected: 0,
+          failed: 0,
+        });
+        expect(
+          (await readCdpCookieSnapshot(restoredNetwork, 2_000))
+            .map((c) => [c.value, c.hostOnly])
+            .sort(),
+        ).toEqual([
+          ['fixture-domain', false],
+          ['fixture-host', true],
+        ]);
+        await restored.route('https://child.fixture.test/**', async (route) => {
+          const headers = await route.request().allHeaders();
+          await route.fulfill({ body: headers.cookie ?? '' });
+        });
+        await restoredPage.goto('https://child.fixture.test/');
+        expect(await restoredPage.locator('body').innerText()).toBe('sid=fixture-domain');
+      } finally {
+        await browser.close();
+      }
+    },
+  );
+
+  browserIt('round-trips host-only, domain and prefixed cookies through Chromium', async () => {
+    const browser = await chromium.launch({ headless: true });
+    try {
+      const source = await browser.newContext();
+      const page = await source.newPage();
+      const session = await source.newCDPSession(page);
+      const network = {
+        setCookie: (cookie: CookieSeedParams) => session.send('Network.setCookie', cookie),
+        getAllCookies: () => session.send('Network.getAllCookies'),
+      } as Parameters<typeof seedCdpCookies>[0] & Parameters<typeof readCdpCookieSnapshot>[0];
+      const facts = await seedCdpCookies(
+        network,
+        [
+          {
+            name: '__Host-session',
+            value: 'fixture-host-session',
+            domain: 'travel.fixture.test',
+            path: '/',
+            secure: true,
+            httpOnly: true,
+            sameSite: 'Lax',
+            hostOnly: true,
+          },
+          {
+            name: 'shared',
+            value: 'fixture-domain-session',
+            domain: '.fixture.test',
+            path: '/',
+            secure: true,
+            hostOnly: false,
+          },
+        ],
+        2_000,
+      );
+      expect(facts).toMatchObject({ attempted: 2, accepted: 2, rejected: 0, failed: 0 });
+      const snapshot = await readCdpCookieSnapshot(network, 2_000);
+      expect(snapshot.find((cookie) => cookie.name === '__Host-session')).toMatchObject({
+        domain: 'travel.fixture.test',
+        hostOnly: true,
+        secure: true,
+        httpOnly: true,
+        sameSite: 'Lax',
+      });
+      expect(snapshot.find((cookie) => cookie.name === 'shared')).toMatchObject({
+        domain: '.fixture.test',
+        hostOnly: false,
+      });
+      const restored = await browser.newContext();
+      const restoredPage = await restored.newPage();
+      const restoredSession = await restored.newCDPSession(restoredPage);
+      const restoredNetwork = {
+        setCookie: (cookie: CookieSeedParams) => restoredSession.send('Network.setCookie', cookie),
+      } as Parameters<typeof seedCdpCookies>[0];
+      await seedCdpCookies(restoredNetwork, snapshot, 2_000);
+      expect(
+        (await restored.cookies('https://travel.fixture.test/'))
+          .map((cookie) => cookie.name)
+          .sort(),
+      ).toEqual(['__Host-session', 'shared']);
+      expect(
+        (await restored.cookies('https://sibling.fixture.test/')).map((cookie) => cookie.name),
+      ).toEqual(['shared']);
+    } finally {
+      await browser.close();
+    }
+  });
+});
 
 describe('buildNavigationSelectorExpression', () => {
   it('quotes arbitrary CSS selectors as data instead of executable source', () => {
@@ -403,6 +696,14 @@ afterEach(() => {
 });
 
 describe('parseSetCookieForCdp (cross-origin Set-Cookie re-injection)', () => {
+  it('encodes a Domain attribute without a leading dot as a CDP domain cookie', () => {
+    expect(
+      parseSetCookieForCdp(
+        'sid=fixture-domain; Domain=fixture.test; Path=/',
+        'https://fixture.test/',
+      ),
+    ).toMatchObject({ domain: '.fixture.test' });
+  });
   const reqUrl = 'https://functions.example.com/login';
 
   it('parses name=value with url scoping and no attributes', () => {
@@ -1140,6 +1441,7 @@ describe('navigation network-response capture', () => {
               };
             },
             getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
           },
           Page: {
             enable: async () => ({}),
@@ -1380,6 +1682,7 @@ describe('navigation network-response capture', () => {
             enable: async () => ({}),
             setUserAgentOverride: async () => ({}),
             getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
             requestWillBeSent: (fn: (event: unknown) => void) => {
               listeners.request = fn;
             },
@@ -1589,6 +1892,7 @@ describe('navigation network-response capture', () => {
               return never;
             },
             getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
           },
           Page: {
             enable: async () => ({}),
@@ -1707,6 +2011,7 @@ describe('navigation network-response capture', () => {
             loadingFailed: () => {},
             getResponseBody: async () => ({ body: '' }),
             getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
           },
           Page: {
             enable: async () => ({}),
@@ -1750,6 +2055,72 @@ describe('navigation network-response capture', () => {
 });
 
 describe('createCdpBrowserFetch CDP timeouts', () => {
+  it('reads existing diagnostic cookies without launching before use or after close', async () => {
+    let launches = 0;
+    let navigations = 0;
+    let reads = 0;
+    __setCdpBrowserFetchHooksForTest({
+      launchChromium: async () => {
+        launches++;
+        return {
+          process: {} as never,
+          port: 12345,
+          userDataDir: '/tmp/imprint-fake-chrome',
+          ready: Promise.resolve(),
+          close: async () => {},
+        } as Awaited<ReturnType<typeof import('../src/imprint/chromium.ts').launchChromium>>;
+      },
+      connectCdp: async () =>
+        ({
+          Runtime: {
+            enable: async () => ({}),
+            evaluate: async () => ({ result: { value: '' } }),
+          },
+          Network: {
+            enable: async () => ({}),
+            requestWillBeSent: () => {},
+            responseReceived: () => {},
+            loadingFinished: () => {},
+            loadingFailed: () => {},
+            setUserAgentOverride: async () => ({}),
+            getAllCookies: async () => {
+              reads++;
+              return {
+                cookies: [{ name: 'session', value: 'fixture', domain: 'fixture.test', path: '/' }],
+              };
+            },
+          },
+          Page: {
+            enable: async () => ({}),
+            navigate: async () => {
+              navigations++;
+              return {};
+            },
+            loadEventFired: async () => ({}),
+          },
+          Input: {},
+          close: async () => {},
+        }) as never,
+    });
+    const cf = createCdpBrowserFetch({ baseUrl: 'https://fixture.test/', abckWaitSeconds: 0 });
+    try {
+      expect(await cf.snapshotExistingCookies?.()).toBeUndefined();
+      expect(launches).toBe(0);
+      await cf.mintJar();
+      expect(await cf.snapshotExistingCookies?.()).toEqual([
+        expect.objectContaining({ name: 'session', hostOnly: true }),
+      ]);
+      expect(reads).toBe(2);
+      await cf.close();
+      expect(await cf.snapshotExistingCookies?.()).toBeUndefined();
+      expect(launches).toBe(1);
+      expect(navigations).toBe(1);
+      expect(reads).toBe(2);
+    } finally {
+      await cf.close();
+    }
+  });
+
   it('times out a stuck startup CDP command and closes the browser', async () => {
     let chromeClosed = 0;
     let clientClosed = 0;
@@ -1777,6 +2148,7 @@ describe('createCdpBrowserFetch CDP timeouts', () => {
             setCookie: async () => ({}),
             setUserAgentOverride: async () => ({}),
             getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
           },
           Page: {
             enable: async () => ({}),

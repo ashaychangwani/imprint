@@ -71,7 +71,16 @@ for the master and request a narrower supported contract.
 Optional breadth can wait.
 
 Request research for every selected operation has already finished. Read the
-complete `apiResearch` handoff list before proposing this tool. A proven handoff
+supplied `apiResearch` handoffs for this tool and its declared dependencies.
+`apiResearchIndex` summarizes the other completed operations without repeating
+their full response previews and histories. Use those summaries together with
+`availableProducers` and `siblingToolEvidence` to notice a possible dependency or
+boundary change. When a sibling's exact construction or response is needed,
+read its `handoffRef` through run-local shared research; do not read unrelated
+handoffs simply because they exist. If no readable reference is supplied, tell
+the master which operation and detail you need. The index is a reading guide,
+not independent evidence or a replacement for a consumer's own test.
+A proven handoff
 contains the exact smallest tested workflow, parameter values, winning rung,
 backend facts, and redacted response preview. Use those factual request and
 response shapes to decide which calls stay inside one tool, every justified
@@ -86,10 +95,14 @@ The master has already returned partial handoffs to their retained researchers;
 do not silently complete or reinterpret a partial request in this planning
 stage. If an injected or older handoff is still partial, preserve its stated
 gap and tell the master that research must continue.
-Carry the proven workflow, request transform and producer value representations
-through unchanged. Plan parsing around that tested construction; do not rewrite
-its nested request envelope or redefine an upstream value's shape in prose.
-An executable construction change needs fresh research proof.
+Use the tested workflow, request transform and producer value representations
+as the factual starting point. Plan parsing around that construction unless the
+accepted contract or evidence supports revising it. Keep execution provenance
+truthful: a plain-fetch request does not acquire response-navigation provenance
+because a comparable parser fixture came from a browser response. You may propose
+a revised construction for master review or ask for focused research when that
+would resolve an uncertainty. Prior observations describe only the construction
+they executed; the revised build receives its own normal checks.
 Do not replace a proven minimal call with a larger recorded request graph. A
 blocked handoff is an exact research gap for the master to resolve; it is not
 automatic evidence for playbook.

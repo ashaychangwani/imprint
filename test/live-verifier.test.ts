@@ -15,7 +15,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join as pathJoin } from 'node:path';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
 import { registerCompilerProcessCleanup } from '../src/imprint/compiler-process.ts';
-import { type CredentialBackend, setBackendOverride } from '../src/imprint/credential-store.ts';
+import {
+  type CredentialBackend,
+  loadSiteCredentials,
+  setBackendOverride,
+} from '../src/imprint/credential-store.ts';
 import {
   LIVE_VERIFICATION_EVIDENCE_FILE,
   LiveVerificationAuthSession,
@@ -93,6 +97,7 @@ describe('live verifier auth refresh', () => {
       listSites: async () => ['fixture-site'],
     };
     setBackendOverride(backend);
+    const durableRevision = (await loadSiteCredentials('fixture-site')).revision;
 
     const siteDir = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-refresh-'));
     dirs.push(siteDir);
@@ -215,6 +220,8 @@ describe('live verifier auth refresh', () => {
     });
     expect(receivedCredentials).toEqual({
       site: 'fixture-site',
+      source: 'durable-store',
+      durableRevision,
       cookies: [],
       values: { username: 'fixture-user', password: 'fixture-password' },
       storage: [],

@@ -94,6 +94,148 @@ afterEach(() => {
 });
 
 describe('auth action runtime', () => {
+  it('keeps cross-origin HTTP response cookies through later browser navigation and captures', async () => {
+    let requests = 0;
+    const wf = workflow({
+      requests: [
+        { method: 'POST', url: 'https://api.fixture.test/start', headers: {} },
+        { method: 'GET', url: 'https://travel.fixture.test/search', headers: {}, mode: 'navigate' },
+        {
+          method: 'POST',
+          url: 'https://api.fixture.test/complete',
+          headers: {},
+          captures: [
+            {
+              name: 'http_cookie',
+              source: 'cookie',
+              cookie: 'only_http',
+              domain: 'api.fixture.test',
+              path: '/',
+            },
+          ],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }, { request: 1 }, { request: 2 }],
+            outcome: { type: 'success', evidence: ['http_cookie'] },
+          },
+        },
+        persist: [],
+        crossOriginCookieReinjection: false,
+      },
+    });
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials,
+      fetchImpl: (async (_url, init) => {
+        requests++;
+        if (requests === 2)
+          expect(new Headers(init?.headers).get('cookie')).toBe('only_http=fixture-response');
+        return new Response('{}', {
+          headers: requests === 1 ? { 'set-cookie': 'only_http=fixture-response; Path=/' } : {},
+        });
+      }) as typeof fetch,
+      browser: { navigate: async () => new Response('{}'), snapshotCookies: async () => [] },
+    });
+    expect(result.ok).toBe(true);
+    expect(await backend.getCookies('fixture-auth')).toEqual([
+      expect.objectContaining({
+        name: 'only_http',
+        value: 'fixture-response',
+        domain: 'api.fixture.test',
+      }),
+    ]);
+  });
+  it('persists browser cookie rotations and deletions after in-page requests and navigation', async () => {
+    const stale = {
+      name: 'removed',
+      value: 'fixture-old',
+      domain: 'login.fixture.test',
+      path: '/',
+    };
+    const current = [
+      { name: 'login_session', value: 'fixture-fresh', domain: 'login.fixture.test', path: '/' },
+      {
+        name: 'path_session',
+        value: 'fixture-fresh',
+        domain: 'travel.fixture.test',
+        path: '/account',
+      },
+    ];
+    const wf = workflow({
+      requests: [
+        {
+          method: 'POST',
+          url: 'https://login.fixture.test/complete',
+          headers: {},
+          captures: [{ name: 'logged_in', source: 'json', path: 'ok', equals: true }],
+        },
+      ],
+      authConfig: {
+        entry: 'finish',
+        actions: {
+          finish: {
+            steps: [{ request: 0 }],
+            outcome: { type: 'success', evidence: ['logged_in'] },
+          },
+        },
+        persist: [],
+      },
+    });
+    const result = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials: { ...credentials, cookies: [stale] },
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      browser: {
+        navigate: async () => {
+          throw new Error('not a navigation');
+        },
+        snapshotCookies: async () => current,
+      },
+    });
+    expect(result.ok).toBe(true);
+    expect(await backend.getCookies('fixture-auth')).toEqual(
+      current.map((cookie) => expect.objectContaining(cookie)),
+    );
+    const unavailable = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials: { ...credentials, cookies: [stale] },
+      fetchImpl: (async () => new Response('{"ok":true}')) as unknown as typeof fetch,
+      browser: {
+        navigate: async () => {
+          throw new Error('not a navigation');
+        },
+        snapshotCookies: async () => {
+          throw new Error('fixture snapshot unavailable');
+        },
+      },
+    });
+    expect(unavailable).toMatchObject({ ok: false, error: 'NETWORK' });
+    expect(await backend.getCookies('fixture-auth')).toEqual(
+      current.map((cookie) => expect.objectContaining(cookie)),
+    );
+    const firstRequest = wf.requests[0];
+    if (firstRequest) firstRequest.mode = 'navigate';
+    const navigated = await executeWorkflow({
+      workflow: wf,
+      params: {},
+      credentials: { ...credentials, cookies: [stale] },
+      browser: {
+        navigate: async () => new Response('{"ok":true}'),
+        snapshotCookies: async () => current,
+      },
+    });
+    expect(navigated.ok).toBe(true);
+    expect(await backend.getCookies('fixture-auth')).toEqual(
+      current.map((cookie) => expect.objectContaining(cookie)),
+    );
+  });
   it('retains each auth response before a later request fails', async () => {
     const evidence: ResponseEvidence[] = [];
     let calls = 0;

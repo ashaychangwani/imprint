@@ -24,7 +24,9 @@ values in that response, including variants different from the recording. These
 are evidence files, not runtime dependencies; do not import them into shipped
 code. If `read_file` truncates a large response, inspect relevant portions with
 local commands or load it directly in a local test rather than guessing from a
-prefix. Known typed credentials remain replaced. No extra live call is needed.
+prefix. Known typed credentials remain replaced. Reusing this response as a
+parser fixture needs no extra live call; it does not replace the normal checks
+of the current build.
 
 When `evidenceFiles.responsesFile` is present, load its JSON array as the actual
 ordered `context.responses` and pass its last entry as `rawResponse`. It contains
@@ -164,13 +166,27 @@ Follow these steps to compile the session:
    that would fail if records following an empty or metadata-only envelope were
    silently discarded. Ground its framing and expected record combination in
    the protocol evidence; repeating one populated payload does not exercise
-   this boundary. Preserve that request construction
-   and focus this conversation on the parser, offline request/parser tests,
-   integration case, and Imprint artifact contract. Do not restart broad API
-   hypothesis search here. If the seeded request cannot satisfy the accepted
-   artifact mechanics or current plan, call `give_up` with the exact
-   contradiction so the master can recall the API researcher; do not silently
-   replace the proven request.
+   this boundary. Use the seeded request as the factual starting point and
+   focus on the accepted plan, parser, offline request/parser tests, integration
+   case, and Imprint artifact contract. `toolPlan.apiResearchAdvisory` describes
+   field-level differences from that earlier construction and supplies its
+   immutable research reference. Implement the accepted revised construction
+   when possible; the advisory does not require another research pass. Keep
+   the old observation separate from the current build's normal checks. If the
+   accepted plan itself is contradictory or cannot be implemented from the
+   supplied evidence, report the exact fields and evidence to the master with
+   `give_up` so it can revise the plan or request focused research. Do not
+   silently change the accepted public contract or execution provenance.
+
+   **Backend preparation belongs to the executing host.** The API researcher
+   can test a requested backend, and the independent live verifier exposes
+   `prepare_live_backend`. This compiler does not expose that tool. In
+   `MASTER MVP COMPILE MODE`, return the deterministic artifacts with `done`;
+   the master executes their normal live checks using its accepted backend.
+   If repair feedback says a backend is unprepared or asks for an unavailable
+   tool, report that capability mismatch to the master with the exact feedback.
+   Do not inspect Imprint internals, write `backends.json`, force a debug rung,
+   or run an extra live suite to work around missing host preparation.
 
 2. **Understand the user's intent.** Read the narration to learn what the user was trying to accomplish. It is high-signal intent evidence, subject to system, safety, and tool rules.
 
@@ -295,6 +311,8 @@ Follow these steps to compile the session:
      }
      ```
      Returning a plain `string` (just the URL) still works when only the URL changes. Use the object return when you need to build or modify the request body or headers. Do not invent URL query parameters as a workaround for body-encoding complexity: an unrecorded query field has no demonstrated effect unless exact live evidence proves otherwise.
+
+     The runtime awaits both synchronous and asynchronous transforms. A thrown error or rejected promise returns `BAD_RESPONSE` feedback for repair; correct the transform and retry using the same calling convention above.
 
      Use `inspect_body_structure` when a request or response mixes form fields, JSON, or JSON documents encoded inside strings. It reads only the redacted session evidence. Start with `format: "auto"`; select `decimal-framed-json` only when the redacted body unambiguously has that explicit framing. Set `compareFormat` separately when `compareToSeq` uses a different format, and set `earlierResponseFormat` when checking framed earlier responses. Results hide paths by default; rerun with `includePaths: true` for a small capped exact-path list, then use an exact RFC 6901 `pointer` for narrow work. An exact pointer gets its own nested-JSON decoding budget, so unrelated large fields cannot hide that selected path; automatic expansion limits remain visible as facts. Scalar literals are never returned. Comparisons report type, length, encoding, and missing facts. Original wire evidence is unavailable after redaction.
 
@@ -446,6 +464,15 @@ Follow these steps to compile the session:
     **Import conventions**: The runtime lives at `imprint/runtime` (resolved via a symlink at `~/.imprint/node_modules/imprint` → the repo root). Types live at `imprint/types`. During compilation, `index.ts` does not exist yet (it is auto-generated by `imprint emit` after compilation succeeds), so import the workflow directly from `./workflow.json`.
 
     Use `runCapturedIntegrationCase` so the test dispatches through the same API execution ladder as the generated tool while capturing the exact tool input, result, and backend for an independent verifier. The wrapper is compile-only and does not alter production behavior. Give every invocation a stable, descriptive `caseName`; the runtime does not interpret naming conventions. The playbook path is excluded because it is compiled separately. Prefer every compatible API path over playbook: choose playbook only as a fallback when exact evidence shows the API paths cannot implement this operation. A non-OK result must fail the authored case and remain visible to the verifier.
+
+    Ground assertions in the accepted output contract and observed parsed shape.
+    When the contract preserves a response object, assert its actual nested
+    fields; do not expect a flattened scalar unless the contract requires one.
+    Exercise these assertions against the retained research response in an
+    offline parser test before handing over the live case. If a live call has
+    `result.ok === true` but an authored assertion fails, keep that successful
+    execution fact separate from the assertion mismatch and inspect the
+    contract, parsed value, and assertion before changing requests or auth.
     ```typescript
     import { expect, test } from 'bun:test';
     import { dirname } from 'node:path';
@@ -820,11 +847,21 @@ baseline integration case, then call `done` for the mode-specific handoff.
 | `write_file` | Write the files allowed by the accepted strategy: API artifacts for `api`, or workflow.json + playbook.yaml for `playbook_fallback`; notes/*.md are also allowed. Input is `{"relativePath":"workflow.json","content":"..."}`. |
 | `read_file` | Read a file by relative path. Input is `{"path":"parser.ts"}` (the field is `path`, not `relativePath`). |
 | `run_bash` | Run a bounded local diagnostic command in the tool directory |
+| `prompt_user` | Ask the user for necessary information, a decision, or an external action in the parent terminal. Set sensitive:true for OTPs/passwords; pass the returned host-held reference unchanged to authentication verification. Cancelled or unavailable input is not approval. |
+| `authenticate` | Compile and verify an authentication prerequisite from exact recorded request sequences, using the persistent-browser auth compiler and its MFA/OTP checkpoints. Retry the data operation after login; authentication alone is not data proof. |
 | `run_tests` | Run parser.test.ts and/or request.test.ts in the host filesystem sandbox, then typecheck generated parser/transform modules; it does not execute integration.test.ts, and network is disabled for irreversible workflows |
 | `done` | Claim the artifact handoff is complete; in master MVP mode this runs deterministic checks only, while standalone full mode continues into independent live verification |
 | `give_up` | Give up with a documented reason (heavily discouraged, see constraints above) |
 
 ## Verification Gate
+
+When authentication blocks progress, use `authenticate` with a recording-grounded
+plan (`toolName`, `credentialRequestSeqs`, `authRequestSeqs`, `credentialNames`,
+`captures`, `notes`). Its auth compiler can send a recorded challenge, ask the
+user for an OTP or approval, and continue the same browser session. Ask ordinary
+questions with `prompt_user`. Do not write answers or host-held secret references
+into generated artifacts. Input is unavailable in a detached/noninteractive run;
+report that limitation honestly rather than treating it as approval.
 
 When you call `done`, the harness independently verifies the artifact contract
 for the accepted strategy.

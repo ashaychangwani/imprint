@@ -1,5 +1,7 @@
-import { Client } from '@modelcontextprotocol/sdk/client/index.js';
-import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { randomUUID } from 'node:crypto';
+import type { CallToolResult, Tool } from '@modelcontextprotocol/sdk/types.js';
+import { AuthToolPlanSchema } from './auth-plan.ts';
+import { createCompileToolExecutor } from './compile-tool-executor.ts';
 import { currentNativeTeachAgents } from './native-teach-agents.ts';
 import { SHARED_RESEARCH_INSTRUCTIONS } from './teach-research-memory.ts';
 /**
@@ -12,17 +14,14 @@ import { SHARED_RESEARCH_INSTRUCTIONS } from './teach-research-memory.ts';
  */
 
 import type { ChildProcess } from 'node:child_process';
-import {
-  appendFileSync,
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  unlinkSync,
-  writeFileSync,
-} from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { isAbsolute as pathIsAbsolute, join as pathJoin } from 'node:path';
 import { type Span, context as otelContext } from '@opentelemetry/api';
-import type { AuthCliCompileMode } from './auth-compile-tools.ts';
+import {
+  AUTH_CHECKPOINT_TOOLS,
+  type AuthCliCompileMode,
+  parseAuthCheckpoint,
+} from './auth-compile-tools.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import type {
   AuthCheckpoint,
@@ -43,7 +42,7 @@ import {
   watchCompileProviderDeadline,
 } from './compile-provider-control.ts';
 import type { CompileStrategyKind } from './compile-strategy.ts';
-import { recordCompilerHostError } from './compiler-log.ts';
+import { compilerToolFailure, recordCompilerHostError } from './compiler-log.ts';
 import {
   collectOwnedProcess,
   spawnOwnedProcess,
@@ -392,28 +391,30 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
 
   const family = currentNativeTeachAgents();
   if (family) {
-    const client = new Client({ name: 'imprint-native-compiler', version: '1.0.0' });
-    const providerControl = createCompileProviderControl(runDeadline ?? opts.deadlineMs);
-    const env = Object.fromEntries(
-      Object.entries({ ...process.env, ...providerControl.env }).filter(
-        (entry): entry is [string, string] =>
-          entry[0] !== 'IMPRINT_TEACH_CREDENTIALS' && entry[1] !== undefined,
-      ),
+    const executor = createCompileToolExecutor(
+      {
+        sessionPath: sessionPathAbs,
+        toolDir: opts.absoluteToolDir,
+        site: opts.authMode?.site,
+        authToolPlan: opts.authMode
+          ? AuthToolPlanSchema.parse(JSON.parse(opts.authMode.authPlanJson))
+          : undefined,
+        provider: 'codex-cli',
+        candidate: opts.candidate,
+        sharedContext: opts.sharedContext,
+        buildPlanPath: opts.buildPlanPath,
+        sharedModules: opts.sharedModules,
+        strategyKind: opts.strategyKind,
+        revisionMode: opts.revisionMode,
+        verificationMode: opts.verificationMode,
+        sharedTriageSelection: opts.sharedTriageSelection,
+      },
+      { session: opts.session, signal: opts.signal, runDeadline },
     );
-    const transport = new StdioClientTransport({
-      env,
-      command: bunPath,
-      args: mcpArgs,
-      cwd: opts.absoluteToolDir,
-      stderr: 'pipe',
-    });
     const conversationLogPath = pathJoin(opts.absoluteToolDir, '.compile-log.json');
     const events: unknown[] = existsSync(conversationLogPath)
       ? JSON.parse(readFileSync(conversationLogPath, 'utf8'))
       : [];
-    transport.stderr?.on('data', (chunk) =>
-      appendFileSync(pathJoin(opts.absoluteToolDir, '.native-mcp-stderr.log'), chunk),
-    );
     const sharedResearch = family.sharedResearch
       ? {
           runId: family.sharedResearch.runId,
@@ -428,30 +429,83 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
       ? `${SHARED_RESEARCH_INSTRUCTIONS}\n${JSON.stringify({ sharedResearch })}\nUse the native shared_research tool with this exchange schema to publish/query findings; do not embed publications in your final compiler summary.\n`
       : '';
     try {
-      await client.connect(transport);
       const response = await family.submit(
-        `${sharedPrompt}${initialPrompt}\n\nNative compiler: use list_assignment_tools and call_assignment_tool for this assignment in place of direct imprint-compile MCP names. All writes and tests must go through those tools. After done, give_up, or an auth checkpoint returns, submit a short summary to the host and stop this turn. Native subagents can assist with independent implementation questions; retain separate workspaces and do not substitute their prose for test evidence.`,
+        `${sharedPrompt}${initialPrompt}\n\nNative compiler: use list_assignment_tools and call_assignment_tool for this assignment in place of direct imprint-compile MCP names. All writes and tests must go through those tools. ${opts.authMode?.executeCheckpoint ? 'Auth host tools execute inline: await each verification, browser operation, human question, or cooldown result and continue this same assignment. Submit a short summary only after done or give_up returns.' : 'After done, give_up, or a recorded auth checkpoint returns, submit a short summary to the host and stop this turn.'} Native subagents can assist with independent implementation questions; retain separate workspaces and do not substitute their prose for test evidence.`,
         {
           // The family already scopes this key to the run. Revision directories
           // change; the public tool's retained compiler conversation must not.
           conversation: `compiler:${opts.candidate?.toolName ?? opts.absoluteToolDir}`,
+          contextRef: opts.authMode?.contextRef,
           signal: opts.signal,
-          call: async (name, args) => {
-            const result =
-              name === '__list'
-                ? await client.listTools()
-                : await client.callTool({ name, arguments: args }, undefined, {
-                    signal: opts.signal,
-                    timeout: MAX_MCP_TOOL_TIMEOUT_SEC * 1000,
-                  });
-            events.push({ timestamp: new Date().toISOString(), name, args, result });
-            writeFileSync(conversationLogPath, JSON.stringify(events), { mode: 0o600 });
-            return result;
+          call: async (name, args, requestSignal) => {
+            const signal = requestSignal ?? opts.signal;
+            const requestId = randomUUID();
+            const started = performance.now();
+            const save = () =>
+              writeFileSync(conversationLogPath, JSON.stringify(events), { mode: 0o600 });
+            events.push({
+              type: 'tool.started',
+              timestamp: new Date().toISOString(),
+              name,
+              requestId,
+            });
+            save();
+            let failure: ReturnType<typeof compilerToolFailure> | undefined;
+            let result: CallToolResult | { tools: Tool[] };
+            try {
+              if (name === '__list') {
+                const listed = { tools: executor.tools };
+                result = opts.authMode?.executeCheckpoint
+                  ? {
+                      ...listed,
+                      tools: listed.tools.map((tool) => {
+                        const checkpoint = AUTH_CHECKPOINT_TOOLS.find(
+                          (definition) => definition.name === tool.name,
+                        );
+                        return checkpoint
+                          ? {
+                              ...tool,
+                              description: `${checkpoint.description} Await the host result and continue in this same assignment.`,
+                            }
+                          : tool;
+                      }),
+                    }
+                  : listed;
+              } else if (
+                opts.authMode?.executeCheckpoint &&
+                AUTH_CHECKPOINT_TOOLS.some((tool) => tool.name === name)
+              ) {
+                const executed = await opts.authMode.executeCheckpoint(
+                  parseAuthCheckpoint(name, args),
+                  signal,
+                );
+                result = {
+                  content: [{ type: 'text', text: executed.result }],
+                  ...(executed.isError ? { isError: true } : {}),
+                };
+              } else {
+                result = await executor.callTool(name, args, signal);
+              }
+              events.push({ timestamp: new Date().toISOString(), name, args, result });
+              return result;
+            } catch (error) {
+              failure = compilerToolFailure(error);
+              throw error;
+            } finally {
+              events.push({
+                type: 'tool.settled',
+                timestamp: new Date().toISOString(),
+                name,
+                requestId,
+                durationMs: performance.now() - started,
+                status: signal?.aborted ? 'cancelled' : failure ? 'threw' : 'returned',
+                ...(failure ? { error: failure } : {}),
+              });
+              save();
+            }
           },
         },
       );
-      const interruption = providerControl.interruption();
-      if (interruption) throw compileProviderInterruptionError(interruption);
       events.push({ type: 'native.completed', ...response });
       writeFileSync(conversationLogPath, JSON.stringify(events), { mode: 0o600 });
       return completedCompileResult(opts, {
@@ -477,8 +531,7 @@ Use the imprint-compile MCP tools to inspect the session, write artifacts, run t
         ),
       });
     } finally {
-      providerControl.dispose();
-      await client.close();
+      await executor.close();
     }
   }
 

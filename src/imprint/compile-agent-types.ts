@@ -7,6 +7,7 @@
  */
 
 import type { AgentProgress } from './agent.ts';
+import type { AuthBrowserAction } from './auth-browser-discovery.ts';
 import { type AssignedSharedModule, describeAssignedModules } from './build-plan.ts';
 import type { ProviderInterruptionReason, ProviderReportedError } from './provider-retry.ts';
 import type { SharedCompileContext, ToolCandidate } from './tool-candidates.ts';
@@ -123,12 +124,10 @@ export interface CompileAgentProgress extends AgentProgress {
   };
 }
 
-/** A mid-loop checkpoint the auth compile agent reaches: it calls a checkpoint
- *  tool (which writes a sentinel) and then STOPS its turn. The orchestrator
- *  (teach) performs the action — it owns the live browser session, the TUI, and
- *  the cooldown — then resumes the agent (`claude --resume`) with the result as a
- *  follow-up user message. Site/channel-agnostic. */
+/** A host operation shared by inline native/API tools and CLI checkpoint/resume.
+ * The host owns the browser, prompt references, and declared continuation. */
 export type AuthCheckpoint =
+  | ({ kind: 'interact_verification_browser' } & AuthBrowserAction)
   | {
       kind: 'run_verification';
       action: string;
@@ -143,6 +142,11 @@ export type AuthCheckpoint =
     }
   | { kind: 'prompt_user'; message: string; options?: string[] }
   | { kind: 'wait_for_cooldown'; minutes: number; reason?: string };
+
+export interface AuthCheckpointResult {
+  result: string;
+  isError?: boolean;
+}
 
 export interface CompileAgentResult {
   /** True only if external verification passed. */

@@ -1,8 +1,17 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join as pathJoin } from 'node:path';
-import { compileAuthAgent } from '../src/imprint/auth-compile-agent.ts';
+import type { AuthBrowserAction } from '../src/imprint/auth-browser-discovery.ts';
+import { AuthCompileContext, compileAuthAgent } from '../src/imprint/auth-compile-agent.ts';
 import {
   AUTH_COMPILE_TOOL_NAMES,
   AUTH_VERIFICATION_ATTEMPT_SENTINEL,
@@ -14,7 +23,12 @@ import {
   readAuthVerificationReceiptStatus,
 } from '../src/imprint/auth-compile-tools.ts';
 import { __setAuthVerifierLadderForTest } from '../src/imprint/auth-verifier.ts';
+import { renderWorkflowRequests } from '../src/imprint/backend-ladder.ts';
 import type { AuthToolPlan } from '../src/imprint/build-plan.ts';
+import { type CredentialBackend, setBackendOverride } from '../src/imprint/credential-store.ts';
+import type { ToolUseProvider } from '../src/imprint/llm.ts';
+import { NativeTeachAgents } from '../src/imprint/native-teach-agents.ts';
+import { RunDeadline } from '../src/imprint/provider-retry.ts';
 import {
   ProviderDeadlineError,
   ProviderReportedError,
@@ -22,12 +36,412 @@ import {
 } from '../src/imprint/provider-retry.ts';
 import { recordedRequestMatchesWorkflow } from '../src/imprint/recording-request.ts';
 import { type Session, type Workflow, WorkflowSchema } from '../src/imprint/types.ts';
+import { UserInteraction } from '../src/imprint/user-interaction.ts';
 
 const originalPath = process.env.PATH;
 const originalHome = process.env.IMPRINT_HOME;
 const originalTeachCredentials = process.env.IMPRINT_TEACH_CREDENTIALS;
 type VerifierRunner = NonNullable<Parameters<typeof __setAuthVerifierLadderForTest>[0]>;
 type VerifierRunnerArgs = Parameters<VerifierRunner>[0];
+
+describe('interactive API auth compiler', () => {
+  it('returns an explicit nonsecret choice so the agent can distinguish Unable from Ready', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-api-auth-choice-'));
+    const toolDir = pathJoin(root, 'authentication');
+    const responses: string[] = [];
+    const otherAnswer = 'fixture-sensitive-other-answer';
+    let promptCount = 0;
+    const script = [
+      {
+        name: 'prompt_user',
+        input: { message: 'Is the fixture device ready?', options: ['Ready', 'Unable'] },
+      },
+      {
+        name: 'prompt_user',
+        input: { message: 'Is the fixture device ready?', options: ['Ready', 'Unable'] },
+      },
+      { name: 'give_up', input: { reason: 'Human selected Unable; no fixture login was fired.' } },
+    ];
+    const provider: ToolUseProvider = {
+      name: 'anthropic-api',
+      analyze: async () => {
+        throw new Error('Unexpected ordinary analyze call');
+      },
+      messageWithTools: async (input) => {
+        responses.push(JSON.stringify(input.messages));
+        const next = script.shift();
+        if (!next) throw new Error('Unexpected extra choice turn');
+        return {
+          id: `fixture-choice-${script.length}`,
+          type: 'message',
+          role: 'assistant',
+          model: 'fixture',
+          content: [{ type: 'tool_use', id: `choice-${script.length}`, ...next }],
+          stop_reason: 'tool_use',
+          stop_sequence: null,
+          usage: { input_tokens: 1, output_tokens: 1 },
+        } as Awaited<ReturnType<ToolUseProvider['messageWithTools']>>;
+      },
+    };
+    try {
+      process.env.IMPRINT_HOME = root;
+      mkdirSync(toolDir);
+      writeWorkflow(toolDir);
+      const { sessionPath } = writeSessionPair(root);
+      const result = await compileAuthAgent({
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        outDir: toolDir,
+        authToolPlan: plan(),
+        teachCredentials: { site: 'fixture-site', values: {} },
+        llmProvider: provider,
+        onPrompt: async (message, options) => {
+          expect(message).toBe('Is the fixture device ready?');
+          expect(options).toEqual(['Ready', 'Unable']);
+          return promptCount++ === 0 ? 'Unable' : otherAnswer;
+        },
+      });
+      expect(result.success).toBe(false);
+      expect(responses).toHaveLength(3);
+      const messages = JSON.parse(responses[1] ?? '[]') as Array<{
+        content: Array<{ type: string; content?: string }>;
+      }>;
+      const answer = messages.at(-1)?.content.find(({ type }) => type === 'tool_result')?.content;
+      expect(JSON.parse(answer ?? '{}')).toEqual({
+        status: 'answered',
+        kind: 'choice',
+        value: 'Unable',
+      });
+      expect(answer).not.toContain('${prompt.');
+      expect(responses.join('\n')).not.toContain(otherAnswer);
+      expect(responses[2]).toContain('${prompt.');
+    } finally {
+      if (originalHome === undefined) process.env.IMPRINT_HOME = undefined;
+      else process.env.IMPRINT_HOME = originalHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it('prompts for an OTP and continues the same browser and challenge without exposing the answer', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-api-auth-otp-'));
+    const toolDir = pathJoin(root, 'authentication');
+    const answer = 'fixture-live-otp-694215';
+    const interaction = new UserInteraction(async () => ({ status: 'answered', value: answer }));
+    let closed = 0;
+    let calls = 0;
+    const browser = {
+      interactBrowser: async (action: AuthBrowserAction) => {
+        expect(action).toEqual({ action: 'fill', selector: '#otp', value: answer });
+        return {
+          sourceId: 'fixture-api-discovery',
+          page: {
+            url: 'https://fixture.test/otp',
+            title: 'Current OTP',
+            bodyText: answer,
+            controls: [],
+            controlsTruncated: false,
+          },
+          requests: [
+            {
+              seq: 0,
+              timestamp: 0,
+              method: 'POST',
+              url: 'https://fixture.test/new-otp',
+              headers: {},
+              body: `code=${answer}`,
+              resourceType: 'Fetch',
+              response: { status: 200, headers: {}, body: '{"next":"finish"}' },
+            },
+          ],
+          captureErrors: [],
+        };
+      },
+      close: async () => {
+        closed += 1;
+      },
+    };
+    const messages: string[] = [];
+    try {
+      process.env.IMPRINT_HOME = root;
+      mkdirSync(toolDir);
+      writeWorkflow(toolDir);
+      const { sessionPath } = writeSessionPair(root);
+      __setAuthVerifierLadderForTest((async (input: VerifierRunnerArgs) => {
+        calls += 1;
+        if (input.params?.action === 'begin') {
+          input.cdpPool?.set('fixture-browser', browser as never);
+          return {
+            result: {
+              ok: false,
+              error: 'ACTION_REQUIRED',
+              message: 'Enter the OTP.',
+              nextAction: 'finish',
+              continuation: { ticket: 'fixture-current-challenge' },
+            },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          };
+        }
+        expect(input.cdpPool?.get('fixture-browser') === (browser as unknown)).toBe(true);
+        expect(input.initialState).toEqual({ ticket: 'fixture-current-challenge' });
+        expect(input.params?.answer).toBe(answer);
+        return {
+          result: { ok: true, data: { authenticated: true } },
+          usedBackend: 'cdp-replay',
+          attempts: [],
+        };
+      }) as VerifierRunner);
+      const script = [
+        { name: 'run_verification', input: { action: 'begin' } },
+        { name: 'prompt_user', input: { message: 'Enter the fixture OTP.' } },
+        {
+          name: 'interact_verification_browser',
+          input: { action: 'fill', selector: '#otp', value: '${prompt.1}' },
+        },
+        { name: 'read_request', input: { seq: 3 } },
+        {
+          name: 'run_verification',
+          input: { action: 'finish', parameters: { answer: '${prompt.1}' } },
+        },
+        { name: 'done', input: { summary: 'Fixture login verified.' } },
+      ];
+      const provider: ToolUseProvider = {
+        name: 'anthropic-api',
+        analyze: async () => {
+          throw new Error('Unexpected ordinary analyze call');
+        },
+        messageWithTools: async (input) => {
+          messages.push(JSON.stringify(input.messages));
+          expect(input.tools.map(({ name }) => name)).toContain('prompt_user');
+          const next = script.shift();
+          if (!next) throw new Error('Unexpected extra auth turn');
+          return {
+            id: `fixture-${script.length}`,
+            type: 'message',
+            role: 'assistant',
+            model: 'fixture',
+            content: [
+              {
+                type: 'tool_use',
+                id: `tool-${script.length}`,
+                ...JSON.parse(
+                  JSON.stringify(next).replace(
+                    '${prompt.1}',
+                    JSON.stringify(input.messages).match(/\$\{prompt\.[^}]+\}/)?.[0] ??
+                      '${prompt.missing}',
+                  ),
+                ),
+              },
+            ],
+            stop_reason: 'tool_use',
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          } as Awaited<ReturnType<ToolUseProvider['messageWithTools']>>;
+        },
+      };
+      const result = await interaction.run(() =>
+        compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          outDir: toolDir,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: 'fixture-user', password: 'fixture-pass' },
+          },
+          llmProvider: provider,
+          maxDurationMs: 10_000,
+        }),
+      );
+      expect(result.success).toBe(true);
+      expect(calls).toBe(2);
+      expect(closed).toBe(1);
+      expect(messages.join('\n')).not.toContain(answer);
+      expect(readFileSync(result.conversationLogPath, 'utf8')).not.toContain(answer);
+      expect(readFileSync(pathJoin(toolDir, '.auth-evidence-session.json'), 'utf8')).not.toContain(
+        answer,
+      );
+      expect(messages.join('\n')).toContain('/new-otp');
+    } finally {
+      interaction.clear();
+      __setAuthVerifierLadderForTest(null);
+      if (originalHome === undefined) process.env.IMPRINT_HOME = undefined;
+      else process.env.IMPRINT_HOME = originalHome;
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('retained authentication recovery', () => {
+  it('retains API history and browser, lets the agent inspect then choose a fresh login, and expires prior-operation answers', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-retained-auth-'));
+    const context = new AuthCompileContext();
+    const toolDir = pathJoin(root, 'auth');
+    const seen: string[] = [];
+    const actions: string[] = [];
+    let closed = 0;
+    let oldReference = '';
+    let prompts = 0;
+    let browser = {
+      close: async () => {
+        closed += 1;
+      },
+      inspectPage: async () => ({
+        url: 'https://fixture.test/current',
+        title: 'Current page',
+        bodyText: 'Fixture page',
+        cookies: [],
+      }),
+    };
+    try {
+      process.env.IMPRINT_HOME = root;
+      mkdirSync(toolDir);
+      writeWorkflow(toolDir);
+      const { sessionPath } = writeSessionPair(root);
+      __setAuthVerifierLadderForTest(async (input) => {
+        actions.push(String(input.params.action));
+        if (actions.length === 1) {
+          input.cdpPool?.set('fixture', browser as never);
+          return {
+            result: {
+              ok: false,
+              error: 'BAD_RESPONSE',
+              message: 'Fixture repairable transform failure',
+            },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          };
+        }
+        if (input.params.action === 'begin') {
+          expect(input.cdpPool?.size).toBe(0);
+          browser = { ...browser };
+          input.cdpPool?.set('fixture', browser as never);
+          return {
+            result: {
+              ok: false,
+              error: 'ACTION_REQUIRED',
+              message: 'Fresh fixture challenge',
+              nextAction: 'finish',
+              continuation: { ticket: 'fixture-new-ticket' },
+            },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          };
+        }
+        expect(input.cdpPool?.get('fixture')).toBe(browser as never);
+        if (actions.length === 5)
+          expect(input.initialState).toEqual({ ticket: 'fixture-new-ticket' });
+        return { result: { ok: true, data: {} }, usedBackend: 'cdp-replay', attempts: [] };
+      });
+      const script: Array<{ name: string; input: Record<string, unknown> }> = [
+        {
+          name: 'prompt_user',
+          input: {
+            message: 'Fixture current approval',
+            options: ['Current approved', 'Not approved'],
+          },
+        },
+        { name: 'run_verification', input: { action: 'finish', parameters: {} } },
+        { name: 'run_verification', input: { action: 'finish', parameters: {} } },
+        { name: 'done', input: { summary: 'First current session passed' } },
+        { name: 'inspect_verification_page', input: {} },
+        // The old reference must fail locally, without another network action.
+        { name: 'run_verification', input: { action: 'finish', parameters: {} } },
+        { name: 'run_verification', input: { action: 'finish', parameters: {} } },
+        { name: 'run_verification', input: { action: 'begin', freshSession: true } },
+        {
+          name: 'prompt_user',
+          input: {
+            message: 'Approve the fresh fixture challenge',
+            options: ['Current approved', 'Not approved'],
+          },
+        },
+        { name: 'run_verification', input: { action: 'finish', parameters: {} } },
+        {
+          name: 'done',
+          input: { summary: 'Agent selected new login after inspecting retained context' },
+        },
+      ];
+      let turn = 0;
+      const provider: ToolUseProvider = {
+        name: 'anthropic-api',
+        analyze: async () => {
+          throw new Error('Unexpected analyze');
+        },
+        messageWithTools: async (input) => {
+          const text = JSON.stringify(input.messages);
+          seen.push(text);
+          const next = script.shift();
+          if (!next) throw new Error('Unexpected auth turn');
+          if (turn === 1) {
+            oldReference = text.match(/\$\{prompt\.[^}]+\}/)?.[0] ?? '';
+            expect(oldReference).not.toBe('');
+            next.input.parameters = { answer: oldReference };
+          }
+          if (turn === 2 || turn === 5) next.input.parameters = { answer: oldReference };
+          if (turn === 9) {
+            const reference = Array.from(text.matchAll(/\$\{prompt\.[^}]+\}/g)).at(-1)?.[0];
+            expect(reference).toBeDefined();
+            expect(reference).not.toBe(oldReference);
+            next.input.parameters = { answer: reference };
+          }
+          turn += 1;
+          return {
+            id: `fixture-${turn}`,
+            type: 'message',
+            role: 'assistant',
+            model: 'fixture',
+            content: [{ type: 'tool_use', id: `call-${turn}`, ...next }],
+            stop_reason: 'tool_use',
+            stop_sequence: null,
+            usage: { input_tokens: 1, output_tokens: 1 },
+          } as Awaited<ReturnType<ToolUseProvider['messageWithTools']>>;
+        },
+      };
+      const options = {
+        context,
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        outDir: toolDir,
+        authToolPlan: plan(),
+        teachCredentials: { site: 'fixture-site', values: {} },
+        llmProvider: provider,
+        maxDurationMs: 30_000,
+        onPrompt: async () => {
+          prompts += 1;
+          return 'fixture-current-response';
+        },
+      };
+      expect((await compileAuthAgent(options)).success).toBe(true);
+      expect(closed).toBe(0);
+      const recovered = await compileAuthAgent({
+        ...options,
+        authToolPlan: {
+          ...plan(),
+          notes: 'Consumer returned a different failure; inspect current browser',
+        },
+      });
+      expect(recovered.success).toBe(true);
+      expect(actions).toEqual(['finish', 'finish', 'finish', 'begin', 'finish']);
+      expect(prompts).toBe(2);
+      expect(closed).toBe(1); // The agent explicitly selected freshSession.
+      expect(seen[4]).toContain('Continue the existing authentication task');
+      expect(seen[4]).toContain('First current session passed');
+      expect(seen[6]).toContain('User-input reference has no attached host');
+      expect(seen.join('')).not.toContain('fixture-current-response');
+      await context.dispose();
+      await context.dispose();
+      expect(closed).toBe(2);
+    } finally {
+      await context.dispose();
+      __setAuthVerifierLadderForTest(null);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('auth compile prompt response provenance', () => {
   it('distinguishes the outgoing navigation from its selected background response', () => {
@@ -233,6 +647,7 @@ afterEach(() => {
   process.env.FAKE_CODEX_PROMPT_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_COOLDOWN_CHECKPOINT = undefined;
   process.env.FAKE_CODEX_INSPECT_CHECKPOINT = undefined;
+  process.env.FAKE_CODEX_RETAINED_RECOVERY = undefined;
   process.env.FAKE_CODEX_STDIN_LOG = undefined;
   process.env.FAKE_CODEX_EXIT_101_ONCE = undefined;
   process.env.FAKE_CODEX_EXIT_101_NO_SESSION = undefined;
@@ -245,6 +660,123 @@ afterEach(() => {
   if (originalTeachCredentials === undefined) process.env.IMPRINT_TEACH_CREDENTIALS = undefined;
   else process.env.IMPRINT_TEACH_CREDENTIALS = originalTeachCredentials;
   __setAuthVerifierLadderForTest(null);
+  setBackendOverride(null);
+});
+
+describe('stored auth credential resolution', () => {
+  for (const providerName of ['anthropic-api', 'codex-cli'] as const) {
+    it(`uses stored credentials instead of recorded reference strings with ${providerName}`, async () => {
+      const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-stored-auth-'));
+      const values: Record<string, string> = {
+        username: 'fixture-keyring-user',
+        password: 'fixture-keyring-pass-9472',
+      };
+      const backend: CredentialBackend = {
+        id: 'keyring',
+        getSecret: async (_site, name) => values[name] ?? null,
+        listSecrets: async () => Object.keys(values),
+        getCookies: async () => [],
+        setSecret: async () => {
+          throw new Error('Verification must not replace stored secrets');
+        },
+        deleteSecret: async () => {},
+        setCookies: async () => {},
+        listSites: async () => ['fixture-site'],
+      };
+      const rendered: URLSearchParams[] = [];
+      const messages: string[] = [];
+      try {
+        setBackendOverride(backend);
+        process.env.IMPRINT_HOME = pathJoin(root, 'home');
+        const toolDir = pathJoin(root, 'authentication');
+        mkdirSync(toolDir);
+        writeWorkflow(toolDir);
+        const { sessionPath } = writeSessionPair(root);
+        __setAuthVerifierLadderForTest(async (input) => {
+          const workflow = WorkflowSchema.parse(
+            JSON.parse(readFileSync(input.workflowPath, 'utf8')),
+          );
+          const { requests } = await renderWorkflowRequests({
+            workflow,
+            params: { action: 'begin' },
+            credentials: input.credentials,
+          });
+          rendered.push(new URLSearchParams(requests[0]?.body ?? ''));
+          return {
+            result: { ok: true, data: { authenticated: true } },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          };
+        });
+        let provider: ToolUseProvider | undefined;
+        if (providerName === 'codex-cli') {
+          const bin = pathJoin(root, 'bin');
+          mkdirSync(bin);
+          process.env.PATH = `${bin}:${originalPath ?? ''}`;
+          process.env.FAKE_CODEX_TOOL_DIR = toolDir;
+          process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
+          process.env.FAKE_CODEX_INSPECT_CHECKPOINT = '1';
+          installFakeCodex(bin);
+        } else {
+          const script = [
+            { name: 'run_verification', input: { action: 'finish' } },
+            { name: 'done', input: { summary: 'Stored credential fixture verified.' } },
+          ];
+          provider = {
+            name: 'anthropic-api',
+            analyze: async () => {
+              throw new Error('Unexpected ordinary analyze call');
+            },
+            messageWithTools: async (input) => {
+              messages.push(JSON.stringify(input.messages));
+              const next = script.shift();
+              if (!next) throw new Error('Unexpected extra auth turn');
+              return {
+                id: `fixture-${script.length}`,
+                type: 'message',
+                role: 'assistant',
+                model: 'fixture',
+                content: [{ type: 'tool_use', id: `tool-${script.length}`, ...next }],
+                stop_reason: 'tool_use',
+                stop_sequence: null,
+                usage: { input_tokens: 1, output_tokens: 1 },
+              } as Awaited<ReturnType<ToolUseProvider['messageWithTools']>>;
+            },
+          };
+        }
+        const result = await compileAuthAgent({
+          site: 'fixture-site',
+          session: session(),
+          sessionPath,
+          outDir: toolDir,
+          authToolPlan: plan(),
+          teachCredentials: {
+            site: 'fixture-site',
+            values: { username: '${credential.username}', password: '${credential.password}' },
+          },
+          llmConfig: { provider: providerName },
+          llmProvider: provider,
+          onPrompt: async () => {
+            throw new Error('Stored credentials should not require another human prompt');
+          },
+          maxDurationMs: 20_000,
+        });
+        expect(result.success).toBe(true);
+        expect(rendered).toHaveLength(1);
+        expect(rendered[0]?.get('username')).toBe(values.username);
+        expect(rendered[0]?.get('password')).toBe(values.password);
+        if (providerName === 'codex-cli') {
+          messages.push(readFileSync(pathJoin(root, 'stdin.log'), 'utf8'));
+        }
+        expect(messages.join('\n')).not.toContain(values.password as string);
+        expect(readFileSync(result.conversationLogPath, 'utf8')).not.toContain(
+          values.password as string,
+        );
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    }, 30_000);
+  }
 });
 
 describe('auth compile tools', () => {
@@ -921,7 +1453,12 @@ if (process.env.FAKE_CODEX_EXIT_101_ONCE && !resumed) {
   }
   process.exit(101);
 }
-if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
+if (process.env.FAKE_CODEX_RETAINED_RECOVERY && prompt.includes('Continue the existing authentication task')) {
+  writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'inspect_verification_page', maxChars: 4096, includeCookies: false }));
+} else if (process.env.FAKE_CODEX_RETAINED_RECOVERY && !resumed) {
+  writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(workflow)});
+  writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture' } }));
+} else if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !resumed) {
   writeFileSync(join(toolDir, 'workflow.json'), ${JSON.stringify(workflow)});
   writeFileSync(join(toolDir, '.compile-checkpoint.json'), JSON.stringify({ kind: 'run_verification', action: 'finish', parameters: { answer: 'fixture-otp' } }));
 } else if (process.env.FAKE_CODEX_INSPECT_CHECKPOINT && !existsSync(inspectionMarker)) {
@@ -1044,6 +1581,300 @@ describe('compile CLI launch errors', () => {
       }
     });
   }
+});
+
+describe('retained native authentication', () => {
+  it('awaits host checkpoints in one assignment and retains the same native agent and browser for recovery', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-native-auth-recovery-'));
+    const context = new AuthCompileContext();
+    let closed = 0;
+    let inspected = 0;
+    let cooldowns = 0;
+    const answer = 'fixture-native-current-answer';
+    const observedActions: string[] = [];
+    const family = new NativeTeachAgents(
+      {
+        root: pathJoin(root, 'native'),
+        model: 'fixture',
+        deadline: new RunDeadline(Date.now() + 30_000),
+      },
+      async (_family, signal) =>
+        await new Promise<void>((resolve) =>
+          signal.addEventListener('abort', () => resolve(), { once: true }),
+        ),
+    );
+    try {
+      process.env.IMPRINT_HOME = root;
+      const toolDir = pathJoin(root, 'auth');
+      mkdirSync(toolDir);
+      writeWorkflow(toolDir);
+      const { sessionPath } = writeSessionPair(root);
+      __setAuthVerifierLadderForTest(async (input) => {
+        observedActions.push(String(input.params?.action));
+        if (input.cdpPool?.size) expect(closed).toBe(0);
+        else
+          input.cdpPool?.set('fixture', {
+            interactBrowser: async () => ({
+              sourceId: 'fixture-native-discovery',
+              page: {
+                url: 'https://fixture.test/new-factor',
+                title: 'New factor',
+                bodyText: 'Choose a factor',
+                controls: [],
+                controlsTruncated: false,
+              },
+              requests: [
+                {
+                  seq: 0,
+                  timestamp: 0,
+                  method: 'GET',
+                  url: 'https://fixture.test/new-factor',
+                  headers: {},
+                  resourceType: 'Document',
+                  response: { status: 200, headers: {}, body: 'New factor' },
+                },
+              ],
+              captureErrors: [],
+            }),
+            close: async () => {
+              closed += 1;
+            },
+            inspectPage: async () => {
+              inspected += 1;
+              return {
+                url: 'https://fixture.test/retained',
+                title: 'Retained page',
+                bodyText: 'Fixture',
+                cookies: [],
+              };
+            },
+          } as never);
+        if (input.params?.action === 'begin')
+          return {
+            result: {
+              ok: false,
+              error: 'ACTION_REQUIRED',
+              message: 'Current fixture challenge',
+              nextAction: 'finish',
+              continuation: { ticket: 'fixture-native-challenge' },
+            },
+            usedBackend: 'cdp-replay',
+            attempts: [],
+          };
+        if (observedActions.length === 2) {
+          expect(input.initialState).toEqual({ ticket: 'fixture-native-challenge' });
+          expect(input.params?.answer).toBe(answer);
+        }
+        return { result: { ok: true, data: {} }, usedBackend: 'cdp-replay', attempts: [] };
+      });
+      const options = {
+        context,
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        outDir: toolDir,
+        authToolPlan: plan(),
+        teachCredentials: { site: 'fixture-site', values: {} },
+        llmConfig: { provider: 'codex-cli' as const },
+        maxDurationMs: 30_000,
+        onPrompt: async () => answer,
+        onCooldown: async () => {
+          cooldowns += 1;
+        },
+      };
+      const execute = async (steps: string[], recovery: boolean) => {
+        const compiling = compileAuthAgent({
+          ...options,
+          authToolPlan: { ...plan(), notes: recovery ? 'New consumer failure' : 'First request' },
+        });
+        void compiling.catch(() => {});
+        const offered = (await family.handle('assignments', {})) as {
+          tasks: Array<{ id: string; conversation: string; retainedAgentId?: string }>;
+        };
+        const task = offered.tasks[0];
+        if (!task) throw new Error('Missing native auth assignment');
+        if (recovery) expect(task.retainedAgentId).toBe('/root/fixture_auth');
+        const assignment = (await family.handle('read_assignment', {
+          id: task.id,
+          agentId: '/root/fixture_auth',
+        })) as { prompt: string };
+        expect(assignment.prompt).toContain('Auth host tools execute inline');
+        if (recovery) {
+          expect(assignment.prompt).toContain('Continue the existing authentication task');
+          expect(assignment.prompt).not.toContain('MANDATORY FIRST ACTION');
+        }
+        const listed = (await family.handle('list_assignment_tools', { id: task.id })) as {
+          tools: Array<{ name: string; description?: string }>;
+        };
+        expect(listed.tools.find(({ name }) => name === 'run_verification')?.description).toContain(
+          'Await the host result',
+        );
+        let reference = '';
+        for (const [index, name] of steps.entries()) {
+          const result = await family.handle('call_assignment_tool', {
+            id: task.id,
+            name,
+            args:
+              name === 'done'
+                ? { summary: 'Current declared action passed' }
+                : name === 'run_verification'
+                  ? index === 0 && !recovery
+                    ? { action: 'begin' }
+                    : { action: 'finish', parameters: { answer: reference || 'fixture' } }
+                  : name === 'prompt_user'
+                    ? { message: 'Enter the current fixture answer.' }
+                    : name === 'wait_for_cooldown'
+                      ? { minutes: 0.1, reason: 'Fixture delay observation' }
+                      : name === 'interact_verification_browser'
+                        ? { action: 'inspect' }
+                        : { includeCookies: false },
+          });
+          if (name === 'prompt_user') {
+            reference = JSON.stringify(result).match(/\$\{prompt\.[^}]+\}/)?.[0] ?? '';
+            expect(reference).not.toBe('');
+            expect(JSON.stringify(result)).not.toContain(answer);
+          }
+          if (name === 'run_verification' && index === 0 && !recovery) {
+            expect(JSON.stringify(result)).toContain('declared pause outcome');
+            expect(JSON.stringify(result)).toContain('nextAction=finish');
+          }
+          expect(existsSync(pathJoin(toolDir, '.compile-checkpoint.json'))).toBe(false);
+        }
+        await family.handle('submit', { id: task.id, text: 'Fixture task completed' });
+        expect((await compiling).success).toBe(true);
+      };
+      await family.run(async () => {
+        await execute(['run_verification', 'prompt_user', 'run_verification', 'done'], false);
+        expect(closed).toBe(0);
+        await execute(
+          [
+            'interact_verification_browser',
+            'inspect_verification_page',
+            'wait_for_cooldown',
+            'run_verification',
+            'done',
+          ],
+          true,
+        );
+        expect(readFileSync(pathJoin(toolDir, '.auth-evidence-session.json'), 'utf8')).toContain(
+          '/new-factor',
+        );
+        expect(inspected).toBe(1);
+        expect(cooldowns).toBe(1);
+        expect(observedActions).toEqual(['begin', 'finish', 'finish']);
+        const events = readFileSync(pathJoin(root, 'native', 'events.jsonl'), 'utf8')
+          .trim()
+          .split('\n')
+          .map((line) => JSON.parse(line));
+        expect(events.filter(({ type }) => type === 'assignment.created')).toHaveLength(2);
+        expect(events.filter(({ type }) => type === 'assignment.bound')).toHaveLength(2);
+        const checkpoints = events.filter(
+          ({ type, name }) =>
+            type === 'assignment.tool.completed' &&
+            [
+              'run_verification',
+              'prompt_user',
+              'interact_verification_browser',
+              'inspect_verification_page',
+              'wait_for_cooldown',
+            ].includes(name),
+        );
+        expect(checkpoints).toHaveLength(7);
+        expect(
+          checkpoints.every(({ durationMs, status }) => durationMs >= 0 && status === 'returned'),
+        ).toBe(true);
+        expect(readFileSync(pathJoin(toolDir, '.compile-log.json'), 'utf8')).not.toContain(answer);
+        expect(closed).toBe(0);
+      });
+      await context.dispose();
+      expect(closed).toBe(1);
+    } finally {
+      await context.dispose();
+      await family.close();
+      rmSync(root, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+describe('retained Codex authentication', () => {
+  it('resumes the finalized compiler assignment and existing browser for a later recovery request', async () => {
+    const root = mkdtempSync(pathJoin(tmpdir(), 'imprint-auth-codex-retained-'));
+    const context = new AuthCompileContext();
+    let closed = 0;
+    let inspected = 0;
+    try {
+      const bin = pathJoin(root, 'bin');
+      const toolDir = pathJoin(root, 'auth');
+      mkdirSync(bin);
+      mkdirSync(toolDir);
+      process.env.PATH = `${bin}:${originalPath ?? ''}`;
+      process.env.IMPRINT_HOME = root;
+      process.env.FAKE_CODEX_TOOL_DIR = toolDir;
+      process.env.FAKE_CODEX_ARGS_LOG = pathJoin(root, 'args.log');
+      process.env.FAKE_CODEX_STDIN_LOG = pathJoin(root, 'stdin.log');
+      process.env.FAKE_CODEX_RETAINED_RECOVERY = '1';
+      installFakeCodex(bin);
+      const { sessionPath } = writeSessionPair(root);
+      __setAuthVerifierLadderForTest(async (input) => {
+        input.cdpPool?.set('fixture', {
+          close: async () => {
+            closed += 1;
+          },
+          inspectPage: async () => {
+            inspected += 1;
+            return {
+              url: 'https://fixture.test/current',
+              title: 'Retained',
+              bodyText: 'Current context',
+              cookies: [],
+            };
+          },
+        } as never);
+        return { result: { ok: true, data: {} }, usedBackend: 'cdp-replay', attempts: [] };
+      });
+      const options = {
+        context,
+        site: 'fixture-site',
+        session: session(),
+        sessionPath,
+        outDir: toolDir,
+        authToolPlan: plan(),
+        teachCredentials: { site: 'fixture-site', values: {} },
+        llmConfig: { provider: 'codex-cli' as const },
+        maxDurationMs: 30_000,
+      };
+      expect((await compileAuthAgent(options)).success).toBe(true);
+      expect(closed).toBe(0);
+      expect(
+        (
+          await compileAuthAgent({
+            ...options,
+            authToolPlan: { ...plan(), notes: 'Consumer reported a new failure' },
+          })
+        ).success,
+      ).toBe(true);
+      expect(inspected).toBe(1);
+      expect(closed).toBe(0);
+      const commands = readFileSync(pathJoin(root, 'args.log'), 'utf8')
+        .trim()
+        .split('\n')
+        .map((line) => line.split('\u0000'));
+      expect(commands).toHaveLength(4);
+      expect(
+        commands
+          .slice(1)
+          .every((args) => args.includes('resume') && args.includes('fixture-thread')),
+      ).toBe(true);
+      const prompts = readFileSync(pathJoin(root, 'stdin.log'), 'utf8').split('\n---\n');
+      expect(prompts[2]).toContain('Continue the existing authentication task');
+      expect(prompts[2]).not.toContain('MANDATORY FIRST ACTION');
+      await context.dispose();
+      expect(closed).toBe(1);
+    } finally {
+      await context.dispose();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 });
 
 describe('compileAuthAgent with Codex', () => {

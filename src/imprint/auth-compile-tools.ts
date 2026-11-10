@@ -7,7 +7,10 @@
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { join as pathJoin } from 'node:path';
+import { z } from 'zod';
 import type { AgentTool } from './agent.ts';
+import { AuthBrowserActionSchema } from './auth-browser-discovery.ts';
+import type { AuthCheckpoint, AuthCheckpointResult } from './compile-agent-types.ts';
 import {
   type CompileToolContext,
   bodyEncodingContractFailures,
@@ -24,7 +27,13 @@ import {
 import { isIrreversibleRequest, workflowHasIrreversibleEffect } from './effects.ts';
 import { recordedRequestMatchesWorkflow } from './recording-request.ts';
 import { captureHeader, captureValueMatches, resolveJsonCapture } from './request-capture.ts';
-import { type Session, type Workflow, WorkflowSchema, persistedCaptureName } from './types.ts';
+import {
+  type Session,
+  type Workflow,
+  WorkflowSchema,
+  authActionOutcomes,
+  persistedCaptureName,
+} from './types.ts';
 
 type TeachCredentials = { site: string; values: Record<string, string> };
 
@@ -32,9 +41,15 @@ export const AUTH_VERIFICATION_ATTEMPT_SENTINEL = '.auth-verification-attempt.js
 
 export interface AuthCliCompileMode {
   site: string;
+  contextRef?: string;
   authPlanJson: string;
   allowedTools: readonly string[];
   initialPrompt: string;
+  /** Host-only native/API execution; CLI-only drivers retain the sentinel fallback. */
+  executeCheckpoint?: (
+    checkpoint: AuthCheckpoint,
+    signal?: AbortSignal,
+  ) => Promise<AuthCheckpointResult>;
 }
 
 export const AUTH_COMPILE_TOOL_NAMES = [
@@ -47,9 +62,164 @@ export const AUTH_COMPILE_TOOL_NAMES = [
   'run_tests',
   'run_verification',
   'inspect_verification_page',
+  'interact_verification_browser',
   'prompt_user',
   'wait_for_cooldown',
 ] as const;
+
+export const AUTH_CHECKPOINT_TOOLS: Omit<AgentTool, 'handler'>[] = [
+  {
+    name: 'interact_verification_browser',
+    description:
+      'Explore the live auth UI in the retained verification browser and capture its network requests/responses as additional readable recording evidence. Can open a browser before a workflow exists. Choose inspect, navigate, click, fill, select, press, or wait from observed page controls. For fill values use stored ${credential.NAME} or current ${prompt.ID} references; answers are resolved locally. Capture continues between calls and while prompting the human. This does not verify the compiled workflow.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          enum: ['inspect', 'navigate', 'click', 'fill', 'select', 'press', 'wait'],
+        },
+        url: { type: 'string', description: 'HTTP(S) destination for navigate.' },
+        selector: {
+          type: 'string',
+          description: 'Exact CSS selector from the observed UI for click/fill/select.',
+        },
+        value: {
+          type: 'string',
+          description:
+            'Value for fill/select; secret inputs use credential or current prompt references.',
+        },
+        key: { type: 'string', description: 'Keyboard key for press, e.g. Enter or Tab.' },
+        milliseconds: { type: 'number', description: 'Observation wait duration, 0–30000 ms.' },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'run_verification',
+    description:
+      'Run one action from the current workflow.json live in the verification browser. First reuse the proven noninteractive session-check or context-restoration action before restarting login. Branch on current response evidence before delivering MFA. Supply the action name and only its declared parameters. Set freshSession only when observed evidence means the prior browser and continuation state must be discarded. Set cleanSession only when evidence requires also withholding stored cookies and browser storage.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        action: {
+          type: 'string',
+          description: 'An action declared in authConfig.actions.',
+        },
+        parameters: {
+          type: 'object',
+          description: 'Scalar values required by this action, keyed by workflow parameter name.',
+        },
+        freshSession: {
+          type: 'boolean',
+          description:
+            'Close and discard the prior verification browser and continuation state before running this action. Defaults to false.',
+        },
+        cleanSession: {
+          type: 'boolean',
+          description:
+            'Also withhold stored cookies and browser storage for this fresh run. Credential values remain available.',
+        },
+      },
+      required: ['action'],
+    },
+  },
+  {
+    name: 'inspect_verification_page',
+    description:
+      'Inspect the currently rendered page in the existing verification browser without navigating, resetting state, or running another auth action. Returns rendered body text, final URL, title, and optional cookies. Known user-supplied secrets are masked; other cookie values remain private evidence. Use when observed verification evidence warrants inspecting the page.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        maxChars: {
+          type: 'number',
+          description: 'Maximum rendered body-text characters to return (256–20000).',
+        },
+        includeCookies: {
+          type: 'boolean',
+          description:
+            'Include cookies with names, values, domains, paths, expirations, and flags. Known user-supplied secrets are masked. Defaults to true.',
+        },
+      },
+    },
+  },
+  {
+    name: 'prompt_user',
+    description:
+      'Ask the human for input or an external action required by the compiled auth program. A selected fixed option is returned as an answered choice with its exact value; free-text answers remain current opaque response references. A choice is not proof that a live action succeeded.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        message: { type: 'string', description: 'What to ask the user to do.' },
+        options: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Optional fixed choices; omit for free-text (e.g. the OTP code).',
+        },
+      },
+      required: ['message'],
+    },
+  },
+  {
+    name: 'wait_for_cooldown',
+    description:
+      'Request a delay without running any live action. Use only when the observed site response justifies waiting.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        minutes: { type: 'number', description: 'Cool-off minutes (5–10 typical).' },
+        reason: {
+          type: 'string',
+          description: 'Why you believe it is a cool-off, not a defect.',
+        },
+      },
+      required: ['minutes'],
+    },
+  },
+];
+
+/** Parse the same host request for inline and checkpoint/resume adapters. */
+export function parseAuthCheckpoint(name: string, input: unknown): AuthCheckpoint {
+  switch (name) {
+    case 'interact_verification_browser':
+      return { kind: name, ...AuthBrowserActionSchema.parse(input) };
+    case 'run_verification':
+      return {
+        kind: name,
+        ...z
+          .object({
+            action: z.string().min(1),
+            parameters: z.record(z.union([z.string(), z.number(), z.boolean()])).optional(),
+            freshSession: z.boolean().optional(),
+            cleanSession: z.boolean().optional(),
+          })
+          .parse(input),
+      };
+    case 'inspect_verification_page':
+      return {
+        kind: name,
+        ...z
+          .object({ maxChars: z.number().optional(), includeCookies: z.boolean().optional() })
+          .parse(input),
+      };
+    case 'prompt_user':
+      return {
+        kind: name,
+        ...z
+          .object({ message: z.string().min(1), options: z.array(z.string()).optional() })
+          .parse(input),
+      };
+    case 'wait_for_cooldown':
+      return {
+        kind: name,
+        ...z
+          .object({ minutes: z.number().nonnegative(), reason: z.string().optional() })
+          .parse(input),
+      };
+    default:
+      throw new Error(`Unknown auth checkpoint: ${name}`);
+  }
+}
 
 export function buildAuthCompileTools(
   session: Session,
@@ -295,6 +465,18 @@ function authProgramFailures(
         }
       }
     }
+    for (const branch of action.branches ?? []) {
+      const capture = branch.when;
+      if (captures.has(capture.name)) {
+        failures.push(
+          `capture name ${JSON.stringify(capture.name)} must be unique across the auth workflow`,
+        );
+      }
+      captures.add(capture.name);
+      const lastStep = action.steps.at(-1);
+      const request = lastStep && workflow.requests[lastStep.request];
+      if (request) captureOwners.set(capture.name, { request, capture });
+    }
   }
 
   let hasSuccess = false;
@@ -318,28 +500,30 @@ function authProgramFailures(
         );
       }
     }
-    for (const evidence of action.outcome.evidence) {
-      if (!captures.has(evidence)) {
-        failures.push(
-          `action ${JSON.stringify(name)} references unknown evidence capture ${JSON.stringify(evidence)}`,
-        );
-      }
-    }
-    if (action.outcome.type === 'pause') {
-      if (!config.actions[action.outcome.next]) {
-        failures.push(
-          `action ${JSON.stringify(name)} pauses to unknown action ${JSON.stringify(action.outcome.next)}`,
-        );
-      }
-      for (const carried of action.outcome.carry) {
-        if (!captures.has(carried)) {
+    for (const outcome of authActionOutcomes(action)) {
+      for (const evidence of outcome.evidence) {
+        if (!captures.has(evidence)) {
           failures.push(
-            `action ${JSON.stringify(name)} carries unknown capture ${JSON.stringify(carried)}`,
+            `action ${JSON.stringify(name)} references unknown evidence capture ${JSON.stringify(evidence)}`,
           );
         }
       }
-    } else {
-      hasSuccess = true;
+      if (outcome.type === 'pause') {
+        if (!config.actions[outcome.next]) {
+          failures.push(
+            `action ${JSON.stringify(name)} pauses to unknown action ${JSON.stringify(outcome.next)}`,
+          );
+        }
+        for (const carried of outcome.carry) {
+          if (!captures.has(carried)) {
+            failures.push(
+              `action ${JSON.stringify(name)} carries unknown capture ${JSON.stringify(carried)}`,
+            );
+          }
+        }
+      } else {
+        hasSuccess = true;
+      }
     }
   }
 
@@ -428,13 +612,17 @@ function reachableSuccess(
   actions: NonNullable<Workflow['authConfig']>['actions'],
 ): boolean {
   const seen = new Set<string>();
-  let current: string | undefined = entry;
-  while (current && !seen.has(current)) {
+  const pending = [entry];
+  while (pending.length) {
+    const current = pending.pop();
+    if (!current || seen.has(current)) continue;
     seen.add(current);
-    const action: (typeof actions)[string] | undefined = actions[current];
-    if (!action) return false;
-    if (action.outcome.type === 'success') return true;
-    current = action.outcome.next;
+    const action = actions[current];
+    if (!action) continue;
+    for (const outcome of authActionOutcomes(action)) {
+      if (outcome.type === 'success') return true;
+      pending.push(outcome.next);
+    }
   }
   return false;
 }
@@ -501,7 +689,7 @@ export function readAuthVerificationReceiptStatus(
     };
   }
   const action = workflow.authConfig?.actions[attempt.action];
-  if (action?.outcome.type !== 'success') {
+  if (!action || !authActionOutcomes(action).some((outcome) => outcome.type === 'success')) {
     return {
       status: 'failed',
       reason: `the most recent successful live action ${JSON.stringify(attempt.action)} does not declare a success outcome`,

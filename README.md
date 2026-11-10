@@ -20,6 +20,21 @@ The recording *is* the executable.
 
 ---
 
+Authentication work stays visible through operation handles and reusable context
+references. Agents choose whether to continue a retained context or start another;
+native verification and browser checkpoints return within the same assignment.
+Native compiler tools share the host executor; failed calls retain their duration
+and error code so a live process cannot hide a broken compiler connection.
+Plan/research differences are advisory construction facts. Changed artifacts still
+need their own live checks. See [authentication and repair](docs/architecture.md#agent-questions-and-authentication).
+
+Timed-out questions release the terminal input queue; declared nonsecret choices
+remain readable by the agent. Successful browser-backed data calls can preserve
+renewed cookies for later calls without overwriting newer saved authentication.
+Same-name host-only and domain cookies keep their distinct scopes across replay
+and browser restoration.
+That continuity still needs verification against the requested data operation.
+
 ## Quick Start
 
 ```bash
@@ -93,10 +108,54 @@ regenerate/record it with `bun scripts/demo-teach.ts`.)*
 > [!TIP]
 > Recording and compilation happen in one foreground `imprint teach` command. Install the completed tools in your MCP client with `imprint install`. Only known user-supplied login credentials are replaced before teaching; cookies, API tokens, responses, and personal data remain visible to the agents.
 
+Existing `${credential.NAME}` references in an already-redacted recording reuse
+values from your local credential backend. They do not replace saved passwords
+with placeholder text. MFA may still require your input.
+
+Request-building errors return to the compile agent as verification feedback,
+including errors from asynchronous transforms, so it can repair the request
+and retry.
+
 Recordings and logs, including files named `.redacted.json`, are not safe to share publicly. Automatic PII and token redaction is disabled; review any file before sharing it.
 Imprint writes `.redacted.json` with private file permissions. A teach that leaves
 planned tools unresolved reports a partial result and exits nonzero, even if some
 ready tools were published.
+
+Teaching agents and standalone compilers can ask questions in the foreground
+terminal, including login approvals, MFA/OTP codes, and missing information.
+Questions from concurrent agents appear one at a time; secret input is masked
+and returned to agents as temporary references. Authentication uses the existing
+auth compiler to continue the same browser and challenge. Later recovery requests
+retain that auth work within the teach. Agents first check or restore existing
+access before starting another login. Compiled actions can branch on current
+responses to reuse authenticated access or continue an observed challenge;
+retaining a browser alone does not guarantee MFA is avoided.
+Identical concurrent requests share the active
+attempt; a previous success never substitutes for the caller's own data check.
+Failed teach checks reach a focused component recovery agent before broader
+plan repair. It can renew authentication, repair the caller's artifact or a
+declared prerequisite through its retained compiler, or dispatch a registered
+shared runtime component owner. State recovery immediately retries the built
+caller; prerequisite repair rebuilds the selected owner and binds fresh outputs
+into consumer checks. Accepted contracts and unrelated builds remain intact.
+Every actual failed and retried call stays in the check history. Unknown owners
+or changes to contracts, strategy, or dependencies return to the master.
+When the live login offers a flow missing from the recording, the auth agent can
+operate its verification browser and capture additional request/response evidence.
+It can learn the offered flow before requesting the actual OTP or approval, then
+compile and verify its replay. Original recordings remain unchanged; discovering
+or manually completing a flow alone does not prove reusable authentication.
+Run without
+`--no-interactive` when answers may be needed. Detached runs and piped terminals
+report input as unavailable. Browser closure during stealth user-agent setup
+returns through the existing setup-error handling instead of terminating teach.
+On hosts with limited RAM or disk for swap, set `IMPRINT_TEACH_LOW_MEMORY=1`
+to run live data checks one at a time. Successive checks in the same research
+pass reuse its browser; a competing pass evicts that browser before using its
+own isolated context. Authentication keeps its persistent browser across MFA prompts.
+Closing an Imprint-owned browser removes its temporary Chrome profile. Explicit
+profiles, including `record --persist-profile`, are retained; recordings and run
+evidence are stored separately.
 
 For every teach, a master agent accounts for the complete discovered operation
 set. Focused advisors review tool boundaries and parameters, focused planners
@@ -149,6 +208,9 @@ reviews the complete plan before normal verification and publication; only an
 exactly matching draft is reused. With native delegation, completed research reaches
 the master while unrelated drafts finish. Those drafts settle before final planning
 can reuse or replace them. Declared consumers retain producer-first ordering.
+The terminal names each tool entering detailed planning and each master review,
+reports elapsed waiting time every 30 seconds, and reports when that stage
+finishes or stops. A waiting update means the stage has not returned yet.
 Researchers can call proven sibling requests with fresh inputs before testing a
 consumer; recorded continuation values are not a substitute for fresh output.
 Compilers can inspect full retained responses from that tool's earlier research
@@ -412,7 +474,7 @@ bunx playwright install chromium
 | 4 | Cursor | `cursor` on PATH |
 
 Override with `--provider <name>` and `--model <name>`.
-Codex teaching defaults to `gpt-6-sol`. Keep the Codex CLI current when using
+Codex teaching defaults to `gpt-6.1-sol`. Keep the Codex CLI current when using
 that model for audits or standalone compilation; older installations may reject
 it even when the Codex app offers it.
 

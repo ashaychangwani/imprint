@@ -16,6 +16,7 @@ import {
   giveUpTool,
   runAgentLoop,
 } from './agent.ts';
+import { attachRecordedAuthentication } from './authentication-interaction.ts';
 import { type SharedModuleManifestEntry, resolvePlanSliceFromFile } from './build-plan.ts';
 import { compileViaClaudeCli } from './claude-cli-compile.ts';
 import { compileViaCodexCli } from './codex-cli-compile.ts';
@@ -70,6 +71,12 @@ import {
   minimalSharedTriageSelection,
 } from './triage-selection.ts';
 import { type Session, SessionSchema, WorkflowSchema } from './types.ts';
+import {
+  type OnUserPrompt,
+  UserInteraction,
+  currentUserInteraction,
+  withUserInteraction,
+} from './user-interaction.ts';
 
 export type { CompileAgentProgress } from './compile-agent-types.ts';
 
@@ -105,6 +112,7 @@ function removeEphemeralTests(toolDir: string): void {
 }
 
 interface CompileAgentOptions {
+  onPrompt?: OnUserPrompt;
   /** Path to the recorded session JSON (absolute or relative). */
   sessionPath: string;
   /** Hard wall-clock budget. Default 20 minutes. */
@@ -172,6 +180,11 @@ function formatRevisionMode(enabled: boolean | undefined): string {
 }
 
 export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAgentResult> {
+  if (!currentUserInteraction()) {
+    return await withUserInteraction(new UserInteraction(opts.onPrompt, opts.signal), () =>
+      compileAgent(opts),
+    );
+  }
   const startTime = Date.now();
   // Build-plan fields are bounded proposals for the compile/master agents.
   const { assignedSharedModules } = resolvePlanSliceFromFile(
@@ -192,6 +205,12 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
     'session',
   );
 
+  const extractedAuthValues = Object.fromEntries(
+    extractCredentials(session).replacements.flatMap(({ originalValue, placeholder }) => {
+      const match = /^\$\{credential\.([^}]+)\}$/.exec(placeholder);
+      return match?.[1] ? [[match[1], originalValue]] : [];
+    }),
+  );
   // 2. Auto-redact raw direct-generate inputs. Teach normally supplies an
   // already-redacted focused recording.
   const looksRedacted = JSON.stringify(session).includes('[REDACTED:');
@@ -265,6 +284,7 @@ export async function compileAgent(opts: CompileAgentOptions): Promise<CompileAg
       sharedModules: opts.sharedModules,
       strategyKind: opts.strategyKind,
       revisionMode: opts.revisionMode,
+      signal: opts.signal,
     }),
     doneTool(),
     giveUpTool(),
@@ -288,6 +308,19 @@ Begin by calling read_session_summary to orient yourself, then proceed per the s
     opts.runDeadline,
     opts.deadlineMs ?? Date.now() + (opts.maxDurationMs ?? 20 * 60 * 1000),
   );
+
+  if (!currentUserInteraction()?.hasAuthentication) {
+    currentUserInteraction()?.setRunControl(runDeadline, opts.onDeadlineReached);
+    attachRecordedAuthentication({
+      session,
+      sessionPath: sessionPathAbs,
+      root: pathJoin(absoluteToolDir, '.authentication'),
+      values: { ...extractedAuthValues, ...opts.teachCredentials?.values },
+      llmConfig: opts.llmConfig,
+      runDeadline,
+      report: log,
+    });
+  }
 
   // 8. Instantiate provider (or use injected one for testing).
   //    CLI providers take a different path: they don't implement Anthropic

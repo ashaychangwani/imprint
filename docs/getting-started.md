@@ -167,10 +167,42 @@ needed:
 imprint teach google-flights --provider claude-cli --model claude-sonnet-4-6 --timeout 12h
 ```
 
-With `--agent codex`, the default model is `gpt-6-sol`. Imprint's Codex SDK
+With `--agent codex`, the default model is `gpt-6.1-sol`. Imprint's Codex SDK
 includes a compatible CLI for native teaching, while standalone compilation and
 audits use the `codex` command on your PATH. Update that command if it rejects
 the model despite it being available in the Codex app.
+
+Keep `teach` in a foreground terminal when login or other questions may be
+needed. Both native Codex teaching roles and ordinary compilers can call
+`prompt_user` for choices, free text, or an external approval. Secret input is
+masked. For recorded login prerequisites, `authenticate` invokes the existing
+auth compiler, which can send a challenge, ask for its OTP or approval, and
+continue the same browser session. Later authentication requests keep that
+compiler's conversation and browser available for recovery in the same teach;
+the agent chooses whether to inspect, continue, repair, or start a new login.
+Identical concurrent requests share the active attempt, while each caller can
+cancel its own wait. Other agents' questions wait their turn.
+If the current login offers a method absent from the recording, the auth agent
+can inspect and operate its browser to capture that flow's requests and responses.
+It uses these observations alongside the original recording to compile and test
+reusable actions. You may still need to supply the current OTP or approve an
+external notification; a new recording is not required merely because MFA differs.
+`generate` supports the same terminal prompts. `--no-interactive` disables teach
+questions; redirected input or a detached process returns input unavailable.
+Questions wait within the run's existing deadline.
+
+If an existing recording already contains `${credential.NAME}` references,
+teaching reuses the corresponding values in your local credential backend.
+Use `imprint credential list <site>` to check which names are stored, and
+`imprint credential set <site> <name>` to provision a missing value. MFA or other
+live challenges may still need a terminal response.
+
+For a memory-constrained host, use `IMPRINT_TEACH_LOW_MEMORY=1 imprint teach ...`.
+Live data checks run one at a time and retain one browser for successive checks
+in the same research pass. When another pass needs the budget, the previous
+browser closes before the next pass uses its own isolated context. Pass exit,
+cancellation and thrown errors clean up owned browsers. Native agents still
+choose their schedule, and authentication retains its own browser and continuation.
 
 The timeout applies to the foreground teach run and defaults to 12 hours so a
 large discovered tool set is not cut off by a single-tool-sized budget. Imprint may keep working on

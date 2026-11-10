@@ -57,6 +57,11 @@ interface ExtractionResult {
   replacements: Replacement[];
 }
 
+/** Existing workflow references are not newly recorded secret values. */
+export function isCredentialReference(value: string): boolean {
+  return /^\$\{credential\.[^}]+\}$/.test(value);
+}
+
 /** Parsers are tried in this order on every request that has a body. Each
  *  one is side-effect-free and returns `null` when its input doesn't fit
  *  its expected framing — so trying JSON first on a form body, or form on
@@ -112,7 +117,7 @@ export function extractCredentials(session: Session): ExtractionResult {
       confirmedByDom,
     });
 
-    replacements.push(
+    for (const replacement of [
       {
         requestSeq: req.seq,
         location: found.usernameLocation,
@@ -125,7 +130,9 @@ export function extractCredentials(session: Session): ExtractionResult {
         originalValue: found.passwordValue,
         placeholder: '${credential.password}',
       },
-    );
+    ]) {
+      if (!isCredentialReference(replacement.originalValue)) replacements.push(replacement);
+    }
   }
 
   return { findings, replacements };

@@ -11,6 +11,7 @@ import {
   apiResearchCoversToolBoundary,
   apiResearchFailureMessage,
   apiResearchMatchesPlan,
+  apiResearchPlanDifferences,
   compatibleFocusedPlannerIndexes,
   compileEveryToolInBuildWaves,
   consumerResearchForCompiler,
@@ -482,6 +483,85 @@ describe('API research boundary reuse', () => {
     if (!outsideMatcher) throw new Error('test research has no network response matcher');
     outsideMatcher.recordingResponseRequestSeq = 3;
     expect(apiResearchCoversToolBoundary(tool, outsideBoundary)).toBeFalse();
+  });
+
+  it('reports the exact extra navigation provenance without changing the researched construction', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Build the master-approved construction.' };
+    tool.candidate.likelyParams = [
+      { name: 'query', type: 'string', description: 'Query to send.' },
+    ];
+    const research = researchFor(tool);
+    const implementation = {
+      strategyKind: 'api',
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 1, recordingResponseRequestSeq: 2 },
+      ],
+    } as ImplementationPlanPayload;
+    const original = structuredClone(research);
+
+    expect(apiResearchPlanDifferences(tool, implementation, research)).toEqual([
+      {
+        path: 'requestProvenance[0].recordingResponseRequestSeq',
+        planned: 2,
+        researched: null,
+        reference:
+          'candidate.workflow.requests[0].navigation.networkResponse.recordingResponseRequestSeq',
+      },
+    ]);
+    expect(research).toEqual(original);
+    implementation.requestProvenance = [{ artifactRequestIndex: 0, recordingRequestSeq: 1 }];
+    expect(apiResearchPlanDifferences(tool, implementation, research)).toEqual([]);
+  });
+
+  it('keeps missing or changed research fields factual instead of classifying API failure', () => {
+    const tool = focusedTool(1);
+    tool.strategy = { kind: 'api', reason: 'Build the master-approved construction.' };
+    tool.candidate.likelyParams = [
+      { name: 'new_input', type: 'number', description: 'A revised public number.' },
+    ];
+    const implementation = {
+      strategyKind: 'api',
+      requestProvenance: [
+        { artifactRequestIndex: 0, recordingRequestSeq: 2 },
+        { artifactRequestIndex: 1, recordingRequestSeq: 1 },
+      ],
+    } as ImplementationPlanPayload;
+
+    expect(apiResearchPlanDifferences(tool, implementation)).toEqual([
+      {
+        path: 'research.candidate',
+        planned: 'API implementation plan',
+        researched: null,
+        reference: 'candidate',
+      },
+    ]);
+    expect(apiResearchPlanDifferences(tool, implementation, researchFor(tool))).toEqual([
+      {
+        path: 'candidate.likelyParams[0].type',
+        planned: 'number',
+        researched: null,
+        reference: 'candidate.workflow.parameters',
+      },
+      {
+        path: 'requestProvenance.length',
+        planned: 2,
+        researched: 1,
+        reference: 'candidate.workflow.requests.length',
+      },
+      {
+        path: 'requestProvenance[0].recordingRequestSeq',
+        planned: 2,
+        researched: 1,
+        reference: 'candidate.workflow.requests[0].recordingRequestSeq',
+      },
+      {
+        path: 'requestProvenance[1].recordingRequestSeq',
+        planned: 1,
+        researched: null,
+        reference: 'candidate.workflow.requests[1].recordingRequestSeq',
+      },
+    ]);
   });
 
   it('keeps core API proof valid when only dependency wiring changes', () => {

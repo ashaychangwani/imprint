@@ -50,6 +50,116 @@ function fakeRunner(
 afterEach(() => __setAuthVerifierLadderForTest(null));
 
 describe('AuthVerifier', () => {
+  it('keeps discovery in the active browser and continuation, resolves credentials locally, and masks OTPs before returning evidence', async () => {
+    const inputs: unknown[] = [];
+    const states: unknown[] = [];
+    let closed = 0;
+    const browser = {
+      close: async () => {
+        closed++;
+      },
+      interactBrowser: async (action: unknown) => {
+        inputs.push(action);
+        return {
+          sourceId: 'fixture-discovery-source',
+          page: {
+            url: 'https://fixture.test/otp',
+            title: 'Verify',
+            bodyText: 'fixture-otp-987654',
+            controls: [],
+            controlsTruncated: false,
+          },
+          requests: [
+            {
+              seq: 0,
+              timestamp: 0,
+              method: 'POST',
+              url: 'https://fixture.test/unrecorded',
+              resourceType: 'Fetch',
+              headers: {},
+              body: 'password=fixture+pass%2Fword&code=fixture-otp-987654',
+              response: { status: 200, headers: {}, body: '{"ready":true}' },
+            },
+          ],
+          captureErrors: [],
+        };
+      },
+    };
+    __setAuthVerifierLadderForTest((async (args: RunnerArgs) => {
+      states.push(args.initialState);
+      args.cdpPool?.set('fixture', browser as never);
+      return {
+        result: {
+          ok: false,
+          error: 'ACTION_REQUIRED',
+          message: 'Verify',
+          nextAction: 'finish',
+          continuation: { ticket: 'fixture-ticket' },
+        },
+        usedBackend: 'cdp-replay',
+        attempts: [],
+      };
+    }) as Runner);
+    const verifier = new AuthVerifier('/tmp/fixture-workflow.json', credentials);
+    try {
+      await verifier.runAction('begin');
+      await verifier.interactBrowser({
+        action: 'fill',
+        selector: '#password',
+        value: '${credential.password}',
+      });
+      const observation = await verifier.interactBrowser({
+        action: 'fill',
+        selector: '#otp',
+        value: 'fixture-otp-987654',
+      });
+      expect(inputs).toEqual([
+        { action: 'fill', selector: '#password', value: 'fixture pass/word' },
+        { action: 'fill', selector: '#otp', value: 'fixture-otp-987654' },
+      ]);
+      expect(JSON.stringify(observation)).not.toContain('fixture-otp-987654');
+      expect(observation.requests[0]?.body).toContain('${credential.password}');
+      expect(observation.page.bodyText).toBe('[REDACTED]');
+      await verifier.runAction('finish');
+      expect(states).toEqual([undefined, { ticket: 'fixture-ticket' }]);
+      expect(closed).toBe(0);
+    } finally {
+      await verifier.drain();
+    }
+    expect(closed).toBe(1);
+  });
+
+  it('masks known secrets in added response metadata as well as messages', async () => {
+    const otp = 'fixture-secret-otp-731';
+    __setAuthVerifierLadderForTest((async () => ({
+      result: { ok: false, error: 'BAD_RESPONSE', message: 'Synthetic rejection' },
+      usedBackend: 'cdp-replay',
+      attempts: [],
+      responseObservations: [
+        {
+          backend: 'cdp-replay',
+          requestIndex: 0,
+          status: 400,
+          bodyByteLength: 0,
+          valueType: 'object',
+          redactedBodyPreview: otp,
+          contentType: `application/${otp}`,
+          topLevelKeys: [credentials.values.username, otp, 'ordinary'],
+        },
+      ],
+    })) as Runner);
+    const verifier = new AuthVerifier('/tmp/fixture-workflow.json', credentials);
+    try {
+      const result = await verifier.runAction('fixture-action', { code: otp });
+      const output = JSON.stringify(result);
+      expect(output).not.toContain(otp);
+      expect(output).not.toContain(credentials.values.username);
+      expect(result.responseObservations?.[0]?.topLevelKeys).toContain('ordinary');
+    } finally {
+      await verifier.drain();
+    }
+  });
+
   it('inspects the existing page without losing continuation and redacts secrets', async () => {
     const initialStates: Array<Record<string, unknown> | undefined> = [];
     let call = 0;
@@ -418,6 +528,194 @@ describe('AuthVerifier', () => {
     expect(seen[0]?.cookies).toHaveLength(1);
     expect(seen[0]?.storage).toHaveLength(1);
     expect(seen[1]).toEqual({ cookies: [], storage: [] });
+  });
+
+  it('refreshes durable inputs without replacing the retained browser, and seeds a chosen fresh login with the latest snapshot', async () => {
+    let closed = 0;
+    const browser = {
+      close: async () => {
+        closed += 1;
+      },
+    };
+    const snapshots: unknown[] = [];
+    const states: unknown[] = [];
+    __setAuthVerifierLadderForTest(async (input) => {
+      snapshots.push(input.credentials);
+      states.push(input.initialState);
+      if (snapshots.length === 1) input.cdpPool?.set('fixture', browser as never);
+      else if (snapshots.length === 2) expect(input.cdpPool?.get('fixture')).toBe(browser as never);
+      else expect(input.cdpPool?.size).toBe(0);
+      return {
+        result: {
+          ok: false,
+          error: 'ACTION_REQUIRED',
+          message: 'Current continuation',
+          nextAction: 'chosen_next',
+          continuation: { ticket: 'fixture-current-ticket' },
+        },
+        usedBackend: 'cdp-replay',
+        attempts: [],
+      };
+    });
+    const verifier = new AuthVerifier('/tmp/fixture-workflow.json', credentials);
+    await verifier.runAction('start');
+    const refreshed = {
+      ...credentials,
+      cookies: [
+        { name: 'updated', value: 'fixture-new-cookie', domain: '.fixture.test', path: '/' },
+      ],
+      values: { ...credentials.values, password: 'fixture-updated-password' },
+    };
+    verifier.updateCredentials(refreshed);
+    await verifier.runAction('restore');
+    expect(closed).toBe(0);
+    expect(snapshots[1]).toBe(refreshed);
+    expect(states[1]).toEqual({ ticket: 'fixture-current-ticket' });
+    expect(verifier.state).toMatchObject({
+      browserActive: true,
+      hasContinuation: true,
+      lastAction: { action: 'restore', error: 'ACTION_REQUIRED' },
+    });
+    expect(JSON.stringify(verifier.state)).not.toContain('fixture-current-ticket');
+    await verifier.runAction('new_login', {}, { freshSession: true });
+    expect(closed).toBe(1);
+    expect(snapshots[2]).toBe(refreshed);
+    expect(states[2]).toBeUndefined();
+    await verifier.drain();
+  });
+
+  it('cancels an active verification on disposal and prevents subsequent browser work', async () => {
+    let closed = 0;
+    let observedSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    __setAuthVerifierLadderForTest(async (input) => {
+      observedSignal = input.signal;
+      started();
+      input.cdpPool?.set('fixture', {
+        close: async () => {
+          closed += 1;
+        },
+      } as never);
+      return await new Promise((_, reject) =>
+        input.signal?.addEventListener('abort', () => reject(input.signal?.reason), { once: true }),
+      );
+    });
+    const verifier = new AuthVerifier('/tmp/fixture-workflow.json', credentials);
+    const pending = verifier.runAction('pause_for_network').catch((error: unknown) => error);
+    await running;
+    await verifier.drain();
+    expect(await pending).toBeInstanceOf(Error);
+    expect(observedSignal?.aborted).toBe(true);
+    expect(closed).toBe(1);
+    await expect(verifier.runAction('must_not_start')).rejects.toThrow();
+    await verifier.drain();
+    expect(closed).toBe(1);
+  });
+
+  it('isolates cancelled ladder cleanup from a later browser and continuation while keeping caller cancellation prompt', async () => {
+    let entered!: () => void;
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    let releaseOld!: () => void;
+    const oldHeld = new Promise<void>((resolve) => {
+      releaseOld = resolve;
+    });
+    let releaseClose!: () => void;
+    const closeHeld = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    let oldExited!: () => void;
+    const oldFinished = new Promise<void>((resolve) => {
+      oldExited = resolve;
+    });
+    let oldClosed = false;
+    let newClosed = 0;
+    let calls = 0;
+    const pools: Array<RunnerArgs['cdpPool']> = [];
+    const oldBrowser = {
+      close: async () => {
+        await closeHeld;
+        oldClosed = true;
+      },
+    };
+    const newBrowser = {
+      close: async () => {
+        newClosed += 1;
+      },
+    };
+    __setAuthVerifierLadderForTest(async (input) => {
+      pools.push(input.cdpPool);
+      calls += 1;
+      if (calls === 1) {
+        input.cdpPool?.set('fixture', oldBrowser as never);
+        entered();
+        await oldHeld; // Simulates a CDP await that has not observed cancellation yet.
+        await oldBrowser.close();
+        input.cdpPool?.delete('fixture'); // Late backend eviction must touch only the old map.
+        oldExited();
+        return {
+          result: {
+            ok: false,
+            error: 'ACTION_REQUIRED',
+            message: 'Stale result',
+            nextAction: 'old_next',
+            continuation: { ticket: 'old-ticket' },
+          },
+          usedBackend: 'cdp-replay',
+          attempts: [],
+        };
+      }
+      if (calls === 2) {
+        expect(oldClosed).toBe(true);
+        expect(input.cdpPool).not.toBe(pools[0]);
+        expect(input.initialState).toBeUndefined();
+        input.cdpPool?.set('fixture', newBrowser as never);
+        return {
+          result: {
+            ok: false,
+            error: 'ACTION_REQUIRED',
+            message: 'Current result',
+            nextAction: 'current_next',
+            continuation: { ticket: 'current-ticket' },
+          },
+          usedBackend: 'cdp-replay',
+          attempts: [],
+        };
+      }
+      expect(input.cdpPool?.get('fixture')).toBe(newBrowser as never);
+      expect(input.initialState).toEqual({ ticket: 'current-ticket' });
+      expect(newClosed).toBe(0);
+      return { result: { ok: true, data: {} }, usedBackend: 'cdp-replay', attempts: [] };
+    });
+    const verifier = new AuthVerifier('/tmp/fixture-workflow.json', credentials);
+    const abort = new AbortController();
+    const old = verifier
+      .runAction('old', {}, { signal: abort.signal })
+      .catch((error: unknown) => error);
+    await started;
+    abort.abort(new Error('Consumer cancelled'));
+    expect(await old).toBeInstanceOf(Error); // Neither oldHeld nor closeHeld is released yet.
+    const recovered = verifier.runAction('recover');
+    await Promise.resolve();
+    expect(calls).toBe(1); // Wait for owned browser release, not the old ladder result.
+    releaseClose();
+    expect(await recovered).toMatchObject({ error: 'ACTION_REQUIRED', nextAction: 'current_next' });
+    releaseOld();
+    await oldFinished;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(verifier.state).toMatchObject({
+      browserActive: true,
+      hasContinuation: true,
+      lastAction: { action: 'recover', nextAction: 'current_next' },
+    });
+    expect(newClosed).toBe(0);
+    await verifier.runAction('current_next');
+    await verifier.drain();
+    expect(newClosed).toBe(1);
   });
 
   it('closes every browser retained by the shared verifier pool', async () => {

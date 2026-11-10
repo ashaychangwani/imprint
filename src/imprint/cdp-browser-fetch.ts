@@ -28,8 +28,14 @@
  * trusted browser session.
  */
 
+import { randomUUID } from 'node:crypto';
 import CDP from 'chrome-remote-interface';
 import { getDomain } from 'tldts';
+import {
+  type AuthBrowserAction,
+  AuthBrowserDiscovery,
+  type AuthBrowserObservation,
+} from './auth-browser-discovery.ts';
 import { AKAMAI_SENSOR_COOKIE, abckFlag, isAbckValidated } from './bot-defense.ts';
 import {
   __registerChromePid,
@@ -37,6 +43,7 @@ import {
   launchChromium,
   proxyUrl,
 } from './chromium.ts';
+import { recordBrowserCredentialObservation } from './credential-observation.ts';
 import { createLog } from './log.ts';
 import type { NavigationNetworkResponseMatcher } from './types.ts';
 
@@ -53,7 +60,10 @@ export interface MintedJar {
     httpOnly?: boolean;
     secure?: boolean;
     sameSite?: string;
+    hostOnly?: boolean;
   }>;
+  /** Factual outcome of the initial cookie planting; never contains values. */
+  seedCookieDiagnostics?: CookieSeedDiagnostics;
   /** The exact UA the bootstrap browser presented (HeadlessChrome stripped) —
    *  replay fetches MUST send this verbatim or Akamai drops the jar. */
   ua: string;
@@ -83,6 +93,9 @@ export interface MintedJar {
    *  seeded from the user's recorded session. Used only for accurate diagnostics
    *  (both now carry `html`, so emptiness no longer distinguishes them). */
   source?: 'mint' | 'recording';
+  /** Durable credential input for a retained replay snapshot. A new credential
+   * state supersedes the entire snapshot, including cookies it had deleted. */
+  credentialStateHash?: string;
 }
 
 /** A session is replay-safe when `_abck` is validated (`~0~`) OR the Akamai
@@ -188,9 +201,14 @@ export interface CdpBrowserFetch {
   /** Snapshot every cookie in this dedicated browser, including cookies minted
    *  on origins reached by redirects rather than the bootstrap origin. */
   snapshotCookies?(): Promise<MintedJar['cookies']>;
+  /** Read diagnostic state only when a client already exists. Unlike ordinary
+   * snapshotCookies, this never launches or bootstraps a replacement browser. */
+  snapshotExistingCookies?(): Promise<MintedJar['cookies'] | undefined>;
   /** Inspect the currently rendered page without navigating or mutating browser
    *  state. Cookie values are intentionally excluded from this diagnostic view. */
   inspectPage?(): Promise<CdpPageSnapshot>;
+  /** Agent-selected discovery on this same browser, with ongoing network capture. */
+  interactBrowser?(action: AuthBrowserAction): Promise<AuthBrowserObservation>;
   /** Force the bootstrap navigation + `_abck` validation now; returns the
    *  session cookies so callers can read session tokens (CSRF) for `${state.X}`. */
   ensureBootstrapped(): Promise<Array<{ name: string; value: string }>>;
@@ -215,6 +233,7 @@ export interface CdpPageSnapshot {
     httpOnly?: boolean;
     secure?: boolean;
     sameSite?: string;
+    hostOnly?: boolean;
   }>;
 }
 
@@ -489,6 +508,7 @@ export interface CdpBrowserFetchOptions {
     httpOnly?: boolean;
     sameSite?: string;
     expires?: number;
+    hostOnly?: boolean;
   }>;
   /** Browser storage to restore before page scripts run. Entries are scoped to
    * their recorded origin and applied on every matching document navigation. */
@@ -509,6 +529,101 @@ export interface CdpBrowserFetchOptions {
 }
 
 type CdpClient = Awaited<ReturnType<typeof CDP>>;
+
+/** Read the target's complete cookie partition, rather than current-page URLs. */
+export async function readCdpCookieSnapshot(
+  network: Pick<CdpClient['Network'], 'getAllCookies'>,
+  timeoutMs: number,
+): Promise<MintedJar['cookies']> {
+  // Network.getCookies({}) filters by the page and subframes. Keeping this
+  // command on the existing target also avoids reading another browser context.
+  const { cookies } = await withTimeout(
+    network.getAllCookies(),
+    'CDP Network.getAllCookies',
+    timeoutMs,
+  );
+  return cookies.map((cookie) => ({
+    name: cookie.name,
+    value: cookie.value,
+    domain: cookie.domain,
+    path: cookie.path,
+    expires: cookie.expires > 0 ? cookie.expires : undefined,
+    httpOnly: cookie.httpOnly,
+    secure: cookie.secure,
+    sameSite: cookie.sameSite,
+    hostOnly: !cookie.domain.startsWith('.'),
+  }));
+}
+
+export interface CookieSeedDiagnostics {
+  attempted: number;
+  accepted: number;
+  rejected: number;
+  failed: number;
+  /** Positions identify input scopes without exposing names, paths or values. */
+  issues: Array<{ index: number; outcome: 'rejected' | 'error' }>;
+  issuesTruncated: boolean;
+}
+
+/** Preserve browser cookie scope and distinguish a rejected CDP command from
+ * a fulfilled one. A stale optional cookie does not make navigation fail. */
+export async function seedCdpCookies(
+  network: Pick<CdpClient['Network'], 'setCookie'>,
+  cookies: NonNullable<CdpBrowserFetchOptions['seedCookies']>,
+  timeoutMs: number,
+): Promise<CookieSeedDiagnostics> {
+  const diagnostics: CookieSeedDiagnostics = {
+    attempted: cookies.length,
+    accepted: 0,
+    rejected: 0,
+    failed: 0,
+    issues: [],
+    issuesTruncated: false,
+  };
+  const issue = (index: number, outcome: 'rejected' | 'error'): void => {
+    if (diagnostics.issues.length < 50) diagnostics.issues.push({ index, outcome });
+    else diagnostics.issuesTruncated = true;
+  };
+  for (const [index, cookie] of cookies.entries()) {
+    try {
+      const hostOnly = cookie.hostOnly ?? !cookie.domain.startsWith('.');
+      const url = new URL(
+        `${cookie.secure ? 'https' : 'http'}://${cookie.domain.replace(/^\./, '')}/`,
+      );
+      url.pathname = cookie.path ?? '/';
+      const result = await withTimeout(
+        network.setCookie({
+          name: cookie.name,
+          value: cookie.value,
+          url: url.href,
+          ...(hostOnly ? {} : { domain: `.${cookie.domain.replace(/^\./, '')}` }),
+          path: cookie.path ?? '/',
+          secure: cookie.secure ?? false,
+          httpOnly: cookie.httpOnly ?? false,
+          ...(cookie.sameSite ? { sameSite: normalizeSameSite(cookie.sameSite) } : {}),
+          ...(typeof cookie.expires === 'number' && cookie.expires > 0
+            ? { expires: cookie.expires }
+            : {}),
+        }),
+        `CDP Network.setCookie(${index})`,
+        timeoutMs,
+      );
+      if (result.success === true) diagnostics.accepted++;
+      else if (result.success === false) {
+        diagnostics.rejected++;
+        issue(index, 'rejected');
+      } else {
+        diagnostics.failed++;
+        issue(index, 'error');
+      }
+    } catch {
+      diagnostics.failed++;
+      issue(index, 'error');
+    }
+  }
+  return diagnostics;
+}
+
 type LaunchedChromium = Awaited<ReturnType<typeof launchChromium>>;
 type ChromiumLauncher = (opts: Parameters<typeof launchChromium>[0]) => Promise<LaunchedChromium>;
 type CdpConnector = (port: number) => Promise<CdpClient>;
@@ -1106,6 +1221,7 @@ function buildUaOverride(rawUa: string): {
 
 /** Create a CDP-browser-backed fetch. Lazily launches Chrome on first use. */
 export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserFetch {
+  const diagnosticBrowserId = randomUUID();
   const baseOrigin = new URL(opts.baseUrl).origin;
   // Navigate the bootstrap page when declared; otherwise the base URL — but
   // never an obvious API/.act endpoint (opening one cold yields an error page
@@ -1123,6 +1239,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   let bootstrapped = false;
   let appliedUa: string | undefined;
   let bootstrapResponseHeaders: Record<string, string> = {};
+  let seedCookieDiagnostics: CookieSeedDiagnostics | undefined;
   let currentPageUrl = navUrl;
   let mainFrameId: string | undefined;
   let lastDocumentResponse: {
@@ -1141,8 +1258,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   const activeNetworkBodyReads = new Set<Promise<void>>();
   let finishActiveNetworkResponse: ((requestId: string) => void) | undefined;
   let navigationInProgress = false;
+  let discoveryRequested = false;
+  let discovery: AuthBrowserDiscovery | undefined;
 
   async function close(): Promise<void> {
+    discovery?.close();
+    discovery = undefined;
     const c = client;
     const ch = chrome;
     const chromePid = chrome?.process.pid;
@@ -1151,6 +1272,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     bootstrapped = false;
     appliedUa = undefined;
     bootstrapResponseHeaders = {};
+    seedCookieDiagnostics = undefined;
     currentPageUrl = navUrl;
     mainFrameId = undefined;
     lastDocumentResponse = null;
@@ -1208,6 +1330,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       const { Runtime, Network, Input, Page } = client;
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
+      if (discoveryRequested && !discovery)
+        discovery = new AuthBrowserDiscovery(client, cdpCommandTimeoutMs);
       await withTimeout(Page.enable(), 'CDP Page.enable', cdpCommandTimeoutMs);
       if (typeof Page.getFrameTree === 'function') {
         const tree = await withTimeout(
@@ -1248,6 +1372,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           request?: { method?: string; url?: string };
         }) => {
           if (!event.requestId) return;
+          recordBrowserCredentialObservation({
+            event: 'browser-request',
+            browserId: diagnosticBrowserId,
+            requestId: event.requestId,
+            request: event.request,
+          });
           requestSequence++;
           requestFacts.set(event.requestId, {
             method: event.request?.method ?? '',
@@ -1268,6 +1398,22 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           }
         },
       );
+      if (
+        process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH &&
+        typeof Network.requestWillBeSentExtraInfo === 'function'
+      ) {
+        Network.requestWillBeSentExtraInfo(
+          (event: { requestId?: string; headers?: Record<string, unknown> }) => {
+            if (!event.requestId) return;
+            recordBrowserCredentialObservation({
+              event: 'browser-wire',
+              browserId: diagnosticBrowserId,
+              requestId: event.requestId,
+              headers: event.headers,
+            });
+          },
+        );
+      }
       const onResponseReceived = (event: {
         requestId?: string;
         loaderId?: string;
@@ -1283,6 +1429,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         if (!url) return;
         const headers = normalizeCdpResponseHeaders(event.response?.headers ?? {});
         if (event.requestId) {
+          recordBrowserCredentialObservation({
+            event: 'browser-response',
+            browserId: diagnosticBrowserId,
+            requestId: event.requestId,
+            status: event.response?.status,
+          });
           const facts = requestFacts.get(event.requestId);
           const observed = {
             requestId: event.requestId,
@@ -1362,29 +1514,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       // the in-page protected POSTs succeed (the live bmak sensor then keeps it
       // re-validated between calls).
       if (opts.seedCookies && opts.seedCookies.length > 0) {
-        let planted = 0;
-        for (const c of opts.seedCookies) {
-          try {
-            await withTimeout(
-              Network.setCookie({
-                name: c.name,
-                value: c.value,
-                domain: c.domain,
-                path: c.path ?? '/',
-                secure: c.secure ?? false,
-                httpOnly: c.httpOnly ?? false,
-                ...(c.sameSite ? { sameSite: normalizeSameSite(c.sameSite) } : {}),
-                ...(typeof c.expires === 'number' && c.expires > 0 ? { expires: c.expires } : {}),
-              }),
-              `CDP Network.setCookie(${c.name})`,
-              shortCdpTimeoutMs,
-            );
-            planted++;
-          } catch {
-            // best-effort — a cookie Akamai re-issues on navigate isn't fatal
-          }
-        }
-        log(`seeded ${planted}/${opts.seedCookies.length} high-trust cookies before navigate`);
+        seedCookieDiagnostics = await seedCdpCookies(Network, opts.seedCookies, shortCdpTimeoutMs);
+        log(
+          `seeded ${seedCookieDiagnostics.accepted}/${seedCookieDiagnostics.attempted} cookies before navigate; rejected=${seedCookieDiagnostics.rejected} failed=${seedCookieDiagnostics.failed}`,
+        );
       }
       // Strip the `HeadlessChrome` UA token (Akamai's only headless edge-tell) and
       // send matching client hints — BEFORE navigating to the protected origin.
@@ -1677,6 +1810,21 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       // Route the cross-origin plain fetch through the SAME proxy as the browser
       // (Bun fetch `proxy` opt) so its egress IP matches the in-page traffic.
       const proxy = proxyUrl();
+      const diagnosticRequestId = randomUUID();
+      recordBrowserCredentialObservation({
+        event: 'browser-request',
+        browserId: diagnosticBrowserId,
+        requestId: diagnosticRequestId,
+        transport: 'browser-http',
+        request: { method, url: fullUrl },
+      });
+      recordBrowserCredentialObservation({
+        event: 'browser-wire',
+        browserId: diagnosticBrowserId,
+        requestId: diagnosticRequestId,
+        transport: 'browser-http',
+        headers: outHeaders,
+      });
       const xResp = await globalThis.fetch(fullUrl, {
         method,
         headers: outHeaders,
@@ -1684,6 +1832,13 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         signal: init?.signal ?? undefined,
         ...(proxy ? { proxy } : {}),
       } as RequestInit);
+      recordBrowserCredentialObservation({
+        event: 'browser-response',
+        browserId: diagnosticBrowserId,
+        requestId: diagnosticRequestId,
+        transport: 'browser-http',
+        status: xResp.status,
+      });
       // Re-inject the cross-origin response's Set-Cookie back into the browser's
       // cookie jar — ONLY when the auth compile agent opted in (the recorded login
       // carries its session through a cross-origin Set-Cookie). The plain fetch
@@ -1778,35 +1933,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     });
   }) as typeof fetch;
 
-  const snapshotAllCookies = async (c: CdpClient): Promise<MintedJar['cookies']> => {
-    const cookies: MintedJar['cookies'] = [];
-    try {
-      // With no URL filter CDP returns the dedicated browser's complete jar.
-      // This includes host-only cookies minted on relying-party origins reached
-      // through redirects, which a bootstrap-origin-only query cannot see.
-      const res = await withTimeout(
-        c.Network.getCookies({}),
-        'CDP Network.getCookies(all origins)',
-        cdpCommandTimeoutMs,
-      );
-      for (const ck of res.cookies as unknown as Array<Record<string, unknown>>) {
-        cookies.push({
-          name: ck.name as string,
-          value: ck.value as string,
-          domain: ck.domain as string,
-          path: (ck.path as string) ?? '/',
-          expires:
-            typeof ck.expires === 'number' && ck.expires > 0 ? (ck.expires as number) : undefined,
-          httpOnly: ck.httpOnly as boolean | undefined,
-          secure: ck.secure as boolean | undefined,
-          sameSite: ck.sameSite as string | undefined,
-        });
-      }
-    } catch {
-      // best-effort
-    }
-    return cookies;
-  };
+  const snapshotAllCookies = (c: CdpClient): Promise<MintedJar['cookies']> =>
+    readCdpCookieSnapshot(c.Network, cdpCommandTimeoutMs);
 
   const readCurrentPageUrl = async (c: CdpClient): Promise<string> => {
     try {
@@ -2385,6 +2513,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   return {
     fetchImpl,
     navigate,
+    async interactBrowser(action) {
+      discoveryRequested = true;
+      const c = await ensure();
+      discovery ??= new AuthBrowserDiscovery(c, cdpCommandTimeoutMs);
+      return discovery.interact(action, buildNavigationClickTargetExpression);
+    },
     async inspectPage(): Promise<CdpPageSnapshot> {
       const c = await ensure();
       const evaluation = await withTimeout(
@@ -2409,11 +2543,15 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           httpOnly: cookie.httpOnly,
           secure: cookie.secure,
           sameSite: cookie.sameSite,
+          hostOnly: cookie.hostOnly,
         })),
       };
     },
     async snapshotCookies() {
       return snapshotAllCookies(await ensure());
+    },
+    async snapshotExistingCookies() {
+      return client ? snapshotAllCookies(client) : undefined;
     },
     async ensureBootstrapped() {
       const c = await ensure();
@@ -2458,6 +2596,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         abckFlag: abckFlag(abck),
         validated: jarCookiesValidated(cookies),
         source: 'mint',
+        ...(seedCookieDiagnostics ? { seedCookieDiagnostics } : {}),
       };
     },
     close,
@@ -2561,7 +2700,7 @@ export function parseSetCookieForCdp(setCookie: string, requestUrl: string): Cdp
     const i = seg.indexOf('=');
     const k = (i < 0 ? seg : seg.slice(0, i)).trim().toLowerCase();
     const v = i < 0 ? '' : seg.slice(i + 1).trim();
-    if (k === 'domain' && v) ck.domain = v;
+    if (k === 'domain' && v) ck.domain = `.${v.replace(/^\./, '')}`;
     else if (k === 'path' && v) ck.path = v;
     else if (k === 'secure') ck.secure = true;
     else if (k === 'httponly') ck.httpOnly = true;

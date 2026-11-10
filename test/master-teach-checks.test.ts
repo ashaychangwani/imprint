@@ -302,4 +302,29 @@ describe('invocation outcome facts', () => {
     expect(check.status).toBe('failed');
     expect(JSON.stringify(check)).not.toContain(privateResult);
   });
+
+  it('retains the typed auth error and HTTP status in a failed invocation receipt', () => {
+    const check = invocationOutcomeCheck({
+      subject: 'live',
+      invocationIndex: 0,
+      outcome: {
+        kind: 'returned',
+        result: {
+          ok: false,
+          error: 'AUTH_EXPIRED',
+          status: 401,
+          message: `private body ${privateResult}`,
+        },
+      },
+    });
+    expect(check.facts).toContainEqual({
+      kind: 'invocation',
+      subject: 'live',
+      status: 'failed',
+      invocationIndex: 0,
+      errorCode: 'AUTH_EXPIRED',
+      httpStatus: 401,
+    });
+    expect(JSON.stringify(check)).not.toContain(privateResult);
+  });
 });

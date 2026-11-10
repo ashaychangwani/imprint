@@ -17,17 +17,21 @@
  * a downstream agent (OpenClaw/Hermes) which credentials it needs to ask
  * for when consuming a shared skill.
  */
+import { createHash, randomUUID } from 'node:crypto';
 import {
   existsSync,
   mkdirSync,
   readFileSync,
   readdirSync,
+  renameSync,
   unlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { dirname, join as pathJoin } from 'node:path';
 import { argon2id } from '@noble/hashes/argon2.js';
 import envPaths from 'env-paths';
+import { withCredentialLock } from './credential-lock.ts';
+import { credentialObservation, recordCredentialEvent } from './credential-observation.ts';
 
 const PATHS = envPaths('imprint', { suffix: '' });
 const SERVICE_NAME = 'imprint';
@@ -62,6 +66,8 @@ export interface CookieRecord {
   sameSite?: string;
   hostOnly?: boolean;
   creationIndex?: number;
+  /** Independent HTTP observation retained alongside its exact browser baseline. */
+  httpResponse?: { browserSnapshotHash: string | null; deleted?: boolean };
 }
 
 export interface StorageRecord {
@@ -75,6 +81,10 @@ export interface StorageRecord {
  *  await to keep the call sites uniform. */
 export interface CredentialBackend {
   readonly id: 'keyring' | 'encrypted-file' | 'legacy-json';
+  /** One lock for the actual backend namespace, independent of IMPRINT_HOME. */
+  readonly lockDirectory?: string;
+  /** Refresh process-local data once the namespace lock is held. */
+  refresh?(): Promise<void>;
   getSecret(site: string, name: string): Promise<string | null>;
   setSecret(site: string, name: string, value: string): Promise<void>;
   deleteSecret(site: string, name: string): Promise<void>;
@@ -206,9 +216,18 @@ class EncryptedFileBackend implements CredentialBackend {
   // biome-ignore lint/suspicious/noExplicitAny: dynamic libsodium ref
   private sodium: any;
   private cachedKey: Uint8Array | null = null;
+  private cachedSaltB64: string | null = null;
   /** Cached decrypted shape — flushed back to disk on every mutation. */
   private cachedData: EncryptedFileShape | null = null;
   private passphraseProvider: () => Promise<string>;
+
+  get lockDirectory(): string {
+    return `${this.filePath}.lock`;
+  }
+
+  async refresh(): Promise<void> {
+    this.cachedData = null;
+  }
 
   constructor(opts: {
     filePath: string;
@@ -226,6 +245,8 @@ class EncryptedFileBackend implements CredentialBackend {
     const sodium = this.sodium;
 
     if (!existsSync(this.filePath)) {
+      this.cachedKey = null;
+      this.cachedSaltB64 = null;
       // No store yet. For a READ (forWrite !== true), short-circuit with an
       // empty in-memory shape — there cannot be any credentials to return,
       // and prompting for a passphrase here would hang non-interactive
@@ -258,8 +279,10 @@ class EncryptedFileBackend implements CredentialBackend {
 
     // Try cached passphrase first if the user has set $IMPRINT_PASSPHRASE
     // and re-entered process.
-    const passphrase = await this.passphraseProvider();
-    const key = deriveKey(passphrase, salt);
+    const key =
+      this.cachedKey && this.cachedSaltB64 === parsed.saltB64
+        ? this.cachedKey
+        : deriveKey(await this.passphraseProvider(), salt);
     let plain: Uint8Array;
     try {
       plain = sodium.crypto_secretbox_open_easy(ct, nonce, key);
@@ -270,6 +293,7 @@ class EncryptedFileBackend implements CredentialBackend {
     }
     const text = new TextDecoder().decode(plain);
     this.cachedKey = key;
+    this.cachedSaltB64 = parsed.saltB64;
     this.cachedData = JSON.parse(text) as EncryptedFileShape;
   }
 
@@ -286,7 +310,18 @@ class EncryptedFileBackend implements CredentialBackend {
       ctB64: b64encode(ct),
     };
     mkdirSync(dirname(this.filePath), { recursive: true });
-    writeFileSync(this.filePath, JSON.stringify(wire), 'utf8');
+    const temporary = `${this.filePath}.${randomUUID()}.tmp`;
+    try {
+      writeFileSync(temporary, JSON.stringify(wire), { encoding: 'utf8', mode: 0o600 });
+      renameSync(temporary, this.filePath);
+      this.cachedSaltB64 = wire.saltB64;
+    } finally {
+      try {
+        unlinkSync(temporary);
+      } catch {
+        // Cleanup must not replace a failed write with a secondary error.
+      }
+    }
   }
 
   /** Persist using the SAME salt the file was loaded with. */
@@ -652,17 +687,74 @@ export function markLegacyStoreMigrated(site: string): void {
 // ─── High-level convenience API ────────────────────────────────────────────
 
 /** A site's full credential view: secrets values + cookies. Used by runtime. */
-interface SiteCredentialView {
+export interface SiteCredentialView {
   site: string;
   cookies: CookieRecord[];
   values: Record<string, string>;
   storage: StorageRecord[];
+  /** Raw durable material identity, before runtime normalization or env input. */
+  revision: string;
+}
+
+function credentialRevision(material: Omit<SiteCredentialView, 'revision'>): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (value && typeof value === 'object')
+      return Object.fromEntries(
+        Object.entries(value)
+          .filter(([, entry]) => entry !== undefined)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, entry]) => [key, canonical(entry)]),
+      );
+    return value;
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(material)))
+    .digest('hex');
+}
+
+function credentialLockDirectory(site: string, backend: CredentialBackend): string {
+  return (
+    backend.lockDirectory ??
+    pathJoin(
+      PATHS.config,
+      'credential-locks',
+      backend.id,
+      createHash('sha256').update(site).digest('hex'),
+    )
+  );
+}
+
+async function withSiteCredentialLock<T>(
+  site: string,
+  signal: AbortSignal | undefined,
+  work: (backend: CredentialBackend) => Promise<T>,
+): Promise<T> {
+  signal?.throwIfAborted();
+  const backend = await getCredentialBackend();
+  return withCredentialLock(credentialLockDirectory(site, backend), signal, async () => {
+    await backend.refresh?.();
+    signal?.throwIfAborted();
+    return work(backend);
+  });
 }
 
 /** Loads everything we know about a site, falling back through the backends.
  *  Used at request time by runtime.executeWorkflow. */
-export async function loadSiteCredentials(site: string): Promise<SiteCredentialView> {
-  const backend = await getCredentialBackend();
+export async function loadSiteCredentials(
+  site: string,
+  options?: { signal?: AbortSignal },
+): Promise<SiteCredentialView> {
+  return withSiteCredentialLock(site, options?.signal, (backend) =>
+    loadSiteCredentialsUnlocked(site, backend),
+  );
+}
+
+async function loadSiteCredentialsUnlocked(
+  site: string,
+  backend: CredentialBackend,
+  includeLegacy = true,
+): Promise<SiteCredentialView> {
   const names = await backend.listSecrets(site);
   const values: Record<string, string> = {};
   for (const n of names) {
@@ -673,26 +765,113 @@ export async function loadSiteCredentials(site: string): Promise<SiteCredentialV
   const storage = (await backend.getStorage?.(site)) ?? [];
 
   // Fall through to legacy if the backend has nothing.
-  if (Object.keys(values).length === 0 && cookies.length === 0 && storage.length === 0) {
+  if (
+    includeLegacy &&
+    Object.keys(values).length === 0 &&
+    cookies.length === 0 &&
+    storage.length === 0
+  ) {
     const legacy = readLegacyStore(site);
     if (legacy) {
-      return { site, cookies: legacy.cookies, values: legacy.values, storage: [] };
+      const material = structuredClone({
+        site,
+        cookies: legacy.cookies,
+        values: legacy.values,
+        storage: [],
+      });
+      const result = { ...material, revision: credentialRevision(material) };
+      const observation = credentialObservation(result, 'legacy-json');
+      if (observation) recordCredentialEvent('load', observation);
+      return result;
     }
   }
-  return { site, cookies, values, storage };
+  const material = structuredClone({ site, cookies, values, storage });
+  const result = { ...material, revision: credentialRevision(material) };
+  const observation = credentialObservation(result, backend.id);
+  if (observation) recordCredentialEvent('load', observation);
+  return result;
 }
 
 /** Convenience wrapper to persist cookies after a successful auth tool run.
  *  Delegates to the active credential backend's setCookies. */
-export async function saveSiteCookies(site: string, cookies: CookieRecord[]): Promise<void> {
-  const backend = await getCredentialBackend();
-  await backend.setCookies(site, cookies);
+export async function saveSiteCookies(
+  site: string,
+  cookies: CookieRecord[],
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const signal = options?.signal;
+  await withSiteCredentialLock(site, signal, async (backend) => {
+    const previous = structuredClone(await backend.getCookies(site));
+    signal?.throwIfAborted();
+    try {
+      await backend.setCookies(site, cookies);
+      signal?.throwIfAborted();
+      await observeCommittedCredentials(site, backend);
+      signal?.throwIfAborted();
+    } catch (error) {
+      await backend.setCookies(site, previous);
+      throw error;
+    }
+  });
 }
 
 /** Persist browser storage through the active credential backend. */
-export async function saveSiteStorage(site: string, storage: StorageRecord[]): Promise<void> {
-  const backend = await getCredentialBackend();
-  await backend.setStorage?.(site, storage);
+export async function saveSiteStorage(
+  site: string,
+  storage: StorageRecord[],
+  options?: { signal?: AbortSignal },
+): Promise<void> {
+  const signal = options?.signal;
+  await withSiteCredentialLock(site, signal, async (backend) => {
+    const previous = structuredClone((await backend.getStorage?.(site)) ?? []);
+    signal?.throwIfAborted();
+    try {
+      await backend.setStorage?.(site, storage);
+      signal?.throwIfAborted();
+      await observeCommittedCredentials(site, backend);
+      signal?.throwIfAborted();
+    } catch (error) {
+      await backend.setStorage?.(site, previous);
+      throw error;
+    }
+  });
+}
+
+/** Publish a successful browser's complete cookie snapshot only if its durable
+ * starting revision is still current. Never merges removed cookies back in or
+ * overwrites newer auth, secrets or storage. Legacy fallback is read-only. */
+export async function compareAndSwapSiteCookies(
+  site: string,
+  expectedRevision: string,
+  cookies: CookieRecord[],
+  options?: { signal?: AbortSignal },
+): Promise<{ status: 'updated' | 'unchanged' | 'stale'; revision: string }> {
+  const signal = options?.signal;
+  const nextCookies = structuredClone(cookies);
+  return withSiteCredentialLock(site, signal, async (backend) => {
+    const current = await loadSiteCredentialsUnlocked(site, backend, false);
+    signal?.throwIfAborted();
+    if (current.revision !== expectedRevision)
+      return { status: 'stale', revision: current.revision };
+    const nextRevision = credentialRevision({
+      site,
+      cookies: nextCookies,
+      values: current.values,
+      storage: current.storage,
+    });
+    if (nextRevision === current.revision)
+      return { status: 'unchanged', revision: current.revision };
+    try {
+      await backend.setCookies(site, nextCookies);
+      signal?.throwIfAborted();
+      await observeCommittedCredentials(site, backend);
+      signal?.throwIfAborted();
+      return { status: 'updated', revision: nextRevision };
+    } catch (error) {
+      await backend.setCookies(site, current.cookies);
+      throw error;
+    }
+  });
 }
 
 /** Replace the durable auth material as one logical commit. Backends such as
@@ -702,43 +881,67 @@ export async function commitSiteAuthState(
   site: string,
   cookies: CookieRecord[],
   secrets: Record<string, string>,
+  options?: { signal?: AbortSignal },
 ): Promise<void> {
-  const backend = await getCredentialBackend();
-  const previousCookies = await backend.getCookies(site);
-  const previousSecrets = new Map<string, string | null>();
-  for (const name of Object.keys(secrets)) {
-    previousSecrets.set(name, await backend.getSecret(site, name));
-  }
+  const signal = options?.signal;
+  await withSiteCredentialLock(site, signal, async (backend) => {
+    signal?.throwIfAborted();
+    const previousCookies = structuredClone(await backend.getCookies(site));
+    const previousSecrets = new Map<string, string | null>();
+    for (const name of Object.keys(secrets)) {
+      signal?.throwIfAborted();
+      previousSecrets.set(name, await backend.getSecret(site, name));
+    }
 
-  try {
-    await backend.setCookies(site, cookies);
-    for (const [name, value] of Object.entries(secrets)) {
-      await backend.setSecret(site, name, value);
-    }
-  } catch (err) {
-    const rollbackFailures: string[] = [];
     try {
-      await backend.setCookies(site, previousCookies);
-    } catch (rollbackErr) {
-      rollbackFailures.push(
-        `cookies: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
-      );
-    }
-    for (const [name, value] of previousSecrets) {
+      signal?.throwIfAborted();
+      await backend.setCookies(site, cookies);
+      signal?.throwIfAborted();
+      for (const [name, value] of Object.entries(secrets)) {
+        await backend.setSecret(site, name, value);
+        signal?.throwIfAborted();
+      }
+      await observeCommittedCredentials(site, backend);
+      signal?.throwIfAborted();
+    } catch (err) {
+      const rollbackFailures: string[] = [];
       try {
-        if (value === null) await backend.deleteSecret(site, name);
-        else await backend.setSecret(site, name, value);
+        await backend.setCookies(site, previousCookies);
       } catch (rollbackErr) {
         rollbackFailures.push(
-          `${name}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+          `cookies: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
         );
       }
+      for (const [name, value] of previousSecrets) {
+        try {
+          if (value === null) await backend.deleteSecret(site, name);
+          else await backend.setSecret(site, name, value);
+        } catch (rollbackErr) {
+          rollbackFailures.push(
+            `${name}: ${rollbackErr instanceof Error ? rollbackErr.message : String(rollbackErr)}`,
+          );
+        }
+      }
+      const original = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        rollbackFailures.length > 0
+          ? `${original}; rollback also failed for ${rollbackFailures.join(', ')}`
+          : original,
+      );
     }
-    const original = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      rollbackFailures.length > 0
-        ? `${original}; rollback also failed for ${rollbackFailures.join(', ')}`
-        : original,
-    );
+  });
+}
+
+async function observeCommittedCredentials(
+  site: string,
+  backend: CredentialBackend,
+): Promise<void> {
+  if (!process.env.IMPRINT_CREDENTIAL_DIAGNOSTICS_PATH) return;
+  try {
+    const material = await loadSiteCredentialsUnlocked(site, backend);
+    const observation = credentialObservation(material, 'durable-commit');
+    if (observation) recordCredentialEvent('commit', observation);
+  } catch {
+    // A diagnostics read failure cannot invalidate a completed credential write.
   }
 }

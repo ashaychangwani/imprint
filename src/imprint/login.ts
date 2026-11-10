@@ -198,6 +198,15 @@ function collectSessionCaptures(site: string): SessionCaptureBinding[] {
           }
         }
       }
+      const lastStep = action.steps.at(-1);
+      const request = lastStep && workflow.requests[lastStep.request];
+      if (request) {
+        for (const { when } of action.branches ?? []) {
+          for (const credentialName of persistedByCapture.get(when.name) ?? []) {
+            addCapture(credentialName, when, request);
+          }
+        }
+      }
     }
   }
   return captures;

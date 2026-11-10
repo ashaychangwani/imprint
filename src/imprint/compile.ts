@@ -46,6 +46,7 @@ import {
   type Workflow,
   WorkflowSchema,
 } from './types.ts';
+import type { OnUserPrompt } from './user-interaction.ts';
 
 const PROMPTS_DIR = pathJoin(import.meta.dir, '..', '..', 'prompts');
 const log = createLog('compile');
@@ -81,6 +82,7 @@ interface CompileOptions {
 // ─── generate (workflow.json) ────────────────────────────────────────────────
 
 interface GenerateOptions extends CompileOptions {
+  onPrompt?: OnUserPrompt;
   /** Hard wall-clock budget for the agent. Default 30 minutes. */
   maxDurationMs?: number;
   /** Progress callback with verification cycle information. */
@@ -146,6 +148,7 @@ export async function generate(opts: GenerateOptions): Promise<GenerateResult> {
       const outDir = opts.outDir ?? (opts.outPath ? dirname(opts.outPath) : undefined);
       const result = await compileAgent({
         sessionPath: opts.sessionPath,
+        onPrompt: opts.onPrompt,
         maxDurationMs: opts.maxDurationMs,
         deadlineMs: opts.deadlineMs,
         runDeadline: opts.runDeadline,
