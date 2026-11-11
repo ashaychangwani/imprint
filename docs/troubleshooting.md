@@ -458,6 +458,22 @@ imprint audit <site> --json          # full machine-readable report to stdout
 
 It prints `PASS` / `FAIL` / `INCONCLUSIVE` / `TIMEOUT` and writes the full report (score + the raw auditor verdicts, plus token/cost usage) to `~/.imprint/<site>/.audit-report.json`. **Exit codes distinguish the cases:** `0` pass, `1` fail (genuine logic bugs), `2` inconclusive, `3` timeout. The summary also reports the auditor's approximate cost.
 
+If tools work in your configured browser but the audit receives 403/429 responses,
+run the audit with the same browser settings. Both Claude and Codex audit providers
+forward explicitly set `CHROMIUM_PATH`, `IMPRINT_CDP_HEADED`,
+`IMPRINT_JAR_MAX_AGE_SECONDS`, `IMPRINT_PROXY`, and `DISPLAY` to their isolated MCP
+server. Unset values keep the runtime defaults; audit pacing, deadlines, and the
+selected Imprint asset root remain controlled by the audit driver. The audit
+agent runs unattended, but its browser can be headed:
+
+```bash
+CHROMIUM_PATH="/path/to/chrome" IMPRINT_CDP_HEADED=1 imprint audit <site> --strict
+```
+
+These settings preserve your chosen browser configuration; they do not guarantee
+that a site will accept automated requests. Avoid putting proxy credentials in
+shared logs or reports.
+
 Workflows declared `effect: "irreversible"` are listed under `skippedIrreversible` and are never connected to the audit agent. This is a safety exclusion, not a passing live result; these tools retain `verified:false` with `verifyNote: "waived-safety"` because compilation uses recording and offline evidence only.
 
 **The audit tests functionality, not just "did it return."** For every tool it makes a baseline call (graded `correct`/`tool_broken`), then **differentially tests every advertised parameter**: it re-runs the baseline with only that one parameter changed to a value that should alter the result, and classifies it `works` / `no_op` / `broken` / `untestable`. `works` counts toward the score; **`no_op` (the parameter is accepted but changes nothing) and `broken` (it corrupts/empties the result) count against it** — an inert parameter is a defect, not a free pass. `untestable` (an opaque enum with no constructible value, or a state-changing/bot-defended tool that can't be safely probed) is surfaced but not scored. The summary prints a per-tool `params: X/Y working` line and lists every non-working parameter with the auditor's evidence; the full per-parameter verdicts and an `untestableParams` list are persisted in `.audit-report.json`. Read-type tools get the full differential pass; state-changing/bot-defended tools get the single baseline call and their parameters are marked `untestable`.
