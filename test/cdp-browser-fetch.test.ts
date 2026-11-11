@@ -438,6 +438,51 @@ describe('buildInPageFetchExpr', () => {
     expect(abortedDuringBodyRead).toBe(true);
   });
 
+  it('does not replay an unsafe same-origin request after a response read failure', async () => {
+    const dispatches: string[] = [];
+    const expression = buildInPageFetchExpr(
+      'https://example.test/approve',
+      'POST',
+      {},
+      null,
+      1_000,
+      undefined,
+      false,
+    );
+    const result = await runInNewContext(expression, {
+      AbortController,
+      clearTimeout,
+      setTimeout,
+      fetch: async () => {
+        dispatches.push('page');
+        return new Response('fixture');
+      },
+      document: {
+        createElement: () => ({
+          style: {},
+          contentWindow: {
+            fetch: async () => {
+              dispatches.push('iframe');
+              return {
+                text: async () => {
+                  throw new Error('response was not readable');
+                },
+              };
+            },
+          },
+          remove() {},
+        }),
+        body: { appendChild() {} },
+      },
+    });
+
+    expect(JSON.parse(result)).toMatchObject({
+      ok: false,
+      error: 'Error: response was not readable',
+    });
+    expect(dispatches).toEqual(['iframe']);
+  });
+
   it('clears page-side timers when fetch rejects', async () => {
     const active = new Set<ReturnType<typeof setTimeout>>();
     const trackedSetTimeout = (callback: () => void, ms: number) => {
@@ -2120,6 +2165,79 @@ describe('createCdpBrowserFetch CDP timeouts', () => {
       await cf.close();
     }
   });
+
+  it('does not replay a sibling-origin request when the browser cannot confirm its outcome', async () => {
+    const target = 'https://login.example.test/approve';
+    let browserAttempts = 0;
+    let fallbackAttempts = 0;
+    __setCdpBrowserFetchHooksForTest({
+      launchChromium: async () =>
+        ({
+          process: {} as never,
+          port: 12345,
+          userDataDir: '/tmp/imprint-fake-chrome',
+          ready: Promise.resolve(),
+          close: async () => {},
+        }) as Awaited<ReturnType<typeof import('../src/imprint/chromium.ts').launchChromium>>,
+      connectCdp: async () =>
+        ({
+          Runtime: {
+            enable: async () => ({}),
+            evaluate: async ({ expression }: { expression: string }) => {
+              if (expression.includes(target)) {
+                browserAttempts++;
+                return {
+                  result: {
+                    value: JSON.stringify({ ok: false, error: 'response was not readable' }),
+                  },
+                };
+              }
+              return { result: { value: 'https://www.example.test/' } };
+            },
+          },
+          Network: {
+            enable: async () => ({}),
+            requestWillBeSent: () => {},
+            responseReceived: () => {},
+            loadingFinished: () => {},
+            loadingFailed: () => {},
+            setUserAgentOverride: async () => ({}),
+            getCookies: async () => ({ cookies: [] }),
+            getAllCookies: async () => ({ cookies: [] }),
+          },
+          Page: {
+            enable: async () => ({}),
+            navigate: async () => ({}),
+            loadEventFired: async () => ({}),
+          },
+          Input: {},
+          close: async () => {},
+        }) as never,
+    });
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = Object.assign(
+      async () => {
+        fallbackAttempts++;
+        return new Response('fixture');
+      },
+      { preconnect: originalFetch.preconnect },
+    );
+    const browser = createCdpBrowserFetch({
+      baseUrl: 'https://www.example.test/',
+      abckWaitSeconds: 0,
+    });
+    const init = { method: 'POST', allowAmbiguousRetry: false } as const;
+    try {
+      await expect(browser.fetchImpl(target, init)).rejects.toThrow('No retry was sent');
+      expect(browserAttempts).toBe(1);
+      expect(fallbackAttempts).toBe(0);
+      expect(await (await browser.fetchImpl(target, { method: 'GET' })).text()).toBe('fixture');
+      expect(fallbackAttempts).toBe(1);
+    } finally {
+      globalThis.fetch = originalFetch;
+      await browser.close();
+    }
+  }, 10_000);
 
   it('times out a stuck startup CDP command and closes the browser', async () => {
     let chromeClosed = 0;

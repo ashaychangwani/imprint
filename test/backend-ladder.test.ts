@@ -3325,6 +3325,33 @@ describe('runWithLadder — BAD_RESPONSE (400) escalates (anti-bot backend diver
     expect(behavior.calls.fetch).toBe(1); // the 400 rung was tried, then escalated
   });
 
+  it('keeps a provider rejection when the fallback never receives a response', async () => {
+    const rejection = {
+      ok: false,
+      error: 'FORBIDDEN',
+      status: 403,
+      message: 'provider denied access',
+    } as const;
+    const behavior: FakeToolBehavior = {
+      fetchResult: rejection,
+      stealthResult: { ok: false, error: 'NETWORK', message: 'fallback could not connect' },
+      calls: { fetch: 0, stealth: 0 },
+    };
+    const tool = makeFakeTool('alpha', behavior, pathJoin(root, 'alpha', 'tool'));
+    const result = await runWithLadder(
+      ['fetch', 'stealth-fetch'],
+      tool,
+      {},
+      root,
+      makeStealthCache(tool),
+      { skipBootstrapSplice: true },
+    );
+
+    expect(result.result).toEqual(rejection);
+    expect(result.usedBackend).toBe('fetch');
+    expect(result.attempts.map((attempt) => attempt.backend)).toEqual(['fetch', 'stealth-fetch']);
+  });
+
   it('returns the last 400 when every rung BAD_RESPONSEs (genuinely malformed)', async () => {
     const behavior: FakeToolBehavior = {
       fetchResult: {

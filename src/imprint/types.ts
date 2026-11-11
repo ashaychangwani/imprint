@@ -251,6 +251,9 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
+/** Internal hint for browser transports that can otherwise retry a failed dispatch. */
+export type BrowserRequestInit = RequestInit & { allowAmbiguousRetry?: false };
+
 const WorkflowRequestBaseSchema = z.object({
   method: z.string(),
   /** Sequence number of the captured request that grounds this outgoing
@@ -378,6 +381,7 @@ const AuthOutcomeSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('success'),
+      expiresAtCapture: z.string().min(1).optional(),
       evidence: z.array(z.string().min(1)).optional().default([]),
     })
     .strict(),
@@ -392,6 +396,8 @@ const AuthConfigSchema = z
       z.string().min(1),
       z
         .object({
+          /** Start an independent MCP authentication action with an empty browser session. */
+          browserSession: z.literal('fresh').optional(),
           parameters: z.array(z.string().min(1)).optional().default([]),
           steps: z
             .array(
@@ -421,6 +427,8 @@ const AuthConfigSchema = z
         })
         .strict(),
     ),
+    /** Keep incomplete authentication in the retained browser when disabled. */
+    persistCookiesOnPause: z.boolean().optional(),
     /** Durable credential interface names to store after success. */
     persist: z.array(z.string().min(1)).optional().default([]),
     /** Optional interface-name → compiled capture-name bindings. This lets the

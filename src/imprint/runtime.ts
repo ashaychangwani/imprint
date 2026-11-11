@@ -34,6 +34,7 @@ import {
   resolveJsonCapture,
 } from './request-capture.ts';
 import type {
+  BrowserRequestInit,
   RequestCapture,
   RequestStageFact,
   StateCapability,
@@ -59,6 +60,8 @@ export interface CredentialStore {
   /** Version of the durable snapshot read by the host, before environment
    * overlays or browser mutations. Enables conditional cookie writeback. */
   durableRevision?: string;
+  /** Require the managed auth sequence to commit against its original snapshot. */
+  authCommitRevision?: string;
 }
 
 type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
@@ -173,6 +176,7 @@ export interface BrowserNavigationTransport {
 export async function loadCredentialStore(
   site: string,
   signal?: AbortSignal,
+  options?: { includeEmpty?: boolean },
 ): Promise<CredentialStore | null> {
   const view = await loadSiteCredentials(site, { signal });
   const store: CredentialStore = {
@@ -200,6 +204,7 @@ export async function loadCredentialStore(
   }
 
   if (
+    !options?.includeEmpty &&
     Object.keys(store.values).length === 0 &&
     store.cookies.length === 0 &&
     (store.storage?.length ?? 0) === 0
@@ -803,6 +808,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           ok: false,
           error: 'FORBIDDEN',
           status: resp.status,
+          responseBodyPreview: boundedResponsePreview(bodyPreview, liveCredentials),
           message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
           remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
         },
@@ -827,6 +833,7 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           ok: false,
           error: 'BAD_RESPONSE',
           status: resp.status,
+          responseBodyPreview: boundedResponsePreview(bodyPreview, liveCredentials),
           message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
         },
         requestStageFacts,
@@ -969,6 +976,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   const responseSlots: ResponseSlot[] = [];
   const initialState: Record<string, unknown> = { ...(opts.initialState ?? {}) };
   const state: Record<string, unknown> = { ...initialState };
+  const capturedThisAction = new Set<string>();
   const stateCapabilities = collectStateCapabilities(opts.workflow);
   const missingParameters = action.parameters.filter((name) => !(name in params));
   if (missingParameters.length > 0) {
@@ -1237,7 +1245,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       try {
         transportInvoked = true;
         phase = 'send';
-        response = await fetchFn(request.url, {
+        const init: BrowserRequestInit = {
           method: request.method,
           headers: request.headers,
           body: request.body,
@@ -1245,7 +1253,11 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             ? AbortSignal.any([opts.signal, controller.signal])
             : controller.signal,
           redirect: 'follow',
-        });
+          ...(credentials.authCommitRevision !== undefined && req.effect === 'unsafe'
+            ? { allowAmbiguousRetry: false }
+            : {}),
+        };
+        response = await fetchFn(request.url, init);
         httpStatus = response.status;
         if (opts.browser)
           cookieJar.reconcileBrowserSnapshot(
@@ -1372,6 +1384,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
     recordStage('capture', 'passed');
     Object.assign(state, captures.value);
+    for (const name of Object.keys(captures.value)) capturedThisAction.add(name);
     lastResponse = context;
     return { ok: true, value: context };
   };
@@ -1424,6 +1437,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       );
       if (until.ok && Object.hasOwn(until.value, step.repeat.until.name)) {
         Object.assign(state, until.value);
+        capturedThisAction.add(step.repeat.until.name);
         matched = true;
         recordStage('repeat', 'passed');
         break;
@@ -1473,16 +1487,26 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
     if (matched.ok && Object.hasOwn(matched.value, branch.when.name)) {
       Object.assign(state, matched.value);
+      capturedThisAction.add(branch.when.name);
       outcome = branch.outcome;
       break;
     }
   }
-  const missingEvidence = outcome.evidence.filter((name) => !Object.hasOwn(state, name));
+  const missingEvidence = outcome.evidence.filter(
+    (name) =>
+      !Object.hasOwn(state, name) ||
+      (outcome.type === 'success' &&
+        credentials.authCommitRevision !== undefined &&
+        !capturedThisAction.has(name)),
+  );
   if (missingEvidence.length > 0) {
     return fail({
       ok: false,
       error: 'BAD_RESPONSE',
       message: `Auth action ${JSON.stringify(actionName)} completed without declared evidence: ${missingEvidence.join(', ')}.`,
+      ...(outcomeResponse
+        ? { responseBodyPreview: boundedResponsePreview(outcomeResponse.text, liveCredentials) }
+        : {}),
     });
   }
 
@@ -1497,7 +1521,8 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
     const continuation = Object.fromEntries(outcome.carry.map((name) => [name, state[name]]));
     if (opts.signal?.aborted) return cancellationFailure();
-    const cookieFailure = await persistCookies();
+    const cookieFailure =
+      authConfig.persistCookiesOnPause === false ? undefined : await persistCookies();
     if (opts.signal?.aborted) return cancellationFailure();
     if (cookieFailure && !opts.browser) return cookieFailure;
     const persistenceWarning = cookieFailure
@@ -1536,6 +1561,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     try {
       await commitSiteAuthState(opts.workflow.site, cookieJar.toJSON(), persistedSecrets, {
         signal: opts.signal,
+        expectedRevision: credentials.authCommitRevision,
       });
     } catch (err) {
       return opts.signal?.aborted
@@ -1548,7 +1574,19 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     ...liveCredentials,
     values: { ...liveCredentials.values, ...persistedSecrets },
   });
-  return { ok: true, data: { authenticated: true } };
+  const expiry =
+    outcome.expiresAtCapture && capturedThisAction.has(outcome.expiresAtCapture)
+      ? state[outcome.expiresAtCapture]
+      : undefined;
+  return {
+    ok: true,
+    data: {
+      authenticated: true,
+      ...(typeof expiry === 'number' && Number.isSafeInteger(expiry) && expiry > Date.now()
+        ? { expiresAt: expiry }
+        : {}),
+    },
+  };
 }
 
 function observeAuthState(opts: ExecuteOptions, credentials: CredentialStore): void {

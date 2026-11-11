@@ -694,6 +694,7 @@ export interface SiteCredentialView {
   storage: StorageRecord[];
   /** Raw durable material identity, before runtime normalization or env input. */
   revision: string;
+  legacy?: true;
 }
 
 function credentialRevision(material: Omit<SiteCredentialView, 'revision'>): string {
@@ -739,6 +740,21 @@ async function withSiteCredentialLock<T>(
   });
 }
 
+/** Serializes a complete sign-in independently of the credential reads and commits it performs. */
+export async function withSiteAuthRecoveryLock<T>(
+  site: string,
+  signal: AbortSignal,
+  work: (directory: string) => Promise<T>,
+): Promise<T> {
+  signal.throwIfAborted();
+  const backend = await getCredentialBackend();
+  const directory = pathJoin(
+    `${credentialLockDirectory(site, backend)}-auth-recovery`,
+    createHash('sha256').update(site).digest('hex'),
+  );
+  return withCredentialLock(directory, signal, () => work(directory));
+}
+
 /** Loads everything we know about a site, falling back through the backends.
  *  Used at request time by runtime.executeWorkflow. */
 export async function loadSiteCredentials(
@@ -779,7 +795,7 @@ async function loadSiteCredentialsUnlocked(
         values: legacy.values,
         storage: [],
       });
-      const result = { ...material, revision: credentialRevision(material) };
+      const result = { ...material, revision: credentialRevision(material), legacy: true as const };
       const observation = credentialObservation(result, 'legacy-json');
       if (observation) recordCredentialEvent('load', observation);
       return result;
@@ -881,14 +897,22 @@ export async function commitSiteAuthState(
   site: string,
   cookies: CookieRecord[],
   secrets: Record<string, string>,
-  options?: { signal?: AbortSignal },
+  options?: { signal?: AbortSignal; expectedRevision?: string },
 ): Promise<void> {
   const signal = options?.signal;
   await withSiteCredentialLock(site, signal, async (backend) => {
     signal?.throwIfAborted();
+    let nextSecrets = secrets;
+    if (options?.expectedRevision !== undefined) {
+      const current = await loadSiteCredentialsUnlocked(site, backend);
+      if (current.revision !== options.expectedRevision) {
+        throw new Error('the saved session changed while this sign-in was running');
+      }
+      if (current.legacy) nextSecrets = { ...current.values, ...secrets };
+    }
     const previousCookies = structuredClone(await backend.getCookies(site));
     const previousSecrets = new Map<string, string | null>();
-    for (const name of Object.keys(secrets)) {
+    for (const name of Object.keys(nextSecrets)) {
       signal?.throwIfAborted();
       previousSecrets.set(name, await backend.getSecret(site, name));
     }
@@ -897,7 +921,7 @@ export async function commitSiteAuthState(
       signal?.throwIfAborted();
       await backend.setCookies(site, cookies);
       signal?.throwIfAborted();
-      for (const [name, value] of Object.entries(secrets)) {
+      for (const [name, value] of Object.entries(nextSecrets)) {
         await backend.setSecret(site, name, value);
         signal?.throwIfAborted();
       }

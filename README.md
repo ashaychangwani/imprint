@@ -34,6 +34,8 @@ renewed cookies for later calls without overwriting newer saved authentication.
 Same-name host-only and domain cookies keep their distinct scopes across replay
 and browser restoration.
 That continuity still needs verification against the requested data operation.
+Local stdio MCP servers can opt in to [session renewal](docs/getting-started.md#renew-authenticated-mcp-sessions)
+for read-only tools, with client approval before sending a new sign-in challenge.
 
 ## Quick Start
 

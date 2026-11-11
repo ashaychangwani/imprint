@@ -416,6 +416,25 @@ export async function runWithLadder(
   let lastPageDiagnostic: Extract<ToolResult, { ok: false }>['pageDiagnostic'];
   let lastResult: ToolResult | null = null;
   let lastResultBackend: ConcreteBackend | null = null;
+  // A fallback that never receives a response cannot supersede a concrete rejection.
+  let receivedFailure:
+    | { result: Exclude<ToolResult, { ok: true }>; usedBackend: ConcreteBackend }
+    | undefined;
+  const selectFailure = (
+    result: Exclude<ToolResult, { ok: true }>,
+    usedBackend: ConcreteBackend,
+  ): LadderResult => {
+    if (
+      receivedFailure &&
+      (result.error === 'STATE_MISSING' || result.error === 'NETWORK') &&
+      result.status === undefined &&
+      !result.authExecution?.responseReceived &&
+      !result.requestStageFacts?.some((fact) => fact.httpStatus !== undefined)
+    ) {
+      return { ...receivedFailure, attempts };
+    }
+    return { result, usedBackend, attempts };
+  };
   let skipUntilBackend: ConcreteBackend | null = null;
   for (const backend of effectiveLadder) {
     if (options?.signal?.aborted) throw abortSignalError(options.signal);
@@ -571,6 +590,15 @@ export async function runWithLadder(
       return { result, usedBackend: backend, attempts };
     }
 
+    if (
+      (result.status !== undefined && result.status >= 400) ||
+      (result.error === 'BAD_RESPONSE' &&
+        result.authExecution?.responseReceived &&
+        result.authExecution.phase === 'outcome')
+    ) {
+      receivedFailure = { result, usedBackend: backend };
+    }
+
     if (result.error === 'FORBIDDEN') {
       attempts.push({
         backend,
@@ -673,7 +701,7 @@ export async function runWithLadder(
       durationMs,
     });
     log(`${backend}: ${result.error} in ${durationMs}ms — non-escalatable, returning`);
-    return { result, usedBackend: backend, attempts };
+    return selectFailure(result, backend);
   }
 
   // Every backend either escalated (FORBIDDEN) or was unavailable.
@@ -689,18 +717,13 @@ export async function runWithLadder(
     };
   }
   const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
-  // Be accurate about ladder size: pinned callers use a single-rung ladder, so
-  // only say "all rungs" when there really was more than one.
+  const selected = lastResult.ok
+    ? { result: lastResult, usedBackend: lastBackend, attempts }
+    : selectFailure(lastResult, lastBackend);
   log(
-    effectiveLadder.length === 1
-      ? `${lastBackend}: exhausted (no fallback rung in this ladder); returning its error`
-      : `ladder exhausted: all ${effectiveLadder.length} rungs escalated (${effectiveLadder.join(' → ')}); returning last error from ${lastBackend}`,
+    `ladder exhausted (${effectiveLadder.join(' → ')}); returning the error from ${selected.usedBackend}`,
   );
-  return {
-    result: lastResult,
-    usedBackend: lastBackend,
-    attempts,
-  };
+  return selected;
 }
 
 export function effectiveAutoLadder(ladder: ConcreteBackend[]): ConcreteBackend[] {
@@ -1390,14 +1413,18 @@ async function runCdpReplay(
       // A paused auth action is healthy progress. Retain the browser so the next
       // declared action sees the same cookies, page, and browser-owned state.
       if (ownsSession) cdpPool.set(poolKey, cf);
-      try {
-        const postJar = await cf.mintJar();
-        saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
-      } catch (err) {
+      if (tool.workflow.authConfig?.persistCookiesOnPause === false) {
         clearJar(cacheDir);
-        log(
-          `cdp-replay paused cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      } else {
+        try {
+          const postJar = await cf.mintJar();
+          saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
+        } catch (err) {
+          clearJar(cacheDir);
+          log(
+            `cdp-replay paused cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else if (cdpPool) {

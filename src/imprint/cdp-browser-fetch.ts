@@ -45,6 +45,7 @@ import {
 } from './chromium.ts';
 import { recordBrowserCredentialObservation } from './credential-observation.ts';
 import { createLog } from './log.ts';
+import type { BrowserRequestInit } from './types.ts';
 import type { NavigationNetworkResponseMatcher } from './types.ts';
 
 const log = createLog('cdp-browser');
@@ -1106,6 +1107,7 @@ export function buildInPageFetchExpr(
   body: string | null,
   reqTimeoutMs: number,
   sameOriginIframeSrc?: string,
+  allowAmbiguousRetry = true,
 ): string {
   const iframeNativeFetchSetup = `
           ifr = document.createElement('iframe');
@@ -1157,10 +1159,12 @@ export function buildInPageFetchExpr(
           if (ifr) try { ifr.remove(); } catch (_) {}
           return { ok: false, error: String(e) };
         }`;
+  const primarySetup =
+    !allowAmbiguousRetry && !sameOriginIframeSrc ? iframeNativeFetchSetup : iframeSetup;
   return `(async () => {
-      const primary = await (async () => {${fetchOnce(iframeSetup)}
+      const primary = await (async () => {${fetchOnce(primarySetup)}
       })();
-      if (${sameOriginIframeSrc ? 'false' : 'true'} && !primary.ok) {
+      if (${allowAmbiguousRetry && !sameOriginIframeSrc} && !primary.ok) {
         const fallback = await (async () => {${fetchOnce(iframeNativeFetchSetup)}
         })();
         return JSON.stringify(fallback);
@@ -1713,7 +1717,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
   const fetchImpl: typeof fetch = (async (
     input: string | URL | Request,
-    init?: RequestInit,
+    init?: BrowserRequestInit,
   ): Promise<Response> => {
     const c = await ensure();
     const url =
@@ -1766,6 +1770,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         body,
         reqTimeoutMs,
         sameOriginIframeSrc,
+        init?.allowAmbiguousRetry,
       );
       const { result } = await withTimeout(
         c.Runtime.evaluate({
@@ -1907,6 +1912,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             status: payload.status,
             headers: new Headers(payload.headers),
           });
+        }
+        if (init?.allowAmbiguousRetry === false) {
+          throw new Error('The browser could not confirm the request outcome. No retry was sent.');
         }
         // The in-page sibling fetch failed — almost always a genuine CORS block
         // (the page can't read the cross-origin response). Fall back to plain
