@@ -186,6 +186,7 @@ export class AuthContinuationStore {
     | {
         nextAction: string;
         continuation: string;
+        managed: boolean;
       }
     | undefined {
     for (const [continuation, entry] of this.values) {
@@ -193,7 +194,11 @@ export class AuthContinuationStore {
       if (entry.recoveryBrowser && !isRetained(entry.recoveryBrowser)) {
         this.values.delete(continuation);
       } else {
-        return { nextAction: entry.nextAction, continuation };
+        return {
+          nextAction: entry.nextAction,
+          continuation,
+          managed: entry.recoveryRevision !== undefined,
+        };
       }
     }
     return undefined;
@@ -314,6 +319,7 @@ function buildServer(
     options?: {
       retainBrowser?: boolean;
       browserOnly?: boolean;
+      authBrowser?: CdpBrowserFetch;
       replayOnly?: boolean;
       signal?: AbortSignal;
       credentials?: Awaited<ReturnType<typeof loadCredentialStore>>;
@@ -332,6 +338,7 @@ function buildServer(
       : execution.signal;
     const run = runWithLadder(ladder, tool, args, assetRoot, stealthCache, {
       cdpPool,
+      authBrowser: options?.authBrowser,
       winnerCache,
       initialState,
       credentials: options?.credentials ?? undefined,
@@ -544,6 +551,7 @@ function buildServer(
               }
               return executeTool(tool, args, continuation?.state, {
                 browserOnly: true,
+                authBrowser: continuation?.recoveryBrowser,
                 signal,
                 credentials: { ...saved, authCommitRevision: revision },
               });
@@ -593,6 +601,12 @@ function buildServer(
 
                   const authName = authTool.workflow.toolName;
                   const pending = authContinuations.pending(authName, isRetained);
+                  if (pending && !pending.managed) {
+                    return {
+                      status: 'blocked',
+                      message: 'Finish the standalone sign-in, then retry the protected call.',
+                    } as const;
+                  }
                   if (pending) {
                     return {
                       status: 'manual',
@@ -620,6 +634,7 @@ function buildServer(
                         return (
                           await executeTool(authTool, { action }, state, {
                             browserOnly: true,
+                            authBrowser: state === undefined ? undefined : authBrowser(authTool),
                             retainBrowser: true,
                             signal: recoverySignal,
                             credentials: { ...current, authCommitRevision: currentRevision },

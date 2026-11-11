@@ -27,6 +27,7 @@ function prepare({
   legacyData = false,
   invalidPolicy = false,
   fastIdle = false,
+  varyingBootstrap = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'imprint-mcp-renewal-'));
   dirs.push(root);
@@ -46,6 +47,9 @@ function prepare({
       ...(otp ? [{ name: 'otp', type: 'string', description: 'Verification code' }] : []),
     ],
     intent: { description: 'Fixture authentication' },
+    ...(varyingBootstrap
+      ? { bootstrap: { url: 'https://example.test/bootstrap/${param.action}' } }
+      : {}),
     requests: names.map((name) => ({
       method: name === 'approve' ? 'POST' : 'GET',
       url: `https://example.test/${name}${otp && name === 'finish' ? '?otp=${param.otp}' : ''}`,
@@ -126,6 +130,7 @@ function prepare({
   const runtime = join(import.meta.dir, '..', 'src', 'imprint');
   const preload = join(root, 'fixture.ts');
   const journal = join(root, 'requests.txt');
+  const browsers = join(root, 'browsers.txt');
   const clock = join(root, 'clock');
   const release = join(root, 'release');
   const cookies = join(root, 'cookies.json');
@@ -177,11 +182,14 @@ const fetchFixture = async (url, init) => {
   return Response.json({});
 };
 globalThis.fetch = fetchFixture;
-__setCdpBrowserFetchFactoryForTest(() => ({
-  fetchImpl: fetchFixture,
-  mintJar: async () => ({ cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0' }),
-  close: async () => {},
-}));
+__setCdpBrowserFetchFactoryForTest(() => {
+  appendFileSync(${JSON.stringify(browsers)}, 'browser' + String.fromCharCode(10));
+  return {
+    fetchImpl: fetchFixture,
+    mintJar: async () => ({ cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0' }),
+    close: async () => {},
+  };
+});
 `,
   );
   const transport = () =>
@@ -197,6 +205,7 @@ __setCdpBrowserFetchFactoryForTest(() => ({
     cookies,
     release,
     journal,
+    browsers,
     requests: () => readFileSync(journal, 'utf8').trim().split('\n'),
   };
 }
@@ -311,7 +320,7 @@ for (const accepted of [true, false]) {
 }
 
 it('hands off a required OTP and accepts the original continuation on the auth tool', async () => {
-  const { transport, requests } = prepare({ otp: true });
+  const { transport, requests, browsers } = prepare({ otp: true, varyingBootstrap: true });
   const c = client();
   c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
   try {
@@ -331,6 +340,7 @@ it('hands off a required OTP and accepts the original continuation on the auth t
     expect(retry).toBeDefined();
     expect((await callAuth(c, 'finish', retry, '123456')).isError).toBeFalsy();
     expect((await search(c, 'query')).isError).toBeFalsy();
+    expect(readFileSync(browsers, 'utf8').trim().split('\n')).toEqual(['browser']);
   } finally {
     await c.close();
   }
@@ -395,6 +405,23 @@ it('does not direct a client without consent support to an unsafe action', async
     expect(result.structuredContent).not.toHaveProperty('nextAction');
     expect(requests()).toEqual(['/search', '/start']);
     expect((await c.listTools()).tools.some((tool) => tool.name === authTool)).toBe(true);
+  } finally {
+    await c.close();
+  }
+});
+
+it('does not publish a standalone sign-in token on a protected read', async () => {
+  const { transport, requests } = prepare();
+  const c = new Client({ name: 'no-elicitation', version: '1' });
+  try {
+    await c.connect(transport());
+    const standalone = await callAuth(c, 'start');
+    expect(continuationToken(standalone)).toBeDefined();
+    const protectedResult = await search(c, 'query');
+    expect(protectedResult.structuredContent).toMatchObject({ status: 'auth_required' });
+    expect(protectedResult.structuredContent).not.toHaveProperty('continuation');
+    expect(protectedResult.structuredContent).not.toHaveProperty('nextAction');
+    expect(requests()).toEqual(['/start', '/search']);
   } finally {
     await c.close();
   }

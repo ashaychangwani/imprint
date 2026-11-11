@@ -26,7 +26,7 @@ export function loadRecoveryPolicy(assetRoot: string, site: string): RecoveryPol
 }
 
 type AuthFailure = Extract<ToolResult, { ok: false }>;
-export type RecoveryResult =
+type RecoveryResult =
   | { status: 'authenticated' }
   | { status: 'blocked'; message: string }
   | { status: 'manual'; action: string; state?: Record<string, unknown>; message: string };

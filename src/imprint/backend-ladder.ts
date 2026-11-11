@@ -350,6 +350,8 @@ export async function runWithLadder(
     /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
      *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
     cdpPool?: Map<string, CdpBrowserFetch>;
+    /** A managed continuation must use the browser that produced it. */
+    authBrowser?: CdpBrowserFetch;
     /** Per-session memo of the backend that last served each tool. Once set, the
      *  next call starts at that backend instead of re-walking the doomed early
      *  rungs — the runtime analog of the compile path's `compileWinningBackend`.
@@ -492,6 +494,7 @@ export async function runWithLadder(
             options?.signal,
             options?.onResponse ? onResponse : undefined,
             options?.onPreparedRequest ? onPreparedRequest : undefined,
+            options?.authBrowser,
           );
           break;
         case 'stealth-fetch': {
@@ -1131,6 +1134,7 @@ async function runCdpReplay(
   signal?: AbortSignal,
   onResponse?: (observation: ResponseObservation) => void,
   onPreparedRequest?: (observation: PreparedRequestObservation) => void,
+  authBrowser?: CdpBrowserFetch,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site, signal)) ?? {
@@ -1162,7 +1166,19 @@ async function runCdpReplay(
       .update(bootstrapUrl ?? baseUrl)
       .digest('hex'),
   );
-  const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
+  const pinned =
+    authBrowser && cdpPool
+      ? [...cdpPool].find(([, browser]) => browser === authBrowser)?.[0]
+      : undefined;
+  if (authBrowser && pinned === undefined) {
+    return {
+      ok: false,
+      error: 'AUTH_EXPIRED',
+      message: 'The browser for this sign-in has closed.',
+    };
+  }
+  const poolKey =
+    pinned ?? cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
   if (tool.workflow.toolKind !== 'authenticate') await prepareTeachBrowserContext(cdpPool, poolKey);
   if (signal?.aborted) throw abortSignalError(signal);
   const credentialHash = credentialStateHash(credentials);
