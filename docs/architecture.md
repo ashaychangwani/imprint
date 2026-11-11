@@ -934,6 +934,14 @@ exits successfully.
 
 Beyond a per-tool baseline call, the auditor **differentially tests every advertised parameter** — re-running the baseline with only that parameter changed and classifying it `works` / `no_op` / `broken` / `untestable`. Scoring: `score = 100 × correct / (correct + broken)`, where `correct` = `correct` invocations + `works` parameters and `broken` = `tool_broken` invocations + `no_op`/`broken` parameters (an advertised-but-inert parameter is a defect, not a free pass). `infra` / `bad_params` / `untestable` are excluded from the denominator, so a blocked or misused tool — or a parameter that genuinely can't be probed — isn't counted as a code bug; `untestableParams` are listed in the report for visibility. **Pass** requires both `score ≥ minScore` and at least `max(2, gradeableTools)` gradeable invocations, where `gradeableTools` is the number of tools that produced ≥1 gradeable invocation. Scaling the signal floor to *gradeable* tools (not all tools) means a tool the auditor can never exercise — e.g. one that needs an opaque token it cannot synthesize — no longer inflates the bar and sinks an otherwise-perfect run; such tools are listed as `ungradeableTools` in the report. The floor is one gradeable call per gradeable tool (not two): the auditor often spends a slot per tool on `bad_params`/`infra`, so demanding two clean reads per tool false-failed otherwise-perfect runs. Real defects still fail on `score`, not on this count. No gradeable invocations → **inconclusive** (re-run / the site blocked us, not a code failure). Exit codes distinguish the cases: `0` pass, `1` fail (logic bugs), `2` inconclusive. The full result (deterministic score + the raw model report) is persisted to `~/.imprint/<site>/.audit-report.json` and traced under `cli.audit` → `audit.session`.
 
+Both audit providers receive the same explicit MCP environment: the selected
+asset root and fixed audit pacing/deadline settings, plus any configured
+`CHROMIUM_PATH`, `IMPRINT_CDP_HEADED`, `IMPRINT_JAR_MAX_AGE_SECONDS`, `IMPRINT_PROXY`,
+and `DISPLAY`. Claude receives this map in its MCP JSON config; Codex serializes
+every entry into its MCP configuration overrides. This keeps browser settings
+consistent across the isolated audit process boundary without copying arbitrary
+parent variables into the explicit MCP configuration.
+
 The harness is fully general — no per-site special-casing — and the no-overfit guardrail applies to every change: a fix must improve a *category* (e.g. RPC-envelope parsing), never a single site/URL/tool/field.
 
 ## Extending Imprint

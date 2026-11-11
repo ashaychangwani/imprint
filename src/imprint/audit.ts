@@ -550,8 +550,23 @@ interface RunAuditOptions {
   json?: boolean;
 }
 
-export function buildAuditMcpEnvironment(assetRoot = imprintHomeDir()): Record<string, string> {
+export function buildAuditMcpEnvironment(
+  assetRoot = imprintHomeDir(),
+  parentEnv: NodeJS.ProcessEnv = process.env,
+): Record<string, string> {
+  const browserEnv: Record<string, string> = {};
+  for (const name of [
+    'CHROMIUM_PATH',
+    'IMPRINT_CDP_HEADED',
+    'IMPRINT_JAR_MAX_AGE_SECONDS',
+    'IMPRINT_PROXY',
+    'DISPLAY',
+  ]) {
+    const value = parentEnv[name];
+    if (value !== undefined) browserEnv[name] = value;
+  }
   return {
+    ...browserEnv,
     // Codex MCP server `env` entries are an explicit environment, so relying on
     // the audit driver's inherited IMPRINT_HOME can make an isolated audit
     // silently fall back to ~/.imprint and expose stale tools.
@@ -559,6 +574,17 @@ export function buildAuditMcpEnvironment(assetRoot = imprintHomeDir()): Record<s
     IMPRINT_AUDIT_PACING_MS: '5000',
     IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
   };
+}
+
+/** Keep Codex's explicit MCP environment identical to Claude's JSON config. */
+export function buildAuditCodexMcpEnvArgs(
+  serverName: string,
+  env: Record<string, string>,
+): string[] {
+  return Object.entries(env).flatMap(([name, value]) => [
+    '-c',
+    `mcp_servers.${serverName}.env.${name}=${JSON.stringify(value)}`,
+  ]);
 }
 
 export function buildAuditMcpCommandArgs(site: string, toolNames: readonly string[]): string[] {
@@ -1110,12 +1136,7 @@ ${buildAuditInitialPrompt(opts, unverifiedNote)}`;
     `mcp_servers.${serverName}.default_tools_approval_mode=${JSON.stringify('approve')}`,
     '-c',
     `mcp_servers.${serverName}.tool_timeout_sec=300`,
-    '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_HOME=${JSON.stringify(mcpEnv.IMPRINT_HOME)}`,
-    '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_PACING_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_PACING_MS)}`,
-    '-c',
-    `mcp_servers.${serverName}.env.IMPRINT_AUDIT_TOOL_DEADLINE_MS=${JSON.stringify(mcpEnv.IMPRINT_AUDIT_TOOL_DEADLINE_MS)}`,
+    ...buildAuditCodexMcpEnvArgs(serverName, mcpEnv),
     '-c',
     'shell_environment_policy.inherit=all',
     '-',

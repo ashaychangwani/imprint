@@ -459,7 +459,7 @@ export const VERB_HELP: Record<string, VerbHelp> = {
   },
   audit: {
     summary:
-      "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint.",
+      "Drive a headless agent against a site's MCP tools, exercise each one, and compute a deterministic accuracy score. Verdicts come from the agent; the score is computed by imprint. Browser tools inherit explicitly configured Chrome, headed-mode, proxy, display, and session-cache settings.",
     usage: [
       'imprint audit <site> [--strict] [--min-score <n>] [--out <path>] [--model <name>] [--timeout <duration>] [--json]',
     ],
