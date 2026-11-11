@@ -347,6 +347,8 @@ export async function runWithLadder(
   stealthCache: Map<string, StealthFetch>,
   options?: {
     skipBootstrapSplice?: boolean;
+    /** Retain an observed provider rejection for the managed renewal decision. */
+    preferProviderFailure?: boolean;
     /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
      *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
     cdpPool?: Map<string, CdpBrowserFetch>;
@@ -420,10 +422,12 @@ export async function runWithLadder(
   let receivedFailure:
     | { result: Exclude<ToolResult, { ok: true }>; usedBackend: ConcreteBackend }
     | undefined;
+  let matchedProviderFailure: typeof receivedFailure;
   const selectFailure = (
     result: Exclude<ToolResult, { ok: true }>,
     usedBackend: ConcreteBackend,
   ): LadderResult => {
+    if (matchedProviderFailure) return { ...matchedProviderFailure, attempts };
     if (
       receivedFailure &&
       (result.error === 'STATE_MISSING' || result.error === 'NETWORK') &&
@@ -528,7 +532,7 @@ export async function runWithLadder(
           // ${state.X} its requests need — the gap that made bootstrap-block
           // tools on anti-bot sites unverifiable.
           const bootstrapState = tool.workflow.bootstrap
-            ? await stealthBootstrapState(sf, tool.workflow.bootstrap)
+            ? await stealthBootstrapState(sf, tool.workflow.bootstrap, options?.signal)
             : undefined;
           // Merge the caller-seeded state (e.g. the echoed 2FA context) UNDER
           // freshly-minted bootstrap state — bootstrap captures win on overlap.
@@ -590,13 +594,11 @@ export async function runWithLadder(
       return { result, usedBackend: backend, attempts };
     }
 
-    if (
-      (result.status !== undefined && result.status >= 400) ||
-      (result.error === 'BAD_RESPONSE' &&
-        result.authExecution?.responseReceived &&
-        result.authExecution.phase === 'outcome')
-    ) {
-      receivedFailure = { result, usedBackend: backend };
+    if (options?.preferProviderFailure) {
+      if (result.providerError) matchedProviderFailure = { result, usedBackend: backend };
+      if (result.status !== undefined && result.status >= 400) {
+        receivedFailure = { result, usedBackend: backend };
+      }
     }
 
     if (result.error === 'FORBIDDEN') {
@@ -884,8 +886,12 @@ async function getOrMintCdpJar(
   try {
     await prepareTeachBrowserContext(cdpPool);
     if (signal?.aborted) throw abortSignalError(signal);
-    cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
-    const jar = await cf.mintJar();
+    const browser = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
+      baseUrl,
+      bootstrapUrl,
+    });
+    cf = browser;
+    const jar = await withAbortSignal(() => browser.mintJar(), signal);
     if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
     }
@@ -1271,7 +1277,7 @@ async function runCdpReplay(
   }
 
   try {
-    const jar = await cf.mintJar();
+    const jar = await withAbortSignal(() => cf.mintJar(), signal);
     if (signal?.aborted) throw abortSignalError(signal);
     const observedCookies = jar.cookies.map((c) => ({
       name: c.name,
@@ -1306,16 +1312,26 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
+    const fetchInBrowser: typeof fetch = Object.assign(
+      (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+        withAbortSignal(() => cf.fetchImpl(input, init), signal),
+      { preconnect: cf.fetchImpl.preconnect },
+    );
+    const navigate = cf.navigate?.bind(cf);
+    const snapshotCookies = cf.snapshotCookies?.bind(cf);
     let runtimeCookies: CredentialStore['cookies'] | undefined;
     let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
-      fetchImpl: cf.fetchImpl,
+      fetchImpl: fetchInBrowser,
       browser:
-        cf.navigate && cf.snapshotCookies
+        navigate && snapshotCookies
           ? {
-              navigate: cf.navigate.bind(cf),
-              snapshotCookies: cf.snapshotCookies.bind(cf),
+              navigate: (
+                url: string,
+                options?: Parameters<NonNullable<CdpBrowserFetch['navigate']>>[1],
+              ) => withAbortSignal(() => navigate(url, options), signal),
+              snapshotCookies: () => withAbortSignal(snapshotCookies, signal),
               initialCookies: observedCookies,
             }
           : undefined,
@@ -1352,7 +1368,7 @@ async function runCdpReplay(
     if (result.ok) {
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
-        const postJar = await cf.mintJar();
+        const postJar = await withAbortSignal(() => cf.mintJar(), signal);
         recordBrowserCookieState(
           { ...credentials, cookies: postJar.cookies },
           'cdp-after-request',
@@ -1417,7 +1433,7 @@ async function runCdpReplay(
         clearJar(cacheDir);
       } else {
         try {
-          const postJar = await cf.mintJar();
+          const postJar = await withAbortSignal(() => cf.mintJar(), signal);
           saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
         } catch (err) {
           clearJar(cacheDir);
@@ -1724,6 +1740,7 @@ export async function evaluateBootstrapCapture(
 async function stealthBootstrapState(
   sf: StealthFetch,
   bootstrap: NonNullable<ResolvedTool['workflow']['bootstrap']>,
+  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const state: Record<string, unknown> = {};
   const captures = bootstrap.captures ?? [];
@@ -1731,7 +1748,7 @@ async function stealthBootstrapState(
     (c) => c.source === 'cookie' || c.source === 'html_regex' || c.source === 'response_header',
   );
   if (supported.length === 0) return state;
-  const tokens = await sf.ensureBootstrapped();
+  const tokens = await sf.ensureBootstrapped(signal);
   for (const cap of supported) {
     if (cap.source === 'cookie') {
       const hit = tokens.cookies.find((c) => c.name === cap.cookie);

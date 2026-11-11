@@ -1262,10 +1262,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   const activeNetworkBodyReads = new Set<Promise<void>>();
   let finishActiveNetworkResponse: ((requestId: string) => void) | undefined;
   let navigationInProgress = false;
+  let lifecycle = 0;
   let discoveryRequested = false;
   let discovery: AuthBrowserDiscovery | undefined;
 
   async function close(): Promise<void> {
+    lifecycle++;
     discovery?.close();
     discovery = undefined;
     const c = client;
@@ -1304,6 +1306,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
   async function ensure(): Promise<CdpClient> {
     if (client && bootstrapped) return client;
+    const startedIn = lifecycle;
+    const checkOpen = () => {
+      if (lifecycle !== startedIn) throw new Error('Browser closed during CDP startup.');
+    };
     try {
       const headed = opts.headed ?? false;
       if (!chrome) {
@@ -1313,24 +1319,38 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         // Page.navigate AFTER the override rather than passing the URL at launch.
         // headless renders offscreen (no display); headed needs one (Xvfb on Linux).
         const launch = chromiumLauncherForTest ?? launchChromium;
-        chrome = await withTimeout(
+        chrome = await withTimeout<LaunchedChromium>(
           launch({
             headless: !headed,
             extraArgs: gpuLaunchArgs(),
             ...(headed ? { display: opts.display } : {}),
+          }).then(async (launched) => {
+            if (lifecycle === startedIn) return launched;
+            await launched.close();
+            throw new Error('Browser closed during Chromium launch.');
           }),
           'Chromium launch',
           cdpCommandTimeoutMs,
         );
         await withTimeout(chrome.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+        checkOpen();
         // Register the Chrome PID for exit-time cleanup (leak prevention for
         // probe subprocesses that exit before the idle-close timer fires).
         if (chrome.process.pid !== undefined) __registerChromePid(chrome.process.pid);
       }
       if (!client) {
         const connectCdp = cdpConnectorForTest ?? ((port: number) => CDP({ port }));
-        client = await withTimeout(connectCdp(chrome.port), 'CDP connect', cdpCommandTimeoutMs);
+        client = await withTimeout<CdpClient>(
+          connectCdp(chrome.port).then(async (connected) => {
+            if (lifecycle === startedIn) return connected;
+            await connected.close();
+            throw new Error('Browser closed during CDP connect.');
+          }),
+          'CDP connect',
+          cdpCommandTimeoutMs,
+        );
       }
+      checkOpen();
       const { Runtime, Network, Input, Page } = client;
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
@@ -1689,10 +1709,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         i++;
       }
       log(`_abck status after interaction: ~${status}~`);
+      checkOpen();
       bootstrapped = true;
       return client;
     } catch (err) {
-      await close();
+      if (lifecycle === startedIn) await close();
       throw err;
     }
   }

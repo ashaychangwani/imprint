@@ -40,7 +40,19 @@ afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
-function prepare({ unsafe = false, signedIn = false } = {}) {
+function prepare({
+  unsafe = false,
+  signedIn = false,
+  managed = true,
+  signedOutResponse,
+  recoveryTimeoutMs = policy.recoveryTimeoutMs,
+}: {
+  unsafe?: boolean;
+  signedIn?: boolean;
+  managed?: boolean;
+  signedOutResponse?: { status: number; errorCode: string };
+  recoveryTimeoutMs?: number;
+} = {}) {
   const root = mkdtempSync(join(tmpdir(), 'imprint-mcp-renewal-'));
   dirs.push(root);
   const auth = WorkflowSchema.parse({
@@ -68,7 +80,7 @@ function prepare({ unsafe = false, signedIn = false } = {}) {
     })),
     authConfig: {
       entry: 'status',
-      persistCookiesOnPause: false,
+      ...(managed ? { persistCookiesOnPause: false } : {}),
       actions: Object.fromEntries(
         ['status', 'refresh', 'start', 'approve', 'finish'].map((name, request) => [
           name,
@@ -81,7 +93,11 @@ function prepare({ unsafe = false, signedIn = false } = {}) {
                     next: name === 'start' ? 'approve' : 'finish',
                     message: 'Continue',
                   }
-                : { type: 'success', evidence: ['expiry'], expiresAtCapture: 'expiry' },
+                : {
+                    type: 'success',
+                    evidence: ['expiry'],
+                    ...(managed ? { expiresAtCapture: 'expiry' } : {}),
+                  },
           },
         ]),
       ),
@@ -111,12 +127,18 @@ function prepare({ unsafe = false, signedIn = false } = {}) {
     writeFileSync(join(dir, 'workflow.json'), JSON.stringify(workflow));
     emit({ workflowPath: join(dir, 'workflow.json'), outDir: dir });
   }
-  writeFileSync(join(root, site, 'mcp-session-recovery.json'), JSON.stringify(policy));
+  if (managed) {
+    writeFileSync(
+      join(root, site, 'mcp-session-recovery.json'),
+      JSON.stringify({ ...policy, signedOutResponse, recoveryTimeoutMs }),
+    );
+  }
   const preload = join(root, 'fixture.ts');
   const journal = join(root, 'requests.txt');
   const credentialDir = join(root, 'credential-lock');
   const savedCookies = join(root, 'cookies.json');
   const expired = join(root, 'expired');
+  const clockOffset = join(root, 'clock-offset');
   writeFileSync(
     savedCookies,
     JSON.stringify(
@@ -141,6 +163,10 @@ import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs
 import { __setCdpBrowserFetchFactoryForTest } from ${JSON.stringify(join(runtime, 'backend-ladder.ts'))};
 import { setBackendOverride } from ${JSON.stringify(join(runtime, 'credential-store.ts'))};
 
+const clockOffset = ${JSON.stringify(clockOffset)};
+const realNow = Date.now;
+Date.now = () => realNow() + (existsSync(clockOffset) ? Number(readFileSync(clockOffset, 'utf8')) : 0);
+
 const savedCookies = ${JSON.stringify(savedCookies)};
 const getCookies = () => JSON.parse(readFileSync(savedCookies, 'utf8'));
 setBackendOverride({
@@ -153,6 +179,7 @@ setBackendOverride({
   listSites: async () => [],
 });
 
+const signedOut = ${JSON.stringify(signedOutResponse)};
 const fetchFixture = async (url, init) => {
   const path = new URL(url);
   appendFileSync(${JSON.stringify(journal)}, path.pathname + '\\n');
@@ -160,12 +187,23 @@ const fetchFixture = async (url, init) => {
   const valid = cookie?.includes('sid=fresh') ||
     (cookie?.includes('sid=old') && !existsSync(${JSON.stringify(expired)}));
   if (path.pathname === '/search') {
-    if (!valid) return Response.json({}, { status: 401 });
+    if (!valid) {
+      return signedOut
+        ? Response.json({ errorCode: signedOut.errorCode, detail: 'x'.repeat(5_000) }, { status: signedOut.status })
+        : Response.json({}, { status: 401 });
+    }
     const query = path.searchParams.get('q');
     if (query === 'forbidden') return Response.json({}, { status: 403 });
+    if (query === 'hang') {
+      const signal = init.signal;
+      await new Promise((_, reject) => {
+        if (signal.aborted) reject(signal.reason);
+        else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+      });
+    }
     return Response.json({ query, count: 1 });
   }
-  if (path.pathname === '/approve' && init?.allowAmbiguousRetry !== false) {
+  if (${managed} && path.pathname === '/approve' && init?.allowAmbiguousRetry !== false) {
     throw new Error('Managed approval must opt out of ambiguous transport retries');
   }
   if ((path.pathname === '/status' || path.pathname === '/refresh') && !valid) {
@@ -193,8 +231,53 @@ __setCdpBrowserFetchFactoryForTest(() => ({
       env: { ...getDefaultEnvironment(), IMPRINT_HOME: root },
       stderr: 'ignore',
     });
-  return { root, expired, journal, savedCookies, transport, workflows: { auth, data } };
+  return {
+    root,
+    expired,
+    clockOffset,
+    journal,
+    savedCookies,
+    transport,
+    workflows: { auth, data },
+  };
 }
+
+it('preserves legacy MCP continuation across a long approval wait without a policy', async () => {
+  const { clockOffset, journal, transport } = prepare({ managed: false });
+  const client = new Client({ name: 'legacy-auth-test', version: '1' });
+  const callAuth = (action: string, continuation?: string) =>
+    client.callTool({ name: policy.authTool, arguments: { action, continuation } });
+  try {
+    await client.connect(transport());
+    const start = await callAuth('start');
+    const startText = (start.content as { text: string }[])[0]?.text ?? '';
+    const startToken = startText.match(/continuation: "([^"]+)"/)?.[1];
+    expect(start.isError).toBe(true);
+    expect(startText).toContain('[ACTION_REQUIRED]');
+    expect(startToken).toBeDefined();
+
+    writeFileSync(clockOffset, String(10 * 60 * 1_000));
+    const approve = await callAuth('approve', startToken);
+    const approvalText = (approve.content as { text: string }[])[0]?.text ?? '';
+    const approvalToken = approvalText.match(/continuation: "([^"]+)"/)?.[1];
+    expect(approve.isError).toBe(true);
+    expect(approvalText).toContain('nextAction: finish');
+    expect(approvalToken).toBeDefined();
+
+    const finish = await callAuth('finish', approvalToken);
+    expect(finish.isError).toBeFalsy();
+    expect(finish.content).toEqual([
+      expect.objectContaining({ text: expect.stringContaining('"authenticated": true') }),
+    ]);
+    expect(readFileSync(journal, 'utf8').trim().split('\n')).toEqual([
+      '/start',
+      '/approve',
+      '/finish',
+    ]);
+  } finally {
+    await client.close();
+  }
+}, 20_000);
 
 it('checks expiry before use and refreshes once per observed deadline', () => {
   const freshness = new SessionFreshness(policy);
@@ -216,23 +299,56 @@ it('rejects replay of an explicitly irreversible tool', () => {
   );
 });
 
-it('classifies only the configured signed-out status and code on a data response', async () => {
+it('matches only declared provider errors without depending on the body preview', async () => {
   const { workflows } = prepare();
+  for (const status of [200, 403, 429]) {
+    const options = {
+      workflow: workflows.data,
+      params: { query: 'fixture' },
+      credentials: { site, cookies: [], values: {} },
+      fetchImpl: Object.assign(
+        async () =>
+          Response.json({ detail: 'x'.repeat(5_000), errorCode: 'SIGNED_OUT' }, { status }),
+        { preconnect: fetch.preconnect },
+      ),
+    };
+    const signedOutResponse = { status, errorCode: 'SIGNED_OUT' };
+    const legacy = await executeWorkflow(options);
+    expect(isSignedOut(legacy, { ...policy, signedOutResponse })).toBe(false);
+    expect(legacy.ok).toBe(status === 200);
+    expect(legacy).not.toHaveProperty('providerError');
+    const managed = await executeWorkflow({
+      ...options,
+      credentials: { ...options.credentials, providerErrorMatches: [signedOutResponse] },
+    });
+    expect(managed).toMatchObject({ ok: false, providerError: signedOutResponse });
+    expect(isSignedOut(managed, { ...policy, signedOutResponse })).toBe(true);
+    expect(
+      isSignedOut(managed, {
+        ...policy,
+        signedOutResponse: { status, errorCode: 'BLOCKED' },
+      }),
+    ).toBe(false);
+  }
+});
+
+it('stops a managed auth action on a matched provider error even if the step normally continues', async () => {
+  const { workflows } = prepare();
+  const workflow = structuredClone(workflows.auth);
+  const start = workflow.authConfig?.actions.start?.steps[0];
+  if (!start) throw new Error('Missing fixture start action');
+  start.onError = 'continue';
+  const providerError = { status: 200, errorCode: 'VERIFICATION_REQUIRED' };
   const result = await executeWorkflow({
-    workflow: workflows.data,
-    params: { query: 'fixture' },
-    credentials: { site, cookies: [], values: {} },
-    fetchImpl: Object.assign(
-      async () => Response.json({ errorCode: 'SIGNED_OUT' }, { status: 403 }),
-      { preconnect: fetch.preconnect },
-    ),
+    workflow,
+    params: { action: 'start' },
+    credentials: { site, values: {}, cookies: [], providerErrorMatches: [providerError] },
+    fetchImpl: Object.assign(async () => Response.json({ errorCode: providerError.errorCode }), {
+      preconnect: fetch.preconnect,
+    }),
   });
-  expect(
-    isSignedOut(result, { ...policy, signedOutResponse: { status: 403, errorCode: 'SIGNED_OUT' } }),
-  ).toBe(true);
-  expect(
-    isSignedOut(result, { ...policy, signedOutResponse: { status: 403, errorCode: 'BLOCKED' } }),
-  ).toBe(false);
+  expect(result).toMatchObject({ ok: false, error: 'BAD_RESPONSE', providerError });
+  expect(result).not.toHaveProperty('nextAction');
 });
 
 it('requires managed consent and preserves a newer durable session during approval', async () => {
@@ -341,8 +457,32 @@ for (const accepted of [true, false]) {
   }, 20_000);
 }
 
+it('bounds the protected retry with the managed renewal deadline', async () => {
+  const { transport } = prepare({ recoveryTimeoutMs: 1_500 });
+  const client = new Client(
+    { name: 'renewal-deadline-test', version: '1' },
+    { capabilities: { elicitation: { form: {} } } },
+  );
+  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+  try {
+    await client.connect(transport());
+    const result = await client.callTool({ name: 'search', arguments: { query: 'hang' } });
+    expect(result.structuredContent).toEqual({
+      status: 'auth_required',
+      message: 'The protected retry did not finish before the renewal deadline.',
+    });
+    const next = await client.callTool({ name: 'search', arguments: { query: 'next' } });
+    expect(next.isError).toBeFalsy();
+  } finally {
+    await client.close();
+  }
+}, 20_000);
+
 it('rechecks newer persisted credentials before renewing in a second MCP process', async () => {
-  const { expired, journal, transport } = prepare({ signedIn: true });
+  const { expired, journal, transport } = prepare({
+    signedIn: true,
+    signedOutResponse: { status: 401, errorCode: 'SIGNED_OUT' },
+  });
   const clients = ['first', 'second'].map(
     (name) => new Client({ name, version: '1' }, { capabilities: { elicitation: { form: {} } } }),
   );

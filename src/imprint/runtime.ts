@@ -35,6 +35,7 @@ import {
 } from './request-capture.ts';
 import type {
   BrowserRequestInit,
+  ProviderErrorMatch,
   RequestCapture,
   RequestStageFact,
   StateCapability,
@@ -62,6 +63,8 @@ export interface CredentialStore {
   durableRevision?: string;
   /** Require the managed auth sequence to commit against its original snapshot. */
   authCommitRevision?: string;
+  /** Provider errors this managed caller can recognize in a JSON response. */
+  providerErrorMatches?: readonly ProviderErrorMatch[];
 }
 
 type NavigationOptions = NonNullable<WorkflowRequest['navigation']>;
@@ -362,6 +365,17 @@ function utf8Prefix(value: string, maximumBytes: number): string {
   let end = maximumBytes;
   while (end > 0 && (bytes[end] ?? 0) >> 6 === 2) end -= 1;
   return bytes.subarray(0, end).toString('utf8');
+}
+
+function matchProviderError(
+  credentials: CredentialStore,
+  status: number,
+  body: unknown,
+): ProviderErrorMatch | undefined {
+  if (!body || typeof body !== 'object' || !('errorCode' in body)) return undefined;
+  return credentials.providerErrorMatches?.find(
+    (match) => match.status === status && match.errorCode === body.errorCode,
+  );
 }
 
 function boundedResponsePreview(text: string, credentials: CredentialStore): string {
@@ -788,13 +802,22 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
       }
     }
 
-    if (resp.status === 401) {
+    const providerError = matchProviderError(credentials, resp.status, parsed);
+    if (resp.status === 401 || providerError) {
       return withRequestStageFacts(
         {
           ok: false,
-          error: 'AUTH_EXPIRED',
+          error:
+            resp.status === 401
+              ? 'AUTH_EXPIRED'
+              : resp.status === 403
+                ? 'FORBIDDEN'
+                : 'BAD_RESPONSE',
           status: resp.status,
-          message: `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
+          ...(providerError ? { providerError } : {}),
+          message: providerError
+            ? `Request ${i} matched the configured signed-out response.`
+            : `Request ${i} returned 401 — auth has likely expired: ${bodyPreview.slice(0, 300)}`,
           remediation: `Run \`imprint login ${opts.workflow.site}\` to refresh credentials.`,
         },
         requestStageFacts,
@@ -808,7 +831,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           ok: false,
           error: 'FORBIDDEN',
           status: resp.status,
-          responseBodyPreview: boundedResponsePreview(bodyPreview, liveCredentials),
           message: `Request ${i} returned 403: ${bodyPreview.slice(0, 300)}`,
           remediation: `Common causes: bot detection (Akamai/Cloudflare/DataDome), geo-block, expired credential, or ToS violation. Inspect the response body above; if it looks like bot detection, the captured workflow can't replay against this site without a real browser. If it's auth, try \`imprint login ${opts.workflow.site}\`.`,
         },
@@ -833,7 +855,6 @@ export async function executeWorkflow<T = unknown>(opts: ExecuteOptions): Promis
           ok: false,
           error: 'BAD_RESPONSE',
           status: resp.status,
-          responseBodyPreview: boundedResponsePreview(bodyPreview, liveCredentials),
           message: `Request ${i} (${subbed.method} ${subbed.url}) returned ${resp.status}: ${bodyPreview.slice(0, 500)}`,
         },
         requestStageFacts,
@@ -1307,22 +1328,23 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       responseReadError,
       liveCredentials,
     );
+    let parsed: unknown = text;
     if (!responseReadError) {
-      let observed: unknown = text;
       try {
-        observed = JSON.parse(text);
+        parsed = JSON.parse(text);
       } catch {
         /* Text is a valid observation. */
       }
       try {
         opts.onResponse?.(
-          responseObservation(requestIndex, response, text, observed, liveCredentials, dispatch),
+          responseObservation(requestIndex, response, text, parsed, liveCredentials, dispatch),
         );
       } catch {
         /* Diagnostics cannot alter action execution. */
       }
     }
-    if (response.status >= 400) {
+    const providerError = matchProviderError(credentials, response.status, parsed);
+    if (response.status >= 400 || providerError) {
       const bodyPreview = responseReadError
         ? `[response body unavailable: ${responseReadError}]`
         : text;
@@ -1331,9 +1353,13 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         result: {
           ok: false,
           error: response.status === 401 ? 'AUTH_EXPIRED' : 'BAD_RESPONSE',
-          message: `Auth request ${requestIndex} (${request.method} ${request.url}) returned ${response.status}: ${bodyPreview.slice(0, 500)}`,
+          message: providerError
+            ? `Auth request ${requestIndex} matched a configured provider error.`
+            : `Auth request ${requestIndex} (${request.method} ${request.url}) returned ${response.status}: ${bodyPreview.slice(0, 500)}`,
           status: response.status,
-          responseBodyPreview: bodyPreview.slice(0, 500),
+          ...(providerError
+            ? { providerError }
+            : { responseBodyPreview: bodyPreview.slice(0, 500) }),
         },
       };
     }
@@ -1358,12 +1384,6 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     }
     liveCredentials.cookies = cookieJar.toJSON();
 
-    let parsed: unknown = text;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      // Keep the raw body for text captures.
-    }
     const context = { parsed, text, headers: response.headers, requestUrl: capturedResponseUrl };
     responseSlots.push({ raw: parsed, aliases: evaluateLegacyExtract(req, parsed) });
     for (const capture of req.captures ?? []) delete state[capture.name];
@@ -1419,6 +1439,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       }
       if (opts.signal?.aborted) return cancellationFailure();
       if (!executed.ok) {
+        if (executed.result.providerError) return fail(executed.result);
         lastFailure = executed.result;
         if (step.onError === 'continue') {
           matched = true;
@@ -1504,9 +1525,6 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       ok: false,
       error: 'BAD_RESPONSE',
       message: `Auth action ${JSON.stringify(actionName)} completed without declared evidence: ${missingEvidence.join(', ')}.`,
-      ...(outcomeResponse
-        ? { responseBodyPreview: boundedResponsePreview(outcomeResponse.text, liveCredentials) }
-        : {}),
     });
   }
 

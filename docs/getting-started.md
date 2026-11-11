@@ -307,7 +307,8 @@ approval action as its single unsafe request. Preparation can use safe and idemp
 requests.
 The policy can optionally match provider responses with `signedOutResponse`
 and `browserVerificationResponse` objects containing a numeric `status` and a
-string `errorCode`.
+top-level JSON `errorCode` string. The policy sets separate deadlines for
+approval and for the renewal attempt, including the protected retry.
 
 A successful action can declare `expiresAtCapture` for a fresh server expiry in
 epoch milliseconds. The MCP checks for renewal during an incoming call within

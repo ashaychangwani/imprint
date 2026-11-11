@@ -21,11 +21,11 @@ const PolicySchema = z
     refreshBeforeExpiryMs: z.number().int().positive().default(90_000),
     verifyAgainAfterMs: z.number().int().positive().default(45_000),
     signedOutResponse: z
-      .object({ status: z.number().int(), errorCode: z.string() })
+      .object({ status: z.number().int().min(200).max(599), errorCode: z.string().min(1) })
       .strict()
       .optional(),
     browserVerificationResponse: z
-      .object({ status: z.number().int(), errorCode: z.string() })
+      .object({ status: z.number().int().min(200).max(599), errorCode: z.string().min(1) })
       .strict()
       .optional(),
   })
@@ -261,25 +261,12 @@ function matchesProviderResponse(
   result: ToolResult,
   expected: RecoveryPolicy['signedOutResponse'],
 ): boolean {
-  if (
-    result.ok ||
-    !expected ||
-    (result.status ?? result.authExecution?.httpStatus) !== expected.status ||
-    !result.responseBodyPreview
-  ) {
-    return false;
-  }
-  try {
-    const body: unknown = JSON.parse(result.responseBodyPreview);
-    return (
-      !!body &&
-      typeof body === 'object' &&
-      'errorCode' in body &&
-      body.errorCode === expected.errorCode
-    );
-  } catch {
-    return false;
-  }
+  return (
+    !result.ok &&
+    !!expected &&
+    result.providerError?.status === expected.status &&
+    result.providerError.errorCode === expected.errorCode
+  );
 }
 
 export function isSignedOut(result: ToolResult, policy: RecoveryPolicy): boolean {

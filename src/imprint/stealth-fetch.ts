@@ -12,7 +12,7 @@
 
 import type { Browser, BrowserContext, Page } from 'playwright';
 import { AKAMAI_SENSOR_COOKIE, isAbckValidated } from './bot-defense.ts';
-import { withTimeout } from './concurrency.ts';
+import { withAbortSignal, withTimeout } from './concurrency.ts';
 import { isSameRegistrableDomain, registrableDomain } from './etld.ts';
 import { createLog } from './log.ts';
 
@@ -98,7 +98,7 @@ export interface StealthFetch {
    *  use this to read session-token cookies (CSRF etc.) set by the bootstrap
    *  page and feed them into the workflow as `${state.X}`, in the SAME session
    *  as the transport cookies. */
-  ensureBootstrapped(): Promise<TokenCache>;
+  ensureBootstrapped(signal?: AbortSignal): Promise<TokenCache>;
   /** Drop cached tokens; next fetch re-bootstraps. */
   invalidate(): void;
   /** Token age in seconds; -1 if not bootstrapped yet. */
@@ -119,6 +119,7 @@ export interface BootstrapArgs {
    *  to baseUrl when absent. */
   bootstrapUrl?: string;
   probeUrl?: string;
+  signal?: AbortSignal;
   /** Force a specific UA on the bootstrap browser. Omit (the default) to let
    *  Chrome use its NATIVE UA — which is always self-consistent with the client
    *  hints it emits. Only set this when a caller explicitly needs a custom UA. */
@@ -240,7 +241,8 @@ export function createStealthFetch(
     return Math.floor((Date.now() - tokens.bootstrappedAt) / 1000);
   };
 
-  async function ensureTokens(probeUrl?: string): Promise<void> {
+  async function ensureTokens(probeUrl?: string, signal?: AbortSignal): Promise<void> {
+    signal?.throwIfAborted();
     if (tokens && tokenAge() >= opts.maxTokenAgeSeconds) {
       log(`tokens ${tokenAge()}s old (>= ${opts.maxTokenAgeSeconds}s), refreshing proactively`);
       tokens = null;
@@ -248,18 +250,23 @@ export function createStealthFetch(
     if (tokens) return;
     const t0 = Date.now();
     log('bootstrapping…');
-    tokens = await withTimeout(
-      bootstrapFn({
-        baseUrl: opts.baseUrl,
-        bootstrapUrl: opts.bootstrapUrl,
-        probeUrl,
-        userAgent: opts.userAgent,
-        headed: opts.headed,
-        sensorWaitSeconds: opts.sensorWaitSeconds,
-        bootstrapTimeoutMs: opts.bootstrapTimeoutMs,
-      }),
-      opts.bootstrapTimeoutMs,
-      'stealth browser bootstrap',
+    tokens = await withAbortSignal(
+      () =>
+        withTimeout(
+          bootstrapFn({
+            baseUrl: opts.baseUrl,
+            bootstrapUrl: opts.bootstrapUrl,
+            probeUrl,
+            signal,
+            userAgent: opts.userAgent,
+            headed: opts.headed,
+            sensorWaitSeconds: opts.sensorWaitSeconds,
+            bootstrapTimeoutMs: opts.bootstrapTimeoutMs,
+          }),
+          opts.bootstrapTimeoutMs,
+          'stealth browser bootstrap',
+        ),
+      signal,
     );
     consecutiveFailures = 0; // fresh tokens → past failures don't count
     log(
@@ -269,9 +276,10 @@ export function createStealthFetch(
 
   async function fetchWithRetry(url: string, init?: FetchInit): Promise<FetchResult> {
     const fullUrl = url.startsWith('http') ? url : `${new URL(opts.baseUrl).origin}${url}`;
-    await ensureTokens(fullUrl);
+    await ensureTokens(fullUrl, init?.signal);
     let retries = 0;
     while (true) {
+      init?.signal?.throwIfAborted();
       const t = tokens;
       if (!t) throw new Error('No tokens (bootstrap failed?)');
       const { headers: initHeaders, cookieHeader } = splitCookieHeader(init?.headers ?? {});
@@ -332,7 +340,7 @@ export function createStealthFetch(
         if (retries < opts.maxRetries) {
           log(`got 403 — re-bootstrapping (attempt ${retries + 1}/${opts.maxRetries})`);
           tokens = null;
-          await ensureTokens(fullUrl);
+          await ensureTokens(fullUrl, init?.signal);
           retries++;
           continue;
         }
@@ -383,8 +391,8 @@ export function createStealthFetch(
 
   return {
     fetchImpl,
-    async ensureBootstrapped(): Promise<TokenCache> {
-      await ensureTokens();
+    async ensureBootstrapped(signal?: AbortSignal): Promise<TokenCache> {
+      await ensureTokens(undefined, signal);
       if (!tokens) throw new Error('stealth bootstrap produced no tokens');
       return tokens;
     },
@@ -493,6 +501,7 @@ async function driveSensorValidation(
 }
 
 export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenCache> {
+  args.signal?.throwIfAborted();
   // Use the same stealth-patched chromium + full Chrome binary that
   // runFetchBootstrap and runPlaybook use. The original implementation
   // imported vanilla `playwright` with no executablePath, which defaults
@@ -508,7 +517,12 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
   );
   const chromium = await getStealthChromium();
   const stealthActive = await isStealthPluginAvailable();
+  args.signal?.throwIfAborted();
   let browser: Browser | undefined;
+  const closeOnAbort = () => {
+    void browser?.close().catch(() => {});
+  };
+  args.signal?.addEventListener('abort', closeOnAbort, { once: true });
   let bootstrapTimedOut = false;
   const bootstrapTimer = setTimeout(() => {
     bootstrapTimedOut = true;
@@ -521,6 +535,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       args: ['--disable-blink-features=AutomationControlled', '--no-sandbox'],
     });
 
+    args.signal?.throwIfAborted();
     // Only override the UA when the caller explicitly asked for one. Otherwise
     // let Chrome use its native UA: a forced UA does NOT change the client hints
     // (sec-ch-ua) the browser emits, so pinning a stale UA string while the
@@ -670,6 +685,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       await route.abort();
     });
 
+    args.signal?.throwIfAborted();
     const probe = args.probeUrl ?? `${new URL(args.baseUrl).origin}/api/__stealth_probe__`;
     await page.evaluate(
       async (probeArgs: { url: string; headers: Record<string, string> }) => {
@@ -705,6 +721,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
       })
       .map((c) => ({ name: c.name, value: c.value }));
 
+    args.signal?.throwIfAborted();
     if (bootstrapTimedOut) throw new Error('stealth browser bootstrap timed out');
     return {
       cookies,
@@ -717,6 +734,7 @@ export async function bootstrapStealthToken(args: BootstrapArgs): Promise<TokenC
     };
   } finally {
     clearTimeout(bootstrapTimer);
+    args.signal?.removeEventListener('abort', closeOnAbort);
     await browser?.close().catch(() => {});
   }
 }

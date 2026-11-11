@@ -574,6 +574,12 @@ export interface RequestStageFact {
 }
 
 /** Discriminated union returned by every generated tool. */
+/** A provider error explicitly declared by a caller's session policy. */
+export interface ProviderErrorMatch {
+  status: number;
+  errorCode: string;
+}
+
 export type ToolResult<T = unknown> =
   | { ok: true; data: T }
   | {
@@ -596,6 +602,7 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
+      providerError?: ProviderErrorMatch;
       /** Most recently inspected page after a failed CDP call, possibly before
        * a later fallback. Not an API response or success proof. Cookies omitted. */
       pageDiagnostic?: {

@@ -133,7 +133,7 @@ export function buildJsonSchema(
   if (opts?.authConfig) {
     properties.action = {
       type: 'string',
-      description: `Auth action to run. Defaults to ${JSON.stringify(opts.authConfig.entry)}. When continuing authentication, use the exact nextAction from the preceding response with its continuation token.`,
+      description: `Auth action to run. Defaults to ${JSON.stringify(opts.authConfig.entry)}.`,
       enum: Object.keys(opts.authConfig.actions),
     };
     properties.continuation = {
@@ -157,34 +157,18 @@ interface StoredAuthContinuation {
 }
 
 export class AuthContinuationStore {
-  private readonly values = new Map<string, StoredAuthContinuation & { issuedAt: number }>();
-
-  private prune(): void {
-    const cutoff = Date.now() - 5 * 60 * 1000;
-    for (const [token, value] of this.values) {
-      if (value.issuedAt <= cutoff) this.values.delete(token);
-    }
-  }
+  private readonly values = new Map<string, StoredAuthContinuation>();
 
   issue(value: StoredAuthContinuation): string {
-    this.prune();
     const token = randomUUID();
-    this.values.set(token, { ...value, issuedAt: Date.now() });
+    this.values.set(token, value);
     return token;
   }
 
-  nextAction(token: string, toolName: string): string | undefined {
-    this.prune();
-    const value = this.values.get(token);
-    return value?.toolName === toolName ? value.nextAction : undefined;
-  }
-
   consume(token: string, toolName: string, action: string): Record<string, unknown> | undefined {
-    this.prune();
     const value = this.values.get(token);
-    if (!value || value.toolName !== toolName) return undefined;
     this.values.delete(token);
-    if (value.nextAction !== action) return undefined;
+    if (!value || value.toolName !== toolName || value.nextAction !== action) return undefined;
     return value.state;
   }
 
@@ -271,6 +255,21 @@ function buildServer(
   const siteExecutionQueues = new Map<string, Promise<void>>();
   const freshness = recoveryPolicy ? new SessionFreshness(recoveryPolicy) : undefined;
   const shuttingDown = new AbortController();
+  const activeRecovery = new Set<Promise<unknown>>();
+
+  async function trackRecovery<T>(work: Promise<T>): Promise<T> {
+    activeRecovery.add(work);
+    try {
+      return await work;
+    } finally {
+      activeRecovery.delete(work);
+    }
+  }
+
+  const authProviderErrors = [
+    recoveryPolicy?.signedOutResponse,
+    recoveryPolicy?.browserVerificationResponse,
+  ].filter((match) => match !== undefined);
 
   async function executeTool(
     tool: ResolvedTool,
@@ -283,10 +282,11 @@ function buildServer(
     },
   ): Promise<Awaited<ReturnType<typeof runWithLadder>>> {
     const preferred = resolveLadder('auto', tool.preferredOrder);
+    const managedData = recoveryPolicy?.protectedTools.includes(tool.workflow.toolName);
     const ladder: ConcreteBackend[] =
       tool.workflow.authConfig?.persistCookiesOnPause === false
         ? ['cdp-replay']
-        : recoveryPolicy?.protectedTools.includes(tool.workflow.toolName)
+        : managedData
           ? preferred.filter((backend) => backend !== 'playbook')
           : preferred;
     let credentials = options?.credentials;
@@ -314,6 +314,7 @@ function buildServer(
       winnerCache,
       initialState,
       credentials: credentials ?? undefined,
+      preferProviderFailure: managedData,
       signal,
     });
     const deadline = auditToolDeadlineMs();
@@ -425,46 +426,39 @@ function buildServer(
     if (tool.workflow.toolKind === 'authenticate' && typeof rawArgs.action === 'string') {
       args.action = rawArgs.action;
     }
+    const authConfig = tool.workflow.authConfig;
+    const action = String(args.action ?? authConfig?.entry ?? '');
+    const continuation =
+      tool.workflow.toolKind === 'authenticate' ? rawArgs.continuation : undefined;
+    if (continuation !== undefined && typeof continuation !== 'string') {
+      return {
+        isError: true,
+        content: [{ type: 'text', text: 'Invalid continuation token.' }],
+      };
+    }
+    const canStartFresh = Object.values(authConfig?.actions ?? {}).some(
+      (entry) => entry.browserSession === 'fresh',
+    );
+    const invalidContinuation = (): CallToolResult => ({
+      isError: true,
+      content: [{ type: 'text', text: 'Invalid or expired continuation token.' }],
+    });
+    let initialState: Record<string, unknown> | undefined;
+    if (continuation !== undefined && !canStartFresh) {
+      initialState = authContinuations.consume(continuation, tool.workflow.toolName, action);
+      if (!initialState) return invalidContinuation();
+    }
+
     try {
       return await runSerializedBySite(siteExecutionQueues, tool.site, async () => {
+        const policy = recoveryPolicy;
+        const managed = policy?.protectedTools.includes(tool.workflow.toolName);
         const callSignal = AbortSignal.any([extra.signal, shuttingDown.signal]);
-        callSignal.throwIfAborted();
-        let initialState: Record<string, unknown> | undefined;
-        const authConfig = tool.workflow.authConfig;
-        const action = String(args.action ?? authConfig?.entry ?? '');
-        if (tool.workflow.toolKind === 'authenticate' && rawArgs.continuation !== undefined) {
-          if (typeof rawArgs.continuation !== 'string') {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: 'Invalid continuation token.' }],
-            };
-          }
-          const nextAction = authContinuations.nextAction(
-            rawArgs.continuation,
-            tool.workflow.toolName,
-          );
-          if (nextAction && nextAction !== action) {
-            return {
-              isError: true,
-              content: [
-                {
-                  type: 'text',
-                  text: `This continuation requires action ${JSON.stringify(nextAction)}. Retry with that action and the same continuation.`,
-                },
-              ],
-            };
-          }
-          initialState = authContinuations.consume(
-            rawArgs.continuation,
-            tool.workflow.toolName,
-            action,
-          );
-          if (!initialState) {
-            return {
-              isError: true,
-              content: [{ type: 'text', text: 'Invalid or expired continuation token.' }],
-            };
-          }
+        if (policy) shuttingDown.signal.throwIfAborted();
+        if (managed || diagnostic) callSignal.throwIfAborted();
+        if (continuation !== undefined && canStartFresh) {
+          initialState = authContinuations.consume(continuation, tool.workflow.toolName, action);
+          if (!initialState) return invalidContinuation();
         }
 
         // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
@@ -476,17 +470,26 @@ function buildServer(
           await new Promise((r) => setTimeout(r, pacingMs));
         }
 
-        const policy = recoveryPolicy;
         let outcome: Awaited<ReturnType<typeof runWithLadder>> | undefined;
 
-        const managed = policy?.protectedTools.includes(tool.workflow.toolName);
         let attemptedRevision: string | undefined;
         const runDataTool = async (signal = callSignal) => {
-          const credentials = managed
-            ? await loadCredentialStore(tool.site, signal, { includeEmpty: true })
-            : undefined;
+          if (!managed) {
+            return executeTool(tool, args, initialState, {
+              signal: policy ? shuttingDown.signal : undefined,
+            });
+          }
+          const credentials = await loadCredentialStore(tool.site, signal, {
+            includeEmpty: true,
+          });
           attemptedRevision = credentials?.durableRevision;
-          return executeTool(tool, args, initialState, { signal, credentials });
+          return executeTool(tool, args, initialState, {
+            signal,
+            credentials:
+              credentials && policy?.signedOutResponse
+                ? { ...credentials, providerErrorMatches: [policy.signedOutResponse] }
+                : credentials,
+          });
         };
         if (managed && policy && freshness) {
           const auth = tools.find(
@@ -500,12 +503,13 @@ function buildServer(
             const deadline = AbortSignal.timeout(policy.recoveryTimeoutMs);
             const signal = AbortSignal.any([callSignal, deadline]);
             const elicitation = server.getClientCapabilities()?.elicitation?.form;
+            let retrying = false;
             try {
               const priorRevision = outcome
                 ? attemptedRevision
                 : (await loadCredentialStore(tool.site, signal, { includeEmpty: true }))
                     ?.durableRevision;
-              return await withRecoveryLock(tool.site, policy, signal, async (gate) => {
+              const work = withRecoveryLock(tool.site, policy, signal, async (gate) => {
                 try {
                   await cdpSessions.closeTool(auth.site, auth.workflow.toolName);
                   const current = await loadCredentialStore(tool.site, signal, {
@@ -513,7 +517,11 @@ function buildServer(
                   });
                   const credentialsChanged = current?.durableRevision !== priorRevision;
                   const authCredentials = current
-                    ? { ...current, authCommitRevision: current.durableRevision }
+                    ? {
+                        ...current,
+                        authCommitRevision: current.durableRevision,
+                        providerErrorMatches: authProviderErrors,
+                      }
                     : undefined;
                   const recovered = await recoverSession(
                     policy,
@@ -562,7 +570,8 @@ function buildServer(
                     recovered.status === 'renewed' ||
                     (credentialsChanged && recovered.status === 'valid' && outcome)
                   ) {
-                    outcome = await runDataTool();
+                    retrying = true;
+                    outcome = await runDataTool(signal);
                     if (
                       !outcome.result.ok &&
                       (outcome.result.error === 'AUTH_EXPIRED' ||
@@ -581,11 +590,14 @@ function buildServer(
                   await cdpSessions.closeTool(auth.site, auth.workflow.toolName);
                 }
               });
+              return await trackRecovery(work);
             } catch (error) {
               if (callSignal.aborted || !deadline.aborted) throw error;
               return {
                 status: 'blocked',
-                message: 'The sign-in did not finish before its deadline.',
+                message: retrying
+                  ? 'The protected retry did not finish before the renewal deadline.'
+                  : 'The sign-in did not finish before its deadline.',
               };
             }
           };
@@ -621,23 +633,29 @@ function buildServer(
           }
         }
         outcome ??= diagnostic
-          ? await withSiteAuthRecoveryLock(tool.site, callSignal, async () => {
-              await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
-              try {
-                const current = await loadCredentialStore(tool.site, callSignal, {
-                  includeEmpty: true,
-                });
-                return await executeTool(tool, args, undefined, {
-                  retainBrowser: true,
-                  signal: callSignal,
-                  credentials: current
-                    ? { ...current, authCommitRevision: current.durableRevision }
-                    : undefined,
-                });
-              } finally {
+          ? await trackRecovery(
+              withSiteAuthRecoveryLock(tool.site, callSignal, async () => {
                 await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
-              }
-            })
+                try {
+                  const current = await loadCredentialStore(tool.site, callSignal, {
+                    includeEmpty: true,
+                  });
+                  return await executeTool(tool, args, undefined, {
+                    retainBrowser: true,
+                    signal: callSignal,
+                    credentials: current
+                      ? {
+                          ...current,
+                          authCommitRevision: current.durableRevision,
+                          providerErrorMatches: authProviderErrors,
+                        }
+                      : undefined,
+                  });
+                } finally {
+                  await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
+                }
+              }),
+            )
           : await runDataTool();
         const { result, usedBackend, attempts } = outcome;
         if (policy?.authTool === tool.workflow.toolName && freshness) {
@@ -668,11 +686,8 @@ function buildServer(
                 })
               : undefined;
           const text = formatToolError(result, continuationToken, attempts);
-          const actionRequired =
-            result.error === 'ACTION_REQUIRED' && Boolean(result.nextAction && continuationToken);
           return {
-            // A valid continuation is progress. Some MCP hosts count errors against server health.
-            isError: !actionRequired,
+            isError: true,
             content: [{ type: 'text', text: `${text}\n(backend: ${usedBackend})` }],
           };
         }
@@ -701,8 +716,9 @@ function buildServer(
 
   async function closeCdpPool(): Promise<void> {
     shuttingDown.abort();
-    if (recoveryPolicy) await Promise.allSettled(siteExecutionQueues.values());
-    await cdpSessions.closeAll();
+    const closing = cdpSessions.closeAll();
+    await Promise.allSettled(activeRecovery);
+    await closing;
     authContinuations.clear();
   }
 
