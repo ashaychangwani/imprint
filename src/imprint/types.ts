@@ -251,7 +251,7 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
-/** Internal hint for browser transports that can otherwise retry a failed dispatch. */
+/** Managed authentication can disable transport retry for an ambiguous dispatch. */
 export type BrowserRequestInit = RequestInit & { allowAmbiguousRetry?: false };
 
 const WorkflowRequestBaseSchema = z.object({
@@ -373,6 +373,7 @@ const AuthOutcomeSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('pause'),
       next: z.string().min(1),
+      resume: z.literal('automatic').optional(),
       evidence: z.array(z.string().min(1)).optional().default([]),
       carry: z.array(z.string().min(1)).optional().default([]),
       message: z.string().min(1),
@@ -381,7 +382,6 @@ const AuthOutcomeSchema = z.discriminatedUnion('type', [
   z
     .object({
       type: z.literal('success'),
-      expiresAtCapture: z.string().min(1).optional(),
       evidence: z.array(z.string().min(1)).optional().default([]),
     })
     .strict(),
@@ -396,8 +396,6 @@ const AuthConfigSchema = z
       z.string().min(1),
       z
         .object({
-          /** Start an independent MCP authentication action with an empty browser session. */
-          browserSession: z.literal('fresh').optional(),
           parameters: z.array(z.string().min(1)).optional().default([]),
           steps: z
             .array(
@@ -427,8 +425,6 @@ const AuthConfigSchema = z
         })
         .strict(),
     ),
-    /** Keep incomplete authentication in the retained browser when disabled. */
-    persistCookiesOnPause: z.boolean().optional(),
     /** Durable credential interface names to store after success. */
     persist: z.array(z.string().min(1)).optional().default([]),
     /** Optional interface-name → compiled capture-name bindings. This lets the
@@ -574,12 +570,6 @@ export interface RequestStageFact {
 }
 
 /** Discriminated union returned by every generated tool. */
-/** A provider error explicitly declared by a caller's session policy. */
-export interface ProviderErrorMatch {
-  status: number;
-  errorCode: string;
-}
-
 export type ToolResult<T = unknown> =
   | { ok: true; data: T }
   | {
@@ -602,7 +592,6 @@ export type ToolResult<T = unknown> =
       status?: number;
       /** Truncated response body of the failing request (first ~500 chars). */
       responseBodyPreview?: string;
-      providerError?: ProviderErrorMatch;
       /** Most recently inspected page after a failed CDP call, possibly before
        * a later fallback. Not an API response or success proof. Cookies omitted. */
       pageDiagnostic?: {
@@ -629,6 +618,7 @@ export type ToolResult<T = unknown> =
        *  unchanged on the next auth call. */
       continuation?: Record<string, unknown>;
       nextAction?: string;
+      resume?: 'automatic';
     };
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────

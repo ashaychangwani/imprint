@@ -347,8 +347,6 @@ export async function runWithLadder(
   stealthCache: Map<string, StealthFetch>,
   options?: {
     skipBootstrapSplice?: boolean;
-    /** Retain an observed provider rejection for the managed renewal decision. */
-    preferProviderFailure?: boolean;
     /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
      *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
     cdpPool?: Map<string, CdpBrowserFetch>;
@@ -418,27 +416,6 @@ export async function runWithLadder(
   let lastPageDiagnostic: Extract<ToolResult, { ok: false }>['pageDiagnostic'];
   let lastResult: ToolResult | null = null;
   let lastResultBackend: ConcreteBackend | null = null;
-  // A fallback that never receives a response cannot supersede a concrete rejection.
-  let receivedFailure:
-    | { result: Exclude<ToolResult, { ok: true }>; usedBackend: ConcreteBackend }
-    | undefined;
-  let matchedProviderFailure: typeof receivedFailure;
-  const selectFailure = (
-    result: Exclude<ToolResult, { ok: true }>,
-    usedBackend: ConcreteBackend,
-  ): LadderResult => {
-    if (matchedProviderFailure) return { ...matchedProviderFailure, attempts };
-    if (
-      receivedFailure &&
-      (result.error === 'STATE_MISSING' || result.error === 'NETWORK') &&
-      result.status === undefined &&
-      !result.authExecution?.responseReceived &&
-      !result.requestStageFacts?.some((fact) => fact.httpStatus !== undefined)
-    ) {
-      return { ...receivedFailure, attempts };
-    }
-    return { result, usedBackend, attempts };
-  };
   let skipUntilBackend: ConcreteBackend | null = null;
   for (const backend of effectiveLadder) {
     if (options?.signal?.aborted) throw abortSignalError(options.signal);
@@ -532,7 +509,7 @@ export async function runWithLadder(
           // ${state.X} its requests need — the gap that made bootstrap-block
           // tools on anti-bot sites unverifiable.
           const bootstrapState = tool.workflow.bootstrap
-            ? await stealthBootstrapState(sf, tool.workflow.bootstrap, options?.signal)
+            ? await stealthBootstrapState(sf, tool.workflow.bootstrap)
             : undefined;
           // Merge the caller-seeded state (e.g. the echoed 2FA context) UNDER
           // freshly-minted bootstrap state — bootstrap captures win on overlap.
@@ -592,13 +569,6 @@ export async function runWithLadder(
       );
       options?.winnerCache?.set(memoKey, backend);
       return { result, usedBackend: backend, attempts };
-    }
-
-    if (options?.preferProviderFailure) {
-      if (result.providerError) matchedProviderFailure = { result, usedBackend: backend };
-      if (result.status !== undefined && result.status >= 400) {
-        receivedFailure = { result, usedBackend: backend };
-      }
     }
 
     if (result.error === 'FORBIDDEN') {
@@ -703,7 +673,7 @@ export async function runWithLadder(
       durationMs,
     });
     log(`${backend}: ${result.error} in ${durationMs}ms — non-escalatable, returning`);
-    return selectFailure(result, backend);
+    return { result, usedBackend: backend, attempts };
   }
 
   // Every backend either escalated (FORBIDDEN) or was unavailable.
@@ -719,13 +689,18 @@ export async function runWithLadder(
     };
   }
   const lastBackend = lastResultBackend ?? effectiveLadder[effectiveLadder.length - 1] ?? 'fetch';
-  const selected = lastResult.ok
-    ? { result: lastResult, usedBackend: lastBackend, attempts }
-    : selectFailure(lastResult, lastBackend);
+  // Be accurate about ladder size: pinned callers use a single-rung ladder, so
+  // only say "all rungs" when there really was more than one.
   log(
-    `ladder exhausted (${effectiveLadder.join(' → ')}); returning the error from ${selected.usedBackend}`,
+    effectiveLadder.length === 1
+      ? `${lastBackend}: exhausted (no fallback rung in this ladder); returning its error`
+      : `ladder exhausted: all ${effectiveLadder.length} rungs escalated (${effectiveLadder.join(' → ')}); returning last error from ${lastBackend}`,
   );
-  return selected;
+  return {
+    result: lastResult,
+    usedBackend: lastBackend,
+    attempts,
+  };
 }
 
 export function effectiveAutoLadder(ladder: ConcreteBackend[]): ConcreteBackend[] {
@@ -886,12 +861,8 @@ async function getOrMintCdpJar(
   try {
     await prepareTeachBrowserContext(cdpPool);
     if (signal?.aborted) throw abortSignalError(signal);
-    const browser = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({
-      baseUrl,
-      bootstrapUrl,
-    });
-    cf = browser;
-    const jar = await withAbortSignal(() => browser.mintJar(), signal);
+    cf = (cdpBrowserFetchFactoryForTest ?? createCdpBrowserFetch)({ baseUrl, bootstrapUrl });
+    const jar = await cf.mintJar();
     if (jar.abckFlag !== '0') {
       log(`cdp jar minted with _abck~${jar.abckFlag}~ (not validated) — replay may be rejected`);
     }
@@ -1276,8 +1247,11 @@ async function runCdpReplay(
     if (cdpPool) cdpPool.set(poolKey, cf);
   }
 
+  // Existing callers keep their normal timing. Managed auth owns this browser
+  // and closes it when the recovery deadline or client cancellation fires.
+  const authSignal = credentials.authCommitRevision === undefined ? undefined : signal;
   try {
-    const jar = await withAbortSignal(() => cf.mintJar(), signal);
+    const jar = await withAbortSignal(() => cf.mintJar(), authSignal);
     if (signal?.aborted) throw abortSignalError(signal);
     const observedCookies = jar.cookies.map((c) => ({
       name: c.name,
@@ -1312,26 +1286,26 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
-    const fetchInBrowser: typeof fetch = Object.assign(
-      (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
-        withAbortSignal(() => cf.fetchImpl(input, init), signal),
-      { preconnect: cf.fetchImpl.preconnect },
-    );
     const navigate = cf.navigate?.bind(cf);
     const snapshotCookies = cf.snapshotCookies?.bind(cf);
+    const fetchImpl: typeof fetch = authSignal
+      ? Object.assign(
+          (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+            withAbortSignal(() => cf.fetchImpl(input, init), authSignal),
+          { preconnect: cf.fetchImpl.preconnect },
+        )
+      : cf.fetchImpl;
     let runtimeCookies: CredentialStore['cookies'] | undefined;
     let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
-      fetchImpl: fetchInBrowser,
+      fetchImpl,
       browser:
         navigate && snapshotCookies
           ? {
-              navigate: (
-                url: string,
-                options?: Parameters<NonNullable<CdpBrowserFetch['navigate']>>[1],
-              ) => withAbortSignal(() => navigate(url, options), signal),
-              snapshotCookies: () => withAbortSignal(snapshotCookies, signal),
+              navigate: (...args: Parameters<NonNullable<CdpBrowserFetch['navigate']>>) =>
+                withAbortSignal(() => navigate(...args), authSignal),
+              snapshotCookies: () => withAbortSignal(snapshotCookies, authSignal),
               initialCookies: observedCookies,
             }
           : undefined,
@@ -1368,7 +1342,7 @@ async function runCdpReplay(
     if (result.ok) {
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
-        const postJar = await withAbortSignal(() => cf.mintJar(), signal);
+        const postJar = await withAbortSignal(() => cf.mintJar(), authSignal);
         recordBrowserCookieState(
           { ...credentials, cookies: postJar.cookies },
           'cdp-after-request',
@@ -1429,11 +1403,9 @@ async function runCdpReplay(
       // A paused auth action is healthy progress. Retain the browser so the next
       // declared action sees the same cookies, page, and browser-owned state.
       if (ownsSession) cdpPool.set(poolKey, cf);
-      if (tool.workflow.authConfig?.persistCookiesOnPause === false) {
-        clearJar(cacheDir);
-      } else {
+      if (credentials.authCommitRevision === undefined) {
         try {
-          const postJar = await withAbortSignal(() => cf.mintJar(), signal);
+          const postJar = await cf.mintJar();
           saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
         } catch (err) {
           clearJar(cacheDir);
@@ -1740,7 +1712,6 @@ export async function evaluateBootstrapCapture(
 async function stealthBootstrapState(
   sf: StealthFetch,
   bootstrap: NonNullable<ResolvedTool['workflow']['bootstrap']>,
-  signal?: AbortSignal,
 ): Promise<Record<string, unknown>> {
   const state: Record<string, unknown> = {};
   const captures = bootstrap.captures ?? [];
@@ -1748,7 +1719,7 @@ async function stealthBootstrapState(
     (c) => c.source === 'cookie' || c.source === 'html_regex' || c.source === 'response_header',
   );
   if (supported.length === 0) return state;
-  const tokens = await sf.ensureBootstrapped(signal);
+  const tokens = await sf.ensureBootstrapped();
   for (const cap of supported) {
     if (cap.source === 'cookie') {
       const hit = tokens.cookies.find((c) => c.name === cap.cookie);

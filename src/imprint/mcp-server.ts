@@ -17,21 +17,22 @@ import {
   ListToolsRequestSchema,
   type Tool,
 } from '@modelcontextprotocol/sdk/types.js';
-import { type BackendAttemptFact, resolveLadder, runWithLadder } from './backend-ladder.ts';
+import {
+  type BackendAttemptFact,
+  cdpReplayPoolKey,
+  resolveLadder,
+  runWithLadder,
+} from './backend-ladder.ts';
+import type { CdpBrowserFetch } from './cdp-browser-fetch.ts';
 import { TimeoutError, withTimeoutCleanup } from './concurrency.ts';
 import { withSiteAuthRecoveryLock } from './credential-store.ts';
 import { createLog } from './log.ts';
 import { McpCdpSessions } from './mcp-cdp-sessions.ts';
 import {
   type RecoveryPolicy,
-  type RecoveryResult,
-  type RecoveryTrigger,
-  SessionFreshness,
-  isSignedOut,
   loadRecoveryPolicy,
   recoverSession,
-  verifiedSession,
-  withRecoveryLock,
+  unsafeAuthRequests,
 } from './mcp-session-recovery.ts';
 import { imprintHomeDir } from './paths.ts';
 import { loadBackendsCacheStatus, persistRuntimeBackendsCache } from './probe-backends.ts';
@@ -154,6 +155,8 @@ interface StoredAuthContinuation {
   toolName: string;
   nextAction?: string;
   state: Record<string, unknown>;
+  recoveryRevision?: string;
+  recoveryBrowser?: CdpBrowserFetch;
 }
 
 export class AuthContinuationStore {
@@ -165,11 +168,35 @@ export class AuthContinuationStore {
     return token;
   }
 
-  consume(token: string, toolName: string, action: string): Record<string, unknown> | undefined {
+  consume(token: string, toolName: string, action: string): StoredAuthContinuation | undefined {
     const value = this.values.get(token);
     this.values.delete(token);
     if (!value || value.toolName !== toolName || value.nextAction !== action) return undefined;
-    return value.state;
+    return value;
+  }
+
+  isManaged(token: string): boolean {
+    return this.values.get(token)?.recoveryRevision !== undefined;
+  }
+
+  pending(
+    toolName: string,
+    isRetained: (browser: CdpBrowserFetch) => boolean,
+  ):
+    | {
+        nextAction: string;
+        continuation: string;
+      }
+    | undefined {
+    for (const [continuation, entry] of this.values) {
+      if (entry.toolName !== toolName || !entry.nextAction) continue;
+      if (entry.recoveryBrowser && !isRetained(entry.recoveryBrowser)) {
+        this.values.delete(continuation);
+      } else {
+        return { nextAction: entry.nextAction, continuation };
+      }
+    }
+    return undefined;
   }
 
   clearTool(toolName: string): void {
@@ -243,6 +270,11 @@ function buildServer(
   const cdpSessions = new McpCdpSessions();
   const cdpPool = cdpSessions.pool;
   const authContinuations = new AuthContinuationStore();
+  const isRetained = (browser: CdpBrowserFetch) => [...cdpPool.values()].includes(browser);
+  function authBrowser(tool: ResolvedTool): CdpBrowserFetch | undefined {
+    const prefix = cdpReplayPoolKey(tool.site, tool.workflow.toolName, '');
+    return [...cdpPool.entries()].reverse().find(([key]) => key.startsWith(prefix))?.[1];
+  }
 
   // Per-tool memo of the winning backend for THIS server session. After the
   // first call discovers the right rung, later calls skip the doomed early ones
@@ -253,7 +285,16 @@ function buildServer(
   // Keep same-site calls sequential so concurrent calls cannot race a tool's
   // browser, winner memo, or backend cache. Unrelated sites remain independent.
   const siteExecutionQueues = new Map<string, Promise<void>>();
-  const freshness = recoveryPolicy ? new SessionFreshness(recoveryPolicy) : undefined;
+  const authTool =
+    recoveryPolicy &&
+    tools.find(
+      ({ workflow, site }) =>
+        workflow.toolName === recoveryPolicy.authTool &&
+        workflow.toolKind === 'authenticate' &&
+        workflow.site === site &&
+        workflow.authConfig?.actions,
+    );
+  let recoveryGeneration = 0;
   const shuttingDown = new AbortController();
   const activeRecovery = new Set<Promise<unknown>>();
 
@@ -266,44 +307,24 @@ function buildServer(
     }
   }
 
-  const authProviderErrors = [
-    recoveryPolicy?.signedOutResponse,
-    recoveryPolicy?.browserVerificationResponse,
-  ].filter((match) => match !== undefined);
-
   async function executeTool(
     tool: ResolvedTool,
     args: Record<string, string | number | boolean>,
     initialState?: Record<string, unknown>,
     options?: {
       retainBrowser?: boolean;
+      browserOnly?: boolean;
+      replayOnly?: boolean;
       signal?: AbortSignal;
       credentials?: Awaited<ReturnType<typeof loadCredentialStore>>;
     },
   ): Promise<Awaited<ReturnType<typeof runWithLadder>>> {
     const preferred = resolveLadder('auto', tool.preferredOrder);
-    const managedData = recoveryPolicy?.protectedTools.includes(tool.workflow.toolName);
-    const ladder: ConcreteBackend[] =
-      tool.workflow.authConfig?.persistCookiesOnPause === false
-        ? ['cdp-replay']
-        : managedData
-          ? preferred.filter((backend) => backend !== 'playbook')
-          : preferred;
-    let credentials = options?.credentials;
-    const config = tool.workflow.authConfig;
-    const action = String(args.action ?? config?.entry ?? '');
-    if (!initialState && config?.actions[action]?.browserSession === 'fresh') {
-      const saved = credentials ?? (await loadCredentialStore(tool.site, options?.signal));
-      credentials = {
-        ...saved,
-        site: tool.site,
-        values: saved?.values ?? {},
-        cookies: [],
-        storage: [],
-      };
-      authContinuations.clearTool(tool.workflow.toolName);
-      await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
-    }
+    const ladder: ConcreteBackend[] = options?.browserOnly
+      ? ['cdp-replay']
+      : options?.replayOnly
+        ? preferred.filter((backend) => backend !== 'playbook')
+        : preferred;
     cdpSessions.beginCall(tool.site, tool.workflow.toolName);
     const execution = new AbortController();
     const signal = options?.signal
@@ -313,8 +334,7 @@ function buildServer(
       cdpPool,
       winnerCache,
       initialState,
-      credentials: credentials ?? undefined,
-      preferProviderFailure: managedData,
+      credentials: options?.credentials ?? undefined,
       signal,
     });
     const deadline = auditToolDeadlineMs();
@@ -346,39 +366,36 @@ function buildServer(
     }
   }
 
-  function authRequired(message: string): CallToolResult {
+  function authRequired(
+    message: string,
+    continuation?: {
+      authTool: string;
+      nextAction: string;
+      continuation?: string;
+    },
+  ): CallToolResult {
+    const instructions = [`[AUTH_REQUIRED] ${message}`];
+    if (continuation) {
+      instructions.push(
+        `Continue with ${continuation.authTool} using action ${JSON.stringify(continuation.nextAction)}.`,
+      );
+      if (continuation.continuation) {
+        instructions.push(`  continuation: ${JSON.stringify(continuation.continuation)}`);
+      }
+    }
     return {
       isError: false,
-      structuredContent: { status: 'auth_required', message },
-      content: [{ type: 'text', text: `[AUTH_REQUIRED] ${message}` }],
+      structuredContent: { status: 'auth_required', message, ...continuation },
+      content: [{ type: 'text', text: instructions.join('\n') }],
     };
   }
 
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((tool) => {
-      const policy = recoveryPolicy;
-      let description = buildToolDescription(tool.workflow);
-      if (policy?.protectedTools.includes(tool.workflow.toolName)) {
-        description +=
-          '\n\nCall this tool directly. It renews an expired site session, requests approval if needed, and resumes the call. A result marked auth_required describes the sign-in state.';
-      } else if (policy?.authTool === tool.workflow.toolName) {
-        description = `Use a protected tool for managed reauthentication. This tool checks or refreshes saved authentication.\n\n${description}`;
-      }
-      const inputSchema: Tool['inputSchema'] =
-        policy?.authTool === tool.workflow.toolName
-          ? {
-              type: 'object',
-              properties: {
-                action: {
-                  type: 'string',
-                  description: 'Defaults to the saved-session status check.',
-                  enum: [...new Set([policy.statusAction, policy.refreshAction])],
-                },
-              },
-            }
-          : tool.inputSchema;
-      return { name: tool.workflow.toolName, description, inputSchema };
-    }),
+    tools: tools.map((tool) => ({
+      name: tool.workflow.toolName,
+      description: buildToolDescription(tool.workflow),
+      inputSchema: tool.inputSchema,
+    })),
   }));
 
   server.setRequestHandler(CallToolRequestSchema, async (req, extra): Promise<CallToolResult> => {
@@ -409,272 +426,270 @@ function buildServer(
     >;
 
     const rawArgs = (req.params.arguments ?? {}) as Record<string, unknown>;
-    const diagnostic =
-      recoveryPolicy?.authTool === tool.workflow.toolName ? recoveryPolicy : undefined;
-    if (diagnostic) {
-      const action = rawArgs.action ?? diagnostic.statusAction;
-      if (
-        (action !== diagnostic.statusAction && action !== diagnostic.refreshAction) ||
-        rawArgs.continuation !== undefined
-      ) {
-        return authRequired(
-          'Call a protected tool to start sign-in and authorize the approval request.',
-        );
-      }
-      args.action = action;
-    }
-    if (tool.workflow.toolKind === 'authenticate' && typeof rawArgs.action === 'string') {
-      args.action = rawArgs.action;
-    }
-    const authConfig = tool.workflow.authConfig;
-    const action = String(args.action ?? authConfig?.entry ?? '');
-    const continuation =
-      tool.workflow.toolKind === 'authenticate' ? rawArgs.continuation : undefined;
-    if (continuation !== undefined && typeof continuation !== 'string') {
-      return {
-        isError: true,
-        content: [{ type: 'text', text: 'Invalid continuation token.' }],
-      };
-    }
-    const canStartFresh = Object.values(authConfig?.actions ?? {}).some(
-      (entry) => entry.browserSession === 'fresh',
-    );
+    const isAuth = tool.workflow.toolKind === 'authenticate';
+    if (isAuth && typeof rawArgs.action === 'string') args.action = rawArgs.action;
+    const action = String(args.action ?? (isAuth ? tool.workflow.authConfig?.entry : '') ?? '');
+    let continuation: StoredAuthContinuation | undefined;
+    let managedToken: string | undefined;
     const invalidContinuation = (): CallToolResult => ({
       isError: true,
       content: [{ type: 'text', text: 'Invalid or expired continuation token.' }],
     });
-    let initialState: Record<string, unknown> | undefined;
-    if (continuation !== undefined && !canStartFresh) {
-      initialState = authContinuations.consume(continuation, tool.workflow.toolName, action);
-      if (!initialState) return invalidContinuation();
+    if (isAuth && rawArgs.continuation !== undefined) {
+      if (typeof rawArgs.continuation !== 'string') return invalidContinuation();
+      if (authContinuations.isManaged(rawArgs.continuation)) {
+        managedToken = rawArgs.continuation;
+      } else {
+        continuation = authContinuations.consume(
+          rawArgs.continuation,
+          tool.workflow.toolName,
+          action,
+        );
+        if (!continuation) return invalidContinuation();
+      }
     }
 
+    const policy = recoveryPolicy;
+    const protectedRead =
+      !isAuth &&
+      authTool &&
+      policy?.protectedTools.includes(tool.workflow.toolName) &&
+      tool.site === tool.workflow.site &&
+      tool.site === authTool.site &&
+      tool.workflow.requests.length > 0 &&
+      tool.workflow.requests.every((request) => request.effect === 'safe');
+    const generation = recoveryGeneration;
+    const requestConsent =
+      server.getClientCapabilities()?.elicitation?.form && policy
+        ? async (name: string, signal: AbortSignal) => {
+            const response = await server.elicitInput(
+              {
+                mode: 'form',
+                message: `Allow ${tool.site} to run the sign-in step "${name}"? It may send a new approval request.`,
+                requestedSchema: { type: 'object', properties: {} },
+              },
+              { signal, timeout: policy.timeoutMs, relatedRequestId: extra.requestId },
+            );
+            return response.action === 'accept';
+          }
+        : undefined;
     try {
       return await runSerializedBySite(siteExecutionQueues, tool.site, async () => {
-        const policy = recoveryPolicy;
-        const managed = policy?.protectedTools.includes(tool.workflow.toolName);
-        const callSignal = AbortSignal.any([extra.signal, shuttingDown.signal]);
-        if (policy) shuttingDown.signal.throwIfAborted();
-        if (managed || diagnostic) callSignal.throwIfAborted();
-        if (continuation !== undefined && canStartFresh) {
-          initialState = authContinuations.consume(continuation, tool.workflow.toolName, action);
-          if (!initialState) return invalidContinuation();
+        const signal =
+          protectedRead || managedToken !== undefined
+            ? AbortSignal.any([extra.signal, shuttingDown.signal])
+            : undefined;
+        signal?.throwIfAborted();
+        if (managedToken !== undefined) {
+          continuation = authContinuations.consume(managedToken, tool.workflow.toolName, action);
+          if (!continuation) return invalidContinuation();
+        }
+        const revision = continuation?.recoveryRevision;
+        if (continuation?.recoveryBrowser && !isRetained(continuation.recoveryBrowser)) {
+          return authRequired(
+            'The browser for this sign-in has closed. Start sign-in again if needed.',
+          );
         }
 
-        // Audit-only pacing: when the audit harness sets IMPRINT_AUDIT_PACING_MS,
-        // sleep before each actual workflow execution so same-site queued calls
-        // stay spaced out instead of all waiting concurrently before the queue.
-        // Unset in production -> no delay.
+        // Pace only the bounded audit harness.
         const pacingMs = Number(process.env.IMPRINT_AUDIT_PACING_MS);
         if (Number.isFinite(pacingMs) && pacingMs > 0) {
-          await new Promise((r) => setTimeout(r, pacingMs));
+          await new Promise((resolve) => setTimeout(resolve, pacingMs));
         }
 
-        let outcome: Awaited<ReturnType<typeof runWithLadder>> | undefined;
+        const authName = authTool?.workflow.toolName;
+        if (
+          authName === tool.workflow.toolName &&
+          policy &&
+          !continuation &&
+          (args.action ?? tool.workflow.authConfig?.entry) ===
+            (policy.startAction ?? tool.workflow.authConfig?.entry) &&
+          authContinuations.pending(authName, isRetained)
+        ) {
+          authContinuations.clearTool(authName);
+          await cdpSessions.closeTool(tool.site, authName);
+        }
 
-        let attemptedRevision: string | undefined;
-        const runDataTool = async (signal = callSignal) => {
-          if (!managed) {
-            return executeTool(tool, args, initialState, {
-              signal: policy ? shuttingDown.signal : undefined,
-            });
-          }
-          const credentials = await loadCredentialStore(tool.site, signal, {
-            includeEmpty: true,
-          });
-          attemptedRevision = credentials?.durableRevision;
-          return executeTool(tool, args, initialState, {
-            signal,
-            credentials:
-              credentials && policy?.signedOutResponse
-                ? { ...credentials, providerErrorMatches: [policy.signedOutResponse] }
-                : credentials,
-          });
-        };
-        if (managed && policy && freshness) {
-          const auth = tools.find(
-            (candidate) =>
-              candidate.site === tool.site &&
-              candidate.workflow.toolName === policy.authTool &&
-              candidate.workflow.toolKind === 'authenticate',
+        let outcome: Awaited<ReturnType<typeof executeTool>>;
+        if (revision !== undefined && signal) {
+          const resumed = await trackRecovery(
+            withSiteAuthRecoveryLock(tool.site, signal, async () => {
+              const saved = await loadCredentialStore(tool.site, signal, { includeEmpty: true });
+              if (!saved || saved.durableRevision !== revision) {
+                await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
+                return authRequired('The saved session changed. Retry the protected call.');
+              }
+              const unsafe = unsafeAuthRequests(tool.workflow, action);
+              if (!unsafe) return authRequired('This action needs standalone manual sign-in.');
+              if (unsafe.size && !(requestConsent && (await requestConsent(action, signal)))) {
+                if (!continuation) return invalidContinuation();
+                const token = authContinuations.issue(continuation);
+                return authRequired('Consent is required before running that sign-in action.', {
+                  authTool: tool.workflow.toolName,
+                  nextAction: action,
+                  continuation: token,
+                });
+              }
+              if (
+                (await loadCredentialStore(tool.site, signal, { includeEmpty: true }))
+                  ?.durableRevision !== revision
+              ) {
+                await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
+                return authRequired('The saved session changed. Retry the protected call.');
+              }
+              if (continuation?.recoveryBrowser && !isRetained(continuation.recoveryBrowser)) {
+                return authRequired(
+                  'The browser for this sign-in has closed. Start sign-in again if needed.',
+                );
+              }
+              return executeTool(tool, args, continuation?.state, {
+                browserOnly: true,
+                signal,
+                credentials: { ...saved, authCommitRevision: revision },
+              });
+            }),
           );
-          if (!auth) return authRequired('The site authentication workflow is unavailable.');
-          const renew = async (trigger: RecoveryTrigger): Promise<RecoveryResult> => {
-            const deadline = AbortSignal.timeout(policy.recoveryTimeoutMs);
-            const signal = AbortSignal.any([callSignal, deadline]);
-            const elicitation = server.getClientCapabilities()?.elicitation?.form;
-            let retrying = false;
+          if ('content' in resumed) return resumed;
+          outcome = resumed;
+        } else {
+          const saved = protectedRead
+            ? await loadCredentialStore(tool.site, signal, { includeEmpty: true })
+            : undefined;
+          outcome = await executeTool(tool, args, continuation?.state, {
+            signal,
+            credentials: saved,
+          });
+
+          if (
+            authTool &&
+            policy &&
+            signal &&
+            protectedRead &&
+            !outcome.result.ok &&
+            outcome.result.error === 'AUTH_EXPIRED'
+          ) {
+            if (generation !== recoveryGeneration) {
+              return authRequired(
+                'Another call already tried to renew this session. Try again to start a new attempt.',
+              );
+            }
+            const deadline = AbortSignal.timeout(policy.timeoutMs);
+            const recoverySignal = AbortSignal.any([signal, deadline]);
             try {
-              const priorRevision = outcome
-                ? attemptedRevision
-                : (await loadCredentialStore(tool.site, signal, { includeEmpty: true }))
-                    ?.durableRevision;
-              const work = withRecoveryLock(tool.site, policy, signal, async (gate) => {
-                try {
-                  await cdpSessions.closeTool(auth.site, auth.workflow.toolName);
-                  const current = await loadCredentialStore(tool.site, signal, {
+              const result = await trackRecovery(
+                withSiteAuthRecoveryLock(tool.site, recoverySignal, async () => {
+                  const current = await loadCredentialStore(tool.site, recoverySignal, {
                     includeEmpty: true,
                   });
-                  const credentialsChanged = current?.durableRevision !== priorRevision;
-                  const authCredentials = current
-                    ? {
-                        ...current,
-                        authCommitRevision: current.durableRevision,
-                        providerErrorMatches: authProviderErrors,
-                      }
-                    : undefined;
-                  const recovered = await recoverSession(
-                    policy,
-                    {
-                      signal,
-                      ...gate,
-                      execute: async (action, state) => {
-                        const { result } = await executeTool(auth, { action }, state, {
-                          retainBrowser: true,
-                          credentials: authCredentials,
-                          signal,
-                        });
-                        log(
-                          `managed auth action ${action} settled ${result.ok ? 'success' : result.error}`,
-                        );
-                        return result;
-                      },
-                      requestApproval: elicitation
-                        ? async () => {
-                            try {
-                              const answer = await server.elicitInput(
-                                {
-                                  mode: 'form',
-                                  message: policy.approvalMessage,
-                                  requestedSchema: { type: 'object', properties: {} },
-                                },
-                                {
-                                  timeout: policy.approvalTimeoutMs,
-                                  signal,
-                                  relatedRequestId: extra.requestId,
-                                },
-                              );
-                              return answer.action === 'accept';
-                            } catch {
-                              return false;
-                            }
-                          }
-                        : undefined,
-                    },
-                    credentialsChanged ? 'inspect' : trigger,
-                  );
-                  if (recovered.status === 'valid' || recovered.status === 'renewed') {
-                    freshness.observe(recovered);
+                  const currentRevision = current?.durableRevision;
+                  if (currentRevision !== saved?.durableRevision)
+                    return { status: 'retry' } as const;
+                  if (!current || currentRevision === undefined) {
+                    return {
+                      status: 'blocked',
+                      message: 'The saved session could not be loaded.',
+                    } as const;
                   }
-                  if (
-                    recovered.status === 'renewed' ||
-                    (credentialsChanged && recovered.status === 'valid' && outcome)
-                  ) {
-                    retrying = true;
-                    outcome = await runDataTool(signal);
-                    if (
-                      !outcome.result.ok &&
-                      (outcome.result.error === 'AUTH_EXPIRED' ||
-                        isSignedOut(outcome.result, policy))
-                    ) {
-                      freshness.invalidate();
+
+                  const authName = authTool.workflow.toolName;
+                  const pending = authContinuations.pending(authName, isRetained);
+                  if (pending) {
+                    return {
+                      status: 'manual',
+                      action: pending.nextAction,
+                      continuation: pending.continuation,
+                      message: 'A sign-in is already waiting for a response.',
+                    } as const;
+                  }
+                  await cdpSessions.closeTool(tool.site, authName);
+                  const stillCurrent = async () =>
+                    (await loadCredentialStore(tool.site, recoverySignal, { includeEmpty: true }))
+                      ?.durableRevision === currentRevision;
+                  let keepBrowser = false;
+                  try {
+                    const recovered = await recoverSession(authTool.workflow, policy, {
+                      signal: recoverySignal,
+                      execute: async (action, state) => {
+                        if (!(await stillCurrent())) {
+                          return {
+                            ok: false,
+                            error: 'AUTH_EXPIRED',
+                            message: 'The saved session changed.',
+                          };
+                        }
+                        return (
+                          await executeTool(authTool, { action }, state, {
+                            browserOnly: true,
+                            retainBrowser: true,
+                            signal: recoverySignal,
+                            credentials: { ...current, authCommitRevision: currentRevision },
+                          })
+                        ).result;
+                      },
+                      requestConsent: requestConsent
+                        ? async (name) =>
+                            (await stillCurrent()) && requestConsent(name, recoverySignal)
+                        : undefined,
+                    });
+
+                    if (recovered.status !== 'authenticated' && !(await stillCurrent())) {
+                      return { status: 'retry' } as const;
+                    }
+                    if (recovered.status === 'manual') {
+                      const unsafe = unsafeAuthRequests(authTool.workflow, recovered.action);
+                      const browser =
+                        recovered.state === undefined ? undefined : authBrowser(authTool);
+                      if (!unsafe || (unsafe.size && (!requestConsent || !browser))) {
+                        return {
+                          status: 'blocked',
+                          message: 'This action needs standalone manual sign-in.',
+                        } as const;
+                      }
+                      keepBrowser = browser !== undefined;
                       return {
-                        status: 'blocked',
-                        message:
-                          'The provider denied the protected request after renewal. The call stopped after one retry.',
+                        ...recovered,
+                        continuation:
+                          browser && recovered.state !== undefined
+                            ? authContinuations.issue({
+                                toolName: authName,
+                                nextAction: recovered.action,
+                                state: recovered.state,
+                                recoveryRevision: currentRevision,
+                                recoveryBrowser: browser,
+                              })
+                            : undefined,
                       };
                     }
+                    return recovered;
+                  } finally {
+                    if (keepBrowser) cdpSessions.finishCall(tool.site, authName);
+                    else await cdpSessions.closeTool(tool.site, authName);
                   }
-                  return recovered;
-                } finally {
-                  await cdpSessions.closeTool(auth.site, auth.workflow.toolName);
-                }
-              });
-              return await trackRecovery(work);
+                }),
+              );
+              if (result.status === 'manual') {
+                return authRequired(result.message, {
+                  authTool: authTool.workflow.toolName,
+                  nextAction: result.action,
+                  continuation: result.continuation,
+                });
+              }
+              if (result.status === 'blocked') return authRequired(result.message);
             } catch (error) {
-              if (callSignal.aborted || !deadline.aborted) throw error;
-              return {
-                status: 'blocked',
-                message: retrying
-                  ? 'The protected retry did not finish before the renewal deadline.'
-                  : 'The sign-in did not finish before its deadline.',
-              };
+              if (signal.aborted || !deadline.aborted) throw error;
+              return authRequired('Sign-in did not finish before the recovery deadline.');
+            } finally {
+              recoveryGeneration++;
             }
-          };
-
-          const trigger = freshness.next();
-          let verifiedBeforeCall = false;
-          if (trigger !== 'ready') {
-            let checked = await renew(trigger);
-            if (checked.status === 'valid') {
-              const next = freshness.next();
-              if (next === 'proactive' || next === 'expired') checked = await renew(next);
-            }
-            verifiedBeforeCall = checked.status === 'valid';
-            if (checked.status === 'blocked') {
-              freshness.invalidate();
-              return authRequired(checked.message);
-            }
-          }
-          if (!outcome) {
-            outcome = await runDataTool();
-            if (
-              !outcome.result.ok &&
-              (outcome.result.error === 'AUTH_EXPIRED' ||
-                isSignedOut(outcome.result, policy) ||
-                (outcome.result.error === 'FORBIDDEN' && !verifiedBeforeCall))
-            ) {
-              const expired =
-                outcome.result.error === 'AUTH_EXPIRED' || isSignedOut(outcome.result, policy);
-              if (expired) freshness.invalidate();
-              const checked = await renew(expired ? 'expired' : 'forbidden');
-              if (checked.status === 'blocked') return authRequired(checked.message);
+            outcome = await executeTool(tool, args, undefined, { signal, replayOnly: true });
+            if (!outcome.result.ok && outcome.result.error === 'AUTH_EXPIRED') {
+              return authRequired(
+                'The session is still unavailable after retrying the protected call.',
+              );
             }
           }
         }
-        outcome ??= diagnostic
-          ? await trackRecovery(
-              withSiteAuthRecoveryLock(tool.site, callSignal, async () => {
-                await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
-                try {
-                  const current = await loadCredentialStore(tool.site, callSignal, {
-                    includeEmpty: true,
-                  });
-                  return await executeTool(tool, args, undefined, {
-                    retainBrowser: true,
-                    signal: callSignal,
-                    credentials: current
-                      ? {
-                          ...current,
-                          authCommitRevision: current.durableRevision,
-                          providerErrorMatches: authProviderErrors,
-                        }
-                      : undefined,
-                  });
-                } finally {
-                  await cdpSessions.closeTool(tool.site, tool.workflow.toolName);
-                }
-              }),
-            )
-          : await runDataTool();
         const { result, usedBackend, attempts } = outcome;
-        if (policy?.authTool === tool.workflow.toolName && freshness) {
-          const valid = verifiedSession(result);
-          if (valid) freshness.observe(valid);
-          else if (!result.ok && (result.error === 'AUTH_EXPIRED' || isSignedOut(result, policy))) {
-            freshness.invalidate();
-          }
-        }
-        if (
-          policy?.authTool === tool.workflow.toolName &&
-          (action === policy.statusAction || action === policy.refreshAction) &&
-          !result.ok &&
-          (result.error === 'AUTH_EXPIRED' || isSignedOut(result, policy))
-        ) {
-          return authRequired(
-            'The saved site session is unavailable. Call a protected tool to start managed renewal.',
-          );
-        }
         if (!result.ok) {
           const continuationToken =
             tool.workflow.toolKind === 'authenticate' && result.continuation
@@ -683,6 +698,8 @@ function buildServer(
                   nextAction:
                     result.nextAction ?? String(args.action ?? tool.workflow.authConfig?.entry),
                   state: result.continuation,
+                  recoveryRevision: revision,
+                  recoveryBrowser: continuation?.recoveryBrowser,
                 })
               : undefined;
           const text = formatToolError(result, continuationToken, attempts);
@@ -844,13 +861,14 @@ export async function runMcpServer(opts: RunMcpServerOptions): Promise<void> {
     const host = opts.host ?? '127.0.0.1';
     await runHttp(name, version, tools, host, port, assetRoot);
   } else {
-    const policy = opts.includeToolNames
-      ? undefined
-      : loadRecoveryPolicy(
-          assetRoot,
-          opts.site,
-          tools.map((tool) => tool.workflow),
-        );
+    let policy: RecoveryPolicy | undefined;
+    if (!opts.includeToolNames) {
+      try {
+        policy = loadRecoveryPolicy(assetRoot, opts.site);
+      } catch {
+        log('Ignoring invalid mcp-session-recovery.json. Existing tools are still available.');
+      }
+    }
     await runStdio(name, version, tools, assetRoot, policy);
   }
 }

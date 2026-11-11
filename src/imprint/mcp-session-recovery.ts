@@ -1,388 +1,150 @@
-import { readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { withSiteAuthRecoveryLock } from './credential-store.ts';
-import { type ToolResult, type Workflow, WorkflowSchema, authActionOutcomes } from './types.ts';
+import type { ToolResult, Workflow } from './types.ts';
 
-const PolicySchema = z
+const RecoveryPolicySchema = z
   .object({
     authTool: z.string().min(1),
     protectedTools: z.array(z.string().min(1)).min(1),
-    statusAction: z.string(),
-    refreshAction: z.string(),
-    startAction: z.string(),
-    approvalAction: z.string(),
-    terminalAction: z.string(),
-    nextActions: z.record(z.string(), z.array(z.string())),
-    approvalMessage: z.string().min(1),
-    approvalTimeoutMs: z.number().int().positive(),
-    recoveryTimeoutMs: z.number().int().positive(),
-    failureCooldownMs: z.number().int().positive(),
-    refreshBeforeExpiryMs: z.number().int().positive().default(90_000),
-    verifyAgainAfterMs: z.number().int().positive().default(45_000),
-    signedOutResponse: z
-      .object({ status: z.number().int().min(200).max(599), errorCode: z.string().min(1) })
-      .strict()
-      .optional(),
-    browserVerificationResponse: z
-      .object({ status: z.number().int().min(200).max(599), errorCode: z.string().min(1) })
-      .strict()
-      .optional(),
+    startAction: z.string().min(1).optional(),
+    refreshAction: z.string().min(1).optional(),
+    timeoutMs: z.number().int().min(1).max(2_147_483_647).default(240_000),
   })
   .strict();
 
-export type RecoveryPolicy = z.infer<typeof PolicySchema>;
+export type RecoveryPolicy = z.infer<typeof RecoveryPolicySchema>;
 
-export function loadRecoveryPolicy(
-  assetRoot: string,
-  site: string,
-  workflows: readonly Workflow[],
-): RecoveryPolicy | undefined {
+export function loadRecoveryPolicy(assetRoot: string, site: string): RecoveryPolicy | undefined {
   const path = join(assetRoot, site, 'mcp-session-recovery.json');
-  let raw: string;
   try {
-    raw = readFileSync(path, 'utf8');
+    return RecoveryPolicySchema.parse(JSON.parse(readFileSync(path, 'utf8')));
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined;
     throw error;
   }
-  const policy = PolicySchema.parse(JSON.parse(raw));
-  const auth = workflows.find((workflow) => workflow.toolName === policy.authTool);
-  const config =
-    auth?.toolKind === 'authenticate' ? WorkflowSchema.parse(auth).authConfig : undefined;
-  const invalid = (message: string) =>
-    new Error(
-      `Invalid session recovery policy for ${site}: ${message} → next step: check mcp-session-recovery.json and the authentication workflow.`,
-    );
-  if (auth?.site !== site || config?.persistCookiesOnPause !== false) {
-    throw invalid('the auth tool must set persistCookiesOnPause to false');
-  }
-  const actions = config.actions;
-  const actionSelector = auth?.parameters.find((parameter) => parameter.name === 'action');
-  if (actionSelector?.type !== 'string' || actionSelector.default !== config.entry) {
-    throw invalid('the auth tool must expose its action selector');
-  }
-  const names = new Set([
-    policy.statusAction,
-    policy.refreshAction,
-    policy.startAction,
-    policy.approvalAction,
-    policy.terminalAction,
-    ...Object.keys(policy.nextActions),
-    ...Object.values(policy.nextActions).flat(),
-  ]);
-  for (const name of names) {
-    const action = Object.hasOwn(actions, name) ? actions[name] : undefined;
-    if (!action || action.parameters.length !== 0 || !actionSelector.choices?.includes(name)) {
-      throw invalid(`action ${JSON.stringify(name)} is missing or requires arguments`);
-    }
-  }
-  const verificationActions = new Set([
-    policy.statusAction,
-    policy.refreshAction,
-    policy.terminalAction,
-  ]);
-  if (verificationActions.has(policy.startAction)) {
-    throw invalid('the sign-in start must be separate from verification actions');
-  }
-  for (const name of verificationActions) {
-    const action = actions[name];
-    if (
-      !action ||
-      authActionOutcomes(action).some(
-        (outcome) => outcome.type !== 'success' || !outcome.evidence.length,
-      )
-    ) {
-      throw invalid(
-        `action ${JSON.stringify(name)} must complete with session evidence and no continuation`,
-      );
-    }
-  }
-  if (
-    [policy.statusAction, policy.refreshAction, policy.startAction, policy.terminalAction].includes(
-      policy.approvalAction,
-    )
-  ) {
-    throw invalid(
-      'the approval action must be separate from status, refresh, start and completion',
-    );
-  }
-  for (const [name, next] of Object.entries(policy.nextActions)) {
-    const action = actions[name];
-    if (!action) throw invalid(`missing action ${JSON.stringify(name)}`);
-    const declared = authActionOutcomes(action).flatMap((outcome) =>
-      outcome.type === 'pause' ? [outcome.next] : [],
-    );
-    if (next.some((target) => !declared.includes(target))) {
-      throw invalid(`action ${JSON.stringify(name)} has an undeclared transition`);
-    }
-  }
-  for (const name of names) {
-    if (verificationActions.has(name)) continue;
-    const action = actions[name];
-    if (
-      !action ||
-      authActionOutcomes(action).some(
-        (outcome) => outcome.type !== 'pause' || !policy.nextActions[name]?.includes(outcome.next),
-      )
-    ) {
-      throw invalid(`action ${JSON.stringify(name)} must pause with a declared continuation`);
-    }
-  }
-  const approvalRequests = new Set(
-    actions[policy.approvalAction]?.steps.map(({ request }) => request),
-  );
-  if (
-    [...approvalRequests].filter((index) => auth?.requests[index]?.effect === 'unsafe').length !== 1
-  ) {
-    throw invalid('the approval action must declare exactly one unsafe request');
-  }
-  const beforeApproval = new Set([policy.statusAction, policy.refreshAction]);
-  const pending = [policy.startAction];
-  while (pending.length) {
-    const name = pending.pop();
-    if (!name || name === policy.approvalAction || beforeApproval.has(name)) continue;
-    beforeApproval.add(name);
-    pending.push(...(policy.nextActions[name] ?? []));
-  }
-  for (const name of names) {
-    const dispatched = new Set<number>();
-    for (const step of actions[name]?.steps ?? []) {
-      const effect = auth?.requests[step.request]?.effect;
-      if (!effect || effect === 'irreversible') {
-        throw invalid(`action ${JSON.stringify(name)} has an unclassified or irreversible request`);
-      }
-      if (
-        effect === 'unsafe' &&
-        (dispatched.has(step.request) ||
-          (step.repeat?.maxAttempts ?? 1) > 1 ||
-          step.onError === 'retry' ||
-          (name !== policy.approvalAction && approvalRequests.has(step.request)))
-      ) {
-        throw invalid(
-          `action ${JSON.stringify(name)} can repeat an approval or other unsafe effect`,
-        );
-      }
-      dispatched.add(step.request);
-      if (beforeApproval.has(name) && (effect === 'unsafe' || approvalRequests.has(step.request))) {
-        throw invalid(
-          `action ${JSON.stringify(name)} can dispatch an approval effect before consent`,
-        );
-      }
-    }
-  }
-  for (const name of policy.protectedTools) {
-    const workflow = workflows.find((candidate) => candidate.toolName === name);
-    if (
-      !workflow ||
-      workflow.site !== site ||
-      workflow.toolKind === 'authenticate' ||
-      workflow.requests.some((request) => request.effect !== 'safe')
-    ) {
-      throw invalid(`protected tool ${JSON.stringify(name)} must be a read-only data tool`);
-    }
-  }
-  return policy;
 }
 
-export type RecoveryTrigger = 'expired' | 'forbidden' | 'inspect' | 'proactive';
-
+type AuthFailure = Extract<ToolResult, { ok: false }>;
 export type RecoveryResult =
-  | { status: 'renewed' | 'valid'; expiresAt?: number }
-  | { status: 'unverified' }
-  | { status: 'blocked'; message: string };
-
-export class SessionFreshness {
-  private checkedUntil = 0;
-  private expiresAt?: number;
-  private attemptedRefreshFor?: number;
-
-  constructor(private readonly policy: RecoveryPolicy) {}
-
-  next(now = Date.now()): RecoveryTrigger | 'ready' {
-    if (this.expiresAt !== undefined) {
-      if (now >= this.expiresAt) return 'expired';
-      if (
-        now >= this.expiresAt - this.policy.refreshBeforeExpiryMs &&
-        this.attemptedRefreshFor !== this.expiresAt
-      ) {
-        this.attemptedRefreshFor = this.expiresAt;
-        return 'proactive';
-      }
-    }
-    return now < this.checkedUntil ? 'ready' : 'inspect';
-  }
-
-  observe(result: { expiresAt?: number }, now = Date.now()): void {
-    if (result.expiresAt !== undefined && result.expiresAt > now) {
-      this.expiresAt = result.expiresAt;
-      this.checkedUntil = result.expiresAt;
-    } else {
-      if (this.expiresAt !== undefined && this.expiresAt <= now) this.expiresAt = undefined;
-      this.checkedUntil = now + this.policy.verifyAgainAfterMs;
-    }
-  }
-
-  invalidate(): void {
-    this.checkedUntil = 0;
-    this.expiresAt = undefined;
-    this.attemptedRefreshFor = undefined;
-  }
-}
+  | { status: 'authenticated' }
+  | { status: 'blocked'; message: string }
+  | { status: 'manual'; action: string; state?: Record<string, unknown>; message: string };
 
 interface RecoveryHost {
-  execute(action: string, state?: Record<string, unknown>): Promise<ToolResult>;
-  requestApproval?: () => Promise<boolean>;
-  beginInteractiveSignIn: () => boolean;
-  recordApprovalAttempt: () => void;
   signal: AbortSignal;
+  execute(action: string, state?: Record<string, unknown>): Promise<ToolResult>;
+  requestConsent?(action: string): Promise<boolean>;
 }
 
-function blocked(message: string): RecoveryResult {
-  return { status: 'blocked', message };
+function manual(action: string, pause?: AuthFailure): RecoveryResult {
+  return {
+    status: 'manual',
+    action,
+    state: pause?.continuation,
+    message: pause?.message ?? 'Sign-in needs to continue through the authentication tool.',
+  };
 }
 
-export function verifiedSession(result: ToolResult): { expiresAt?: number } | undefined {
-  if (
-    !result.ok ||
-    typeof result.data !== 'object' ||
-    result.data === null ||
-    !('authenticated' in result.data) ||
-    result.data.authenticated !== true
-  )
-    return undefined;
-  const expiresAt = 'expiresAt' in result.data ? result.data.expiresAt : undefined;
-  return typeof expiresAt === 'number' && Number.isSafeInteger(expiresAt) && expiresAt > Date.now()
-    ? { expiresAt }
-    : {};
-}
-
-function matchesProviderResponse(
-  result: ToolResult,
-  expected: RecoveryPolicy['signedOutResponse'],
-): boolean {
+function isAuthenticated(result: ToolResult): boolean {
   return (
-    !result.ok &&
-    !!expected &&
-    result.providerError?.status === expected.status &&
-    result.providerError.errorCode === expected.errorCode
+    result.ok &&
+    typeof result.data === 'object' &&
+    result.data !== null &&
+    'authenticated' in result.data &&
+    result.data.authenticated === true
   );
 }
 
-export function isSignedOut(result: ToolResult, policy: RecoveryPolicy): boolean {
-  return matchesProviderResponse(result, policy.signedOutResponse);
+/** Requests that need consent. Undefined means this action stays standalone. */
+export function unsafeAuthRequests(workflow: Workflow, action: string): Set<number> | undefined {
+  const actions = workflow.authConfig?.actions;
+  const steps = actions && Object.hasOwn(actions, action) ? actions[action]?.steps : undefined;
+  if (!steps) return undefined;
+
+  const unsafe = new Set<number>();
+  for (const step of steps) {
+    const request = workflow.requests[step.request];
+    if (request?.effect === 'safe' || request?.effect === 'idempotent') continue;
+    if (
+      request?.effect !== 'unsafe' ||
+      request.mode === 'navigate' ||
+      unsafe.has(step.request) ||
+      (step.repeat?.maxAttempts ?? 1) > 1
+    )
+      return undefined;
+    unsafe.add(step.request);
+  }
+  return unsafe;
 }
 
 export async function recoverSession(
+  workflow: Workflow,
   policy: RecoveryPolicy,
   host: RecoveryHost,
-  trigger: RecoveryTrigger,
 ): Promise<RecoveryResult> {
-  host.signal.throwIfAborted();
-  let signedOut = false;
-  if (trigger === 'forbidden' || trigger === 'inspect') {
-    const status = await host.execute(policy.statusAction);
-    const valid = verifiedSession(status);
-    if (valid) return { status: 'valid', ...valid };
-    signedOut = isSignedOut(status, policy);
-    if (!signedOut && (status.ok || status.error !== 'AUTH_EXPIRED')) {
-      return { status: 'unverified' };
+  const config = workflow.authConfig;
+  if (!config?.actions) return { status: 'blocked', message: 'No compiled sign-in is available.' };
+
+  let action = policy.startAction ?? config.entry;
+  let pause: AuthFailure | undefined;
+  const refresh = policy.refreshAction === action ? undefined : policy.refreshAction;
+  const refreshAction =
+    refresh && Object.hasOwn(config.actions, refresh) ? config.actions[refresh] : undefined;
+  if (
+    refresh &&
+    refreshAction &&
+    !refreshAction.parameters?.length &&
+    refreshAction.steps.every(({ request }) => {
+      const effect = workflow.requests[request]?.effect;
+      return effect === 'safe' || effect === 'idempotent';
+    })
+  ) {
+    host.signal.throwIfAborted();
+    const result = await host.execute(refresh);
+    if (isAuthenticated(result)) return { status: 'authenticated' };
+    if (!result.ok && result.error === 'ACTION_REQUIRED' && result.nextAction) {
+      if (result.resume !== 'automatic') return manual(result.nextAction, result);
+      action = result.nextAction;
+      pause = result;
+    } else if (result.ok || result.error !== 'AUTH_EXPIRED') {
+      return { status: 'blocked', message: 'The saved session could not be refreshed.' };
     }
   }
 
-  if (!signedOut) {
-    const refreshed = await host.execute(policy.refreshAction);
-    const renewed = verifiedSession(refreshed);
-    if (renewed) return { status: 'renewed', ...renewed };
-    if (trigger === 'proactive') return { status: 'unverified' };
-    if (!isSignedOut(refreshed, policy) && (refreshed.ok || refreshed.error !== 'AUTH_EXPIRED')) {
-      return blocked(
-        'The saved session could not be refreshed. Try again when the service is available.',
-      );
-    }
-  }
-  if (!host.requestApproval) {
-    return blocked('Sign-in requires approval. Use an MCP client that supports approval prompts.');
-  }
-
-  if (!host.beginInteractiveSignIn()) {
-    return blocked('A recent sign-in did not complete. Automatic sign-in is paused briefly.');
-  }
-  let action = policy.startAction;
-  let state: Record<string, unknown> | undefined;
   const visited = new Set<string>();
+  const dispatchedUnsafe = new Set<number>();
   while (!visited.has(action)) {
     visited.add(action);
     host.signal.throwIfAborted();
-    if (action === policy.approvalAction && !(await host.requestApproval())) {
-      return blocked(
-        'Sign-in approval was declined or timed out. The approval action did not run.',
-      );
+    const unsafe = unsafeAuthRequests(workflow, action);
+    if (!unsafe || [...unsafe].some((request) => dispatchedUnsafe.has(request))) {
+      return { status: 'blocked', message: 'This action needs standalone manual sign-in.' };
     }
-    host.signal.throwIfAborted();
-    if (action === policy.approvalAction) host.recordApprovalAttempt();
-    const result = await host.execute(action, state);
-    if (
-      action === policy.startAction &&
-      matchesProviderResponse(result, policy.browserVerificationResponse)
-    ) {
-      return blocked('The provider requires browser verification before sign-in can continue.');
-    }
-    if (action === policy.terminalAction) {
-      const valid = verifiedSession(result);
-      if (valid) return { status: 'renewed', ...valid };
-    }
-    if (
-      result.ok ||
-      result.error !== 'ACTION_REQUIRED' ||
-      !result.nextAction ||
-      !result.continuation ||
-      !policy.nextActions[action]?.includes(result.nextAction)
-    ) {
-      const code = result.ok ? 'unexpected_success' : result.error;
-      const status = !result.ok && result.status ? ` HTTP ${result.status}` : '';
-      return blocked(`Sign-in stopped at ${action} (${code}${status}). The call is paused.`);
-    }
-    action = result.nextAction;
-    state = result.continuation;
-  }
-  return blocked('The sign-in sequence attempted to repeat an action and was stopped.');
-}
+    if (config.actions[action]?.parameters?.length) return manual(action, pause);
 
-export async function withRecoveryLock(
-  site: string,
-  policy: RecoveryPolicy,
-  signal: AbortSignal,
-  task: (gate: {
-    beginInteractiveSignIn: () => boolean;
-    recordApprovalAttempt: () => void;
-  }) => Promise<RecoveryResult>,
-): Promise<RecoveryResult> {
-  return withSiteAuthRecoveryLock(site, signal, async (directory) => {
-    const cooldown = join(directory, 'cooldown');
-    let until = 0;
-    try {
-      until = Number(readFileSync(cooldown, 'utf8'));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+    if (unsafe.size) {
+      if (!host.requestConsent) {
+        return {
+          status: 'blocked',
+          message: 'This client cannot request consent for a new approval. Use manual sign-in.',
+        };
+      }
+      if (!(await host.requestConsent(action))) {
+        return { status: 'blocked', message: 'Consent was declined or timed out.' };
+      }
+      for (const request of unsafe) dispatchedUnsafe.add(request);
     }
-    let interactive = false;
-    const writeCooldown = (duration: number) => {
-      const pending = join(directory, 'cooldown.tmp');
-      writeFileSync(pending, String(Date.now() + duration), { mode: 0o600 });
-      renameSync(pending, cooldown);
-    };
-    const result = await task({
-      beginInteractiveSignIn: () => {
-        interactive = Date.now() >= until;
-        return interactive;
-      },
-      recordApprovalAttempt: () => {
-        writeCooldown(policy.recoveryTimeoutMs + policy.failureCooldownMs);
-      },
-    });
-    if (result.status === 'blocked' && interactive) writeCooldown(policy.failureCooldownMs);
-    if (result.status === 'valid' || result.status === 'renewed') rmSync(cooldown, { force: true });
-    return result;
-  });
+
+    host.signal.throwIfAborted();
+    const result = await host.execute(action, pause?.continuation);
+    if (isAuthenticated(result)) return { status: 'authenticated' };
+    if (result.ok || result.error !== 'ACTION_REQUIRED' || !result.nextAction) {
+      return { status: 'blocked', message: 'The compiled sign-in did not verify the session.' };
+    }
+    if (result.resume !== 'automatic') return manual(result.nextAction, result);
+    action = result.nextAction;
+    pause = result;
+  }
+  return { status: 'blocked', message: 'The compiled sign-in repeated an action.' };
 }

@@ -2239,6 +2239,41 @@ describe('createCdpBrowserFetch CDP timeouts', () => {
     }
   }, 10_000);
 
+  it('closes a Chrome launch that resolves as the browser is closed', async () => {
+    const started = Promise.withResolvers<void>();
+    type Launch = Awaited<ReturnType<typeof import('../src/imprint/chromium.ts').launchChromium>>;
+    const launch = Promise.withResolvers<Launch>();
+    const ready = Promise.withResolvers<void>();
+    let closes = 0;
+    __setCdpBrowserFetchHooksForTest({
+      launchChromium: async () => {
+        started.resolve();
+        return launch.promise;
+      },
+      connectCdp: async () => {
+        throw new Error('Closed browser must not connect');
+      },
+    });
+
+    const browser = createCdpBrowserFetch({ baseUrl: 'https://example.test/' });
+    const jar = browser.mintJar();
+    await started.promise;
+    launch.resolve({
+      process: {} as Launch['process'],
+      port: 12345,
+      userDataDir: '/tmp/imprint-fake-chrome',
+      ready: ready.promise,
+      close: async () => {
+        closes++;
+      },
+    });
+    await Promise.resolve();
+    await browser.close();
+    ready.resolve();
+    await expect(jar).rejects.toThrow('Browser closed');
+    expect(closes).toBe(1);
+  });
+
   it('times out a stuck startup CDP command and closes the browser', async () => {
     let chromeClosed = 0;
     let clientClosed = 0;

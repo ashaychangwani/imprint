@@ -266,57 +266,39 @@ See [MCP Maintenance](mcp-maintenance.md) for direct disable/delete/prune comman
 
 ## Renew authenticated MCP sessions
 
-A local stdio MCP server can renew a session for explicitly opted-in read-only
-tools. The site supplies compiled actions for checking the session, refreshing
-it, preparing sign-in, sending an approval request, and verifying completion.
-The MCP client must support elicitation to authorize the approval request. The
-user still completes any required approval with the provider. On the opted-in
-server, direct auth calls expose the status and refresh actions. Interactive
-sign-in starts through a protected tool.
+Local stdio MCP servers can opt in to session recovery for read-only tools.
+When a protected call reports `AUTH_EXPIRED`, Imprint follows the compiled
+auth workflow and retries the original call once after successful sign-in.
 
-Save a policy as `$IMPRINT_HOME/<site>/mcp-session-recovery.json` (default
-`~/.imprint/<site>/mcp-session-recovery.json`). Use action and tool names from
-your compiled workflows. This example uses synthetic names.
+Save `mcp-session-recovery.json` in the site's directory under `IMPRINT_HOME`
+(default `~/.imprint`). Use the names of your generated tools.
 
 ```json
 {
   "authTool": "authenticate_site",
-  "protectedTools": ["search"],
-  "statusAction": "check_session",
-  "refreshAction": "refresh_session",
-  "startAction": "prepare_sign_in",
-  "approvalAction": "send_approval_request",
-  "terminalAction": "verify_session",
-  "nextActions": {
-    "prepare_sign_in": ["send_approval_request"],
-    "send_approval_request": ["verify_session"]
-  },
-  "approvalMessage": "Send a sign-in approval request?",
-  "approvalTimeoutMs": 30000,
-  "recoveryTimeoutMs": 240000,
-  "failureCooldownMs": 60000
+  "protectedTools": ["search"]
 }
 ```
 
-Mark every request of each protected tool `"effect": "safe"`. The auth tool
-must expose the `action` selector, declare the named actions without additional
-inputs, and set `authConfig.persistCookiesOnPause` to `false`. Status, refresh,
-and verification must have success outcomes with evidence that the provider
-accepted the session. Classify each auth request's effect. Keep challenge dispatch in the dedicated
-approval action as its single unsafe request. Preparation can use safe and idempotent
-requests.
-The policy can optionally match provider responses with `signedOutResponse`
-and `browserVerificationResponse` objects containing a numeric `status` and a
-top-level JSON `errorCode` string. The policy sets separate deadlines for
-approval and for the renewal attempt, including the protected retry.
+Recovery starts with the auth workflow's entry action. The file may specify
+`startAction` to use another compiled action and `refreshAction` to try a silent
+refresh first. The recovery attempt defaults to four minutes and can be set
+with `timeoutMs`. Existing manual continuation tokens keep their normal
+lifetime.
 
-A successful action can declare `expiresAtCapture` for a fresh server expiry in
-epoch milliseconds. The MCP checks for renewal during an incoming call within
-`refreshBeforeExpiryMs` of that expiry (90 seconds by default). Without an
-expiry, it checks again after `verifyAgainAfterMs` (45 seconds by default).
-Check the complete flow with a protected data call after expiry. Authentication
-actions use Chromium. A host without a physical display can provide a virtual
-display for headed authentication.
+The protected workflow must declare each request `"effect": "safe"` for automatic
+replay. The retry uses workflow backends and skips the playbook. Recovery asks
+for consent through MCP form elicitation before running a sign-in action with an
+unsafe request. When a workflow pauses, `"resume": "automatic"` allows Imprint to
+follow its declared next action. For example, a workflow can send one approval
+request with consent and then poll the same challenge. Steps that need human
+input can continue through the existing auth tool. The MCP result supplies the
+next action and any continuation token.
+
+Auth recovery uses Chromium and can carry cookies and named secrets to the
+retried tool. Check a real protected call after expiry to verify that the
+site's session state can be reused. Sites that require browser-only state may
+need a manual browser sign-in.
 
 ## Schedule it
 

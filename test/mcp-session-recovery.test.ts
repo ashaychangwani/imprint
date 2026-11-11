@@ -1,5 +1,5 @@
 import { afterEach, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -9,95 +9,70 @@ import {
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ElicitRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { emit } from '../src/imprint/emit.ts';
-import {
-  SessionFreshness,
-  isSignedOut,
-  loadRecoveryPolicy,
-} from '../src/imprint/mcp-session-recovery.ts';
-import { executeWorkflow } from '../src/imprint/runtime.ts';
 import { WorkflowSchema } from '../src/imprint/types.ts';
 
 const dirs: string[] = [];
 const site = 'fixture';
-const policy = {
-  authTool: 'authenticate_site',
-  protectedTools: ['search'],
-  statusAction: 'status',
-  refreshAction: 'refresh',
-  startAction: 'start',
-  approvalAction: 'approve',
-  terminalAction: 'finish',
-  nextActions: { start: ['approve'], approve: ['finish'] },
-  approvalMessage: 'Approve fixture verification?',
-  approvalTimeoutMs: 5_000,
-  recoveryTimeoutMs: 15_000,
-  failureCooldownMs: 60_000,
-  refreshBeforeExpiryMs: 90_000,
-  verifyAgainAfterMs: 45_000,
-};
+const authTool = 'authenticate_site';
 
 afterEach(() => {
   for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
 });
 
 function prepare({
-  unsafe = false,
-  signedIn = false,
   managed = true,
-  signedOutResponse,
-  recoveryTimeoutMs = policy.recoveryTimeoutMs,
-}: {
-  unsafe?: boolean;
-  signedIn?: boolean;
-  managed?: boolean;
-  signedOutResponse?: { status: number; errorCode: string };
-  recoveryTimeoutMs?: number;
+  otp = false,
+  refresh = false,
+  unsafe = false,
+  legacyData = false,
+  invalidPolicy = false,
+  fastIdle = false,
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'imprint-mcp-renewal-'));
   dirs.push(root);
+  const names = ['start', 'approve', 'finish', 'refresh'];
   const auth = WorkflowSchema.parse({
-    toolName: policy.authTool,
+    toolName: authTool,
     toolKind: 'authenticate',
     site,
     parameters: [
       {
         name: 'action',
         type: 'string',
-        description: 'Fixture authentication action',
-        default: 'status',
-        choices: ['status', 'refresh', 'start', 'approve', 'finish'],
+        description: 'Auth step',
+        default: 'start',
+        choices: names,
       },
+      ...(otp ? [{ name: 'otp', type: 'string', description: 'Verification code' }] : []),
     ],
     intent: { description: 'Fixture authentication' },
-    requests: ['status', 'refresh', 'start', 'approve', 'finish'].map((name) => ({
-      method: 'GET',
-      url: `https://example.test/${name}`,
+    requests: names.map((name) => ({
+      method: name === 'approve' ? 'POST' : 'GET',
+      url: `https://example.test/${name}${otp && name === 'finish' ? '?otp=${param.otp}' : ''}`,
       headers: {},
       effect: name === 'approve' ? 'unsafe' : 'safe',
-      captures: ['status', 'refresh', 'finish'].includes(name)
-        ? [{ source: 'json', name: 'expiry', path: 'expiry' }]
-        : [],
+      captures:
+        name === 'finish' || name === 'refresh'
+          ? [{ source: 'json', name: 'verified', path: 'verified', equals: true }]
+          : [],
     })),
     authConfig: {
-      entry: 'status',
-      ...(managed ? { persistCookiesOnPause: false } : {}),
+      entry: 'start',
       actions: Object.fromEntries(
-        ['status', 'refresh', 'start', 'approve', 'finish'].map((name, request) => [
+        names.map((name, request) => [
           name,
           {
+            parameters: name === 'finish' && otp ? ['otp'] : [],
             steps: [{ request }],
             outcome:
               name === 'start' || name === 'approve'
                 ? {
                     type: 'pause',
                     next: name === 'start' ? 'approve' : 'finish',
-                    message: 'Continue',
+                    ...(managed ? { resume: 'automatic' } : {}),
+                    message: 'Continue verification.',
                   }
-                : {
-                    type: 'success',
-                    evidence: ['expiry'],
-                    ...(managed ? { expiresAtCapture: 'expiry' } : {}),
-                  },
+                : { type: 'success', evidence: ['verified'] },
           },
         ]),
       ),
@@ -106,7 +81,7 @@ function prepare({
   const data = WorkflowSchema.parse({
     toolName: 'search',
     site,
-    parameters: [{ name: 'query', type: 'string', description: 'Fixture query' }],
+    parameters: [{ name: 'query', type: 'string', description: 'Search query' }],
     intent: { description: 'Fixture search' },
     requests: [
       {
@@ -117,109 +92,94 @@ function prepare({
       },
     ],
   });
-  const repository = join(import.meta.dir, '..');
-  const runtime = join(repository, 'src', 'imprint');
-  mkdirSync(join(root, 'node_modules'));
-  symlinkSync(repository, join(root, 'node_modules', 'imprint'), 'dir');
   for (const workflow of [auth, data]) {
     const dir = join(root, site, workflow.toolName);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, 'workflow.json'), JSON.stringify(workflow));
-    emit({ workflowPath: join(dir, 'workflow.json'), outDir: dir });
+    const workflowPath = join(dir, 'workflow.json');
+    writeFileSync(workflowPath, JSON.stringify(workflow));
+    emit({ workflowPath, outDir: dir });
+    if (legacyData && workflow === data) {
+      const wrapper = join(dir, 'index.ts');
+      const emitted = readFileSync(wrapper, 'utf8');
+      writeFileSync(
+        wrapper,
+        emitted.replace(
+          'const WORKFLOW: Workflow = {',
+          'const WORKFLOW: Workflow = {\n  "authConfig": {"twoFactorType":"none","sessionCapture":[]},',
+        ),
+      );
+    }
   }
   if (managed) {
     writeFileSync(
       join(root, site, 'mcp-session-recovery.json'),
-      JSON.stringify({ ...policy, signedOutResponse, recoveryTimeoutMs }),
+      invalidPolicy
+        ? '{}'
+        : JSON.stringify({
+            authTool,
+            protectedTools: ['search'],
+            ...(refresh ? { refreshAction: 'refresh' } : {}),
+          }),
     );
   }
+
+  const runtime = join(import.meta.dir, '..', 'src', 'imprint');
   const preload = join(root, 'fixture.ts');
   const journal = join(root, 'requests.txt');
-  const credentialDir = join(root, 'credential-lock');
-  const savedCookies = join(root, 'cookies.json');
-  const expired = join(root, 'expired');
-  const clockOffset = join(root, 'clock-offset');
-  writeFileSync(
-    savedCookies,
-    JSON.stringify(
-      signedIn
-        ? [
-            {
-              name: 'sid',
-              value: 'old',
-              domain: 'example.test',
-              path: '/',
-              secure: true,
-              hostOnly: true,
-            },
-          ]
-        : [],
-    ),
-  );
+  const clock = join(root, 'clock');
+  const release = join(root, 'release');
+  const cookies = join(root, 'cookies.json');
+  writeFileSync(cookies, '[]');
   writeFileSync(
     preload,
     `
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { __setCdpBrowserFetchFactoryForTest } from ${JSON.stringify(join(runtime, 'backend-ladder.ts'))};
 import { setBackendOverride } from ${JSON.stringify(join(runtime, 'credential-store.ts'))};
-
-const clockOffset = ${JSON.stringify(clockOffset)};
-const realNow = Date.now;
-Date.now = () => realNow() + (existsSync(clockOffset) ? Number(readFileSync(clockOffset, 'utf8')) : 0);
-
-const savedCookies = ${JSON.stringify(savedCookies)};
-const getCookies = () => JSON.parse(readFileSync(savedCookies, 'utf8'));
+if (${fastIdle}) {
+  const originalTimeout = globalThis.setTimeout;
+  globalThis.setTimeout = (fn, ms, ...args) => originalTimeout(fn, ms === 300_000 ? 25 : ms, ...args);
+}
+const clock = ${JSON.stringify(clock)};
+const now = Date.now;
+Date.now = () => now() + (existsSync(clock) ? Number(readFileSync(clock, 'utf8')) : 0);
+const store = ${JSON.stringify(cookies)};
+const getCookies = () => JSON.parse(readFileSync(store, 'utf8'));
 setBackendOverride({
   id: 'encrypted-file',
-  lockDirectory: ${JSON.stringify(credentialDir)},
+  lockDirectory: ${JSON.stringify(join(root, 'locks'))},
   getCookies: async () => getCookies(),
-  setCookies: async (_, next) => writeFileSync(savedCookies, JSON.stringify(next)),
+  setCookies: async (_, next) => writeFileSync(store, JSON.stringify(next)),
   getSecret: async () => null,
   listSecrets: async () => [],
   listSites: async () => [],
 });
-
-const signedOut = ${JSON.stringify(signedOutResponse)};
 const fetchFixture = async (url, init) => {
   const path = new URL(url);
   appendFileSync(${JSON.stringify(journal)}, path.pathname + '\\n');
-  const cookie = new Headers(init?.headers).get('cookie');
-  const valid = cookie?.includes('sid=fresh') ||
-    (cookie?.includes('sid=old') && !existsSync(${JSON.stringify(expired)}));
   if (path.pathname === '/search') {
-    if (!valid) {
-      return signedOut
-        ? Response.json({ errorCode: signedOut.errorCode, detail: 'x'.repeat(5_000) }, { status: signedOut.status })
-        : Response.json({}, { status: 401 });
-    }
     const query = path.searchParams.get('q');
-    if (query === 'forbidden') return Response.json({}, { status: 403 });
-    if (query === 'hang') {
-      const signal = init.signal;
-      await new Promise((_, reject) => {
-        if (signal.aborted) reject(signal.reason);
-        else signal.addEventListener('abort', () => reject(signal.reason), { once: true });
-      });
-    }
-    return Response.json({ query, count: 1 });
+    while (query === 'wait' && !existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
+    const authorized = new Headers(init?.headers).get('cookie')?.includes('sid=fresh');
+    return authorized || query === 'public'
+      ? Response.json({ query, count: 1 })
+      : Response.json({}, { status: 401 });
   }
-  if (${managed} && path.pathname === '/approve' && init?.allowAmbiguousRetry !== false) {
-    throw new Error('Managed approval must opt out of ambiguous transport retries');
+  if (${managed && !invalidPolicy} && path.pathname === '/approve' && init?.allowAmbiguousRetry !== false) {
+    throw new Error('Managed approval must opt out of ambiguous retries');
   }
-  if ((path.pathname === '/status' || path.pathname === '/refresh') && !valid) {
-    return Response.json({}, { status: 401 });
+  if (${otp} && path.pathname === '/finish' && path.searchParams.get('otp') !== '123456') {
+    return Response.json({}, { status: 400 });
   }
-  return Response.json(
-    { expiry: Date.now() + 300_000 },
-    path.pathname === '/finish' ? { headers: { 'set-cookie': 'sid=fresh; Path=/; Secure' } } : {},
-  );
+  if (path.pathname === '/finish' || path.pathname === '/refresh') {
+    return Response.json({ verified: true }, { headers: { 'set-cookie': 'sid=fresh; Path=/; Secure' } });
+  }
+  return Response.json({});
 };
 globalThis.fetch = fetchFixture;
 __setCdpBrowserFetchFactoryForTest(() => ({
   fetchImpl: fetchFixture,
-  mintJar: async () => ({
-    cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0',
-  }),
+  mintJar: async () => ({ cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0' }),
   close: async () => {},
 }));
 `,
@@ -232,267 +192,266 @@ __setCdpBrowserFetchFactoryForTest(() => ({
       stderr: 'ignore',
     });
   return {
-    root,
-    expired,
-    clockOffset,
-    journal,
-    savedCookies,
     transport,
-    workflows: { auth, data },
+    clock,
+    cookies,
+    release,
+    journal,
+    requests: () => readFileSync(journal, 'utf8').trim().split('\n'),
   };
 }
 
-it('preserves legacy MCP continuation across a long approval wait without a policy', async () => {
-  const { clockOffset, journal, transport } = prepare({ managed: false });
-  const client = new Client({ name: 'legacy-auth-test', version: '1' });
-  const callAuth = (action: string, continuation?: string) =>
-    client.callTool({ name: policy.authTool, arguments: { action, continuation } });
+function client(name = 'fixture') {
+  return new Client({ name, version: '1' }, { capabilities: { elicitation: { form: {} } } });
+}
+
+function search(c: Client, query: string) {
+  return c.callTool({ name: 'search', arguments: { query } });
+}
+
+function callAuth(c: Client, action: string, continuation?: string, otp?: string) {
+  return c.callTool({ name: authTool, arguments: { action, continuation, otp } });
+}
+
+function continuationToken(result: Awaited<ReturnType<typeof callAuth>>) {
+  const text = (result.content as { text: string }[])[0]?.text ?? '';
+  return text.match(/continuation: "([^"]+)"/)?.[1];
+}
+
+it('preserves legacy MFA continuation after a long wait', async () => {
+  const { transport, clock, requests } = prepare({ managed: false });
+  const c = client();
   try {
-    await client.connect(transport());
-    const start = await callAuth('start');
-    const startText = (start.content as { text: string }[])[0]?.text ?? '';
-    const startToken = startText.match(/continuation: "([^"]+)"/)?.[1];
-    expect(start.isError).toBe(true);
-    expect(startText).toContain('[ACTION_REQUIRED]');
-    expect(startToken).toBeDefined();
-
-    writeFileSync(clockOffset, String(10 * 60 * 1_000));
-    const approve = await callAuth('approve', startToken);
-    const approvalText = (approve.content as { text: string }[])[0]?.text ?? '';
-    const approvalToken = approvalText.match(/continuation: "([^"]+)"/)?.[1];
-    expect(approve.isError).toBe(true);
-    expect(approvalText).toContain('nextAction: finish');
-    expect(approvalToken).toBeDefined();
-
-    const finish = await callAuth('finish', approvalToken);
-    expect(finish.isError).toBeFalsy();
-    expect(finish.content).toEqual([
-      expect.objectContaining({ text: expect.stringContaining('"authenticated": true') }),
-    ]);
-    expect(readFileSync(journal, 'utf8').trim().split('\n')).toEqual([
-      '/start',
-      '/approve',
-      '/finish',
-    ]);
+    await c.connect(transport());
+    const started = await callAuth(c, 'start');
+    expect(started.isError).toBe(true);
+    const token = continuationToken(started);
+    expect(token).toBeDefined();
+    writeFileSync(clock, String(10 * 60 * 1000));
+    const approved = await callAuth(c, 'approve', token);
+    expect(approved.isError).toBe(true);
+    expect(continuationToken(approved)).toBeDefined();
+    expect((await callAuth(c, 'finish', continuationToken(approved))).isError).toBeFalsy();
+    expect(requests()).toEqual(['/start', '/approve', '/finish']);
   } finally {
-    await client.close();
+    await c.close();
   }
-}, 20_000);
-
-it('checks expiry before use and refreshes once per observed deadline', () => {
-  const freshness = new SessionFreshness(policy);
-  expect(freshness.next(100_000)).toBe('inspect');
-  freshness.observe({ expiresAt: 500_000 }, 100_000);
-  expect(freshness.next(409_999)).toBe('ready');
-  expect(freshness.next(410_000)).toBe('proactive');
-  expect(freshness.next(411_000)).toBe('ready');
-  expect(freshness.next(500_000)).toBe('expired');
-  freshness.observe({}, 500_500);
-  expect(freshness.next(501_000)).toBe('ready');
-  expect(freshness.next(545_500)).toBe('inspect');
 });
 
-it('rejects replay of an explicitly irreversible tool', () => {
-  const { root, workflows } = prepare({ unsafe: true });
-  expect(() => loadRecoveryPolicy(root, site, Object.values(workflows))).toThrow(
-    'must be a read-only data tool',
-  );
-});
-
-it('matches only declared provider errors without depending on the body preview', async () => {
-  const { workflows } = prepare();
-  for (const status of [200, 403, 429]) {
-    const options = {
-      workflow: workflows.data,
-      params: { query: 'fixture' },
-      credentials: { site, cookies: [], values: {} },
-      fetchImpl: Object.assign(
-        async () =>
-          Response.json({ detail: 'x'.repeat(5_000), errorCode: 'SIGNED_OUT' }, { status }),
-        { preconnect: fetch.preconnect },
-      ),
-    };
-    const signedOutResponse = { status, errorCode: 'SIGNED_OUT' };
-    const legacy = await executeWorkflow(options);
-    expect(isSignedOut(legacy, { ...policy, signedOutResponse })).toBe(false);
-    expect(legacy.ok).toBe(status === 200);
-    expect(legacy).not.toHaveProperty('providerError');
-    const managed = await executeWorkflow({
-      ...options,
-      credentials: { ...options.credentials, providerErrorMatches: [signedOutResponse] },
+for (const invalidPolicy of [false, true]) {
+  it(`dispatches legacy data with an old authConfig and ${invalidPolicy ? 'an invalid policy' : 'no policy'}`, async () => {
+    const { transport, requests } = prepare({
+      managed: invalidPolicy,
+      invalidPolicy,
+      legacyData: true,
     });
-    expect(managed).toMatchObject({ ok: false, providerError: signedOutResponse });
-    expect(isSignedOut(managed, { ...policy, signedOutResponse })).toBe(true);
-    expect(
-      isSignedOut(managed, {
-        ...policy,
-        signedOutResponse: { status, errorCode: 'BLOCKED' },
-      }),
-    ).toBe(false);
-  }
-});
-
-it('stops a managed auth action on a matched provider error even if the step normally continues', async () => {
-  const { workflows } = prepare();
-  const workflow = structuredClone(workflows.auth);
-  const start = workflow.authConfig?.actions.start?.steps[0];
-  if (!start) throw new Error('Missing fixture start action');
-  start.onError = 'continue';
-  const providerError = { status: 200, errorCode: 'VERIFICATION_REQUIRED' };
-  const result = await executeWorkflow({
-    workflow,
-    params: { action: 'start' },
-    credentials: { site, values: {}, cookies: [], providerErrorMatches: [providerError] },
-    fetchImpl: Object.assign(async () => Response.json({ errorCode: providerError.errorCode }), {
-      preconnect: fetch.preconnect,
-    }),
+    const c = client();
+    try {
+      await c.connect(transport());
+      expect((await search(c, 'public')).isError).toBeFalsy();
+      expect(requests()).toEqual(['/search']);
+    } finally {
+      await c.close();
+    }
   });
-  expect(result).toMatchObject({ ok: false, error: 'BAD_RESPONSE', providerError });
-  expect(result).not.toHaveProperty('nextAction');
-});
+}
 
-it('requires managed consent and preserves a newer durable session during approval', async () => {
-  const { journal, savedCookies, transport } = prepare();
-  const client = new Client(
-    { name: 'renewal-test', version: '1' },
-    { capabilities: { elicitation: { form: {} } } },
-  );
-  const newer = [
-    {
-      name: 'sid',
-      value: 'newer',
-      domain: 'example.test',
-      path: '/',
-      secure: true,
-      hostOnly: true,
-    },
-  ];
-  let approvals = 0;
-  client.setRequestHandler(ElicitRequestSchema, async () => {
-    approvals++;
-    expect(JSON.parse(readFileSync(savedCookies, 'utf8'))).toEqual([]);
-    writeFileSync(savedCookies, JSON.stringify(newer));
-    return { action: 'accept', content: {} };
-  });
+it('refreshes silently and retries the protected read once', async () => {
+  const { transport, requests } = prepare({ refresh: true });
+  const c = client();
   try {
-    await client.connect(transport());
-    const { tools } = await client.listTools();
-    expect(
-      tools.find((tool) => tool.name === policy.authTool)?.inputSchema.properties?.action,
-    ).toMatchObject({ enum: ['status', 'refresh'] });
-    const direct = await client.callTool({
-      name: policy.authTool,
-      arguments: { action: 'approve' },
-    });
-    expect(direct.structuredContent).toMatchObject({ status: 'auth_required' });
-    expect(approvals).toBe(0);
-
-    const result = await client.callTool({ name: 'search', arguments: { query: 'first' } });
-    expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
-    expect(approvals).toBe(1);
-    expect(JSON.parse(readFileSync(savedCookies, 'utf8'))).toEqual(newer);
-    expect(readFileSync(journal, 'utf8').trim().split('\n')).toEqual([
-      '/status',
-      '/refresh',
-      '/start',
-      '/approve',
-      '/finish',
-    ]);
+    await c.connect(transport());
+    expect((await search(c, 'query')).isError).toBeFalsy();
+    expect(requests()).toEqual(['/search', '/refresh', '/search']);
   } finally {
-    await client.close();
+    await c.close();
   }
-}, 20_000);
+});
 
 for (const accepted of [true, false]) {
-  it(`shares one renewal across queued searches when approval is ${accepted ? 'accepted' : 'declined'}`, async () => {
-    const { journal, transport } = prepare();
-    const client = new Client(
-      { name: 'renewal-test', version: '1' },
-      { capabilities: { elicitation: {} } },
-    );
+  it(`coalesces queued reads when consent is ${accepted ? 'accepted' : 'declined'}`, async () => {
+    const { transport, requests, cookies } = prepare();
+    const c = client();
     let approvals = 0;
-    client.setRequestHandler(ElicitRequestSchema, async ({ params }) => {
-      expect(params.message).toBe(policy.approvalMessage);
+    c.setRequestHandler(ElicitRequestSchema, async () => {
       approvals++;
+      expect(JSON.parse(readFileSync(cookies, 'utf8'))).toEqual([]);
       return accepted ? { action: 'accept', content: {} } : { action: 'decline' };
     });
     try {
-      await client.connect(transport());
-      const queries = ['first', 'second', 'third'];
+      await c.connect(transport());
       const results = await Promise.all(
-        queries.map((query) =>
-          client.callTool({
-            name: 'search',
-            arguments: { query },
-          }),
-        ),
+        ['first', 'second', 'third'].map((query) => search(c, query)),
       );
       expect(approvals).toBe(1);
-      const requests = readFileSync(journal, 'utf8').trim().split('\n');
-      expect(requests.slice(0, 3)).toEqual(['/status', '/refresh', '/start']);
       if (accepted) {
-        expect(requests.slice(3)).toEqual(['/approve', '/finish', '/search', '/search', '/search']);
-        for (const [i, result] of results.entries()) {
-          expect(result.isError).toBeFalsy();
-          expect(JSON.stringify(result.content)).toContain(queries[i] ?? 'missing query');
-        }
-      } else {
-        expect(requests).toEqual([
-          '/status',
-          '/refresh',
+        expect(results.every((result) => !result.isError)).toBe(true);
+        expect(requests()).toEqual([
+          '/search',
           '/start',
-          '/status',
-          '/refresh',
-          '/status',
-          '/refresh',
+          '/approve',
+          '/finish',
+          '/search',
+          '/search',
+          '/search',
         ]);
-        for (const result of results) {
-          expect(result.isError).toBe(false);
-          expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
-        }
+      } else {
+        expect(
+          results.every(
+            (result) =>
+              (result.structuredContent as { status?: string })?.status === 'auth_required',
+          ),
+        ).toBe(true);
+        expect(requests()).toEqual(['/search', '/start', '/search', '/search']);
       }
     } finally {
-      await client.close();
+      await c.close();
     }
   }, 20_000);
 }
 
-it('bounds the protected retry with the managed renewal deadline', async () => {
-  const { transport } = prepare({ recoveryTimeoutMs: 1_500 });
-  const client = new Client(
-    { name: 'renewal-deadline-test', version: '1' },
-    { capabilities: { elicitation: { form: {} } } },
-  );
-  client.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+it('hands off a required OTP and accepts the original continuation on the auth tool', async () => {
+  const { transport, requests } = prepare({ otp: true });
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
   try {
-    await client.connect(transport());
-    const result = await client.callTool({ name: 'search', arguments: { query: 'hang' } });
-    expect(result.structuredContent).toEqual({
+    await c.connect(transport());
+    const first = await search(c, 'query');
+    expect(first.structuredContent).toMatchObject({
       status: 'auth_required',
-      message: 'The protected retry did not finish before the renewal deadline.',
+      authTool,
+      nextAction: 'finish',
     });
-    const next = await client.callTool({ name: 'search', arguments: { query: 'next' } });
-    expect(next.isError).toBeFalsy();
+    const token = (first.structuredContent as { continuation?: string }).continuation;
+    expect(token).toBeDefined();
+    expect(requests()).toEqual(['/search', '/start', '/approve']);
+    const rejected = await callAuth(c, 'finish', token, '000000');
+    expect(rejected.isError).toBe(true);
+    const retry = continuationToken(rejected);
+    expect(retry).toBeDefined();
+    expect((await callAuth(c, 'finish', retry, '123456')).isError).toBeFalsy();
+    expect((await search(c, 'query')).isError).toBeFalsy();
   } finally {
-    await client.close();
+    await c.close();
+  }
+});
+
+it('retains a pending OTP while a protected call is ahead of its resume in the queue', async () => {
+  const { transport, requests, release } = prepare({ otp: true });
+  const c = client();
+  let approvals = 0;
+  c.setRequestHandler(ElicitRequestSchema, async () => {
+    approvals++;
+    return { action: 'accept', content: {} };
+  });
+  try {
+    await c.connect(transport());
+    const first = await search(c, 'first');
+    const token = (first.structuredContent as { continuation?: string }).continuation;
+    expect(token).toBeDefined();
+    const read = search(c, 'wait');
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (requests().filter((path) => path === '/search').length === 2) break;
+      await Bun.sleep(5);
+    }
+    expect(requests().filter((path) => path === '/search')).toHaveLength(2);
+    const resume = callAuth(c, 'finish', token, '123456');
+    await Bun.sleep(25);
+    writeFileSync(release, '');
+    expect((await read).structuredContent).toMatchObject({ continuation: token });
+    expect((await resume).isError).toBeFalsy();
+    expect(approvals).toBe(1);
+  } finally {
+    writeFileSync(release, '');
+    await c.close();
   }
 }, 20_000);
 
-it('rechecks newer persisted credentials before renewing in a second MCP process', async () => {
-  const { expired, journal, transport } = prepare({
-    signedIn: true,
-    signedOutResponse: { status: 401, errorCode: 'SIGNED_OUT' },
+it('does not resume a managed handoff in a replacement browser after idle eviction', async () => {
+  const { transport, requests } = prepare({ otp: true, fastIdle: true });
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+  try {
+    await c.connect(transport());
+    const first = await search(c, 'query');
+    const token = (first.structuredContent as { continuation?: string }).continuation;
+    expect(token).toBeDefined();
+    await Bun.sleep(150);
+    const result = await callAuth(c, 'finish', token, '123456');
+    expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
+    expect(requests()).toEqual(['/search', '/start', '/approve']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('does not direct a client without consent support to an unsafe action', async () => {
+  const { transport, requests } = prepare();
+  const c = new Client({ name: 'no-elicitation', version: '1' });
+  try {
+    await c.connect(transport());
+    const result = await search(c, 'query');
+    expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
+    expect(result.structuredContent).not.toHaveProperty('nextAction');
+    expect(requests()).toEqual(['/search', '/start']);
+    expect((await c.listTools()).tools.some((tool) => tool.name === authTool)).toBe(true);
+  } finally {
+    await c.close();
+  }
+});
+
+it('reuses credentials saved while the consent prompt was open', async () => {
+  const { transport, requests, cookies } = prepare();
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => {
+    writeFileSync(
+      cookies,
+      JSON.stringify([
+        {
+          name: 'sid',
+          value: 'fresh',
+          domain: 'example.test',
+          path: '/',
+          hostOnly: true,
+          secure: true,
+        },
+      ]),
+    );
+    return { action: 'accept', content: {} };
   });
-  const clients = ['first', 'second'].map(
-    (name) => new Client({ name, version: '1' }, { capabilities: { elicitation: { form: {} } } }),
-  );
-  const [first, second] = clients as [Client, Client];
+  try {
+    await c.connect(transport());
+    expect((await search(c, 'query')).isError).toBeFalsy();
+    expect(requests()).toEqual(['/search', '/start', '/search']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('leaves explicitly unsafe tools on their regular path', async () => {
+  const { transport, requests } = prepare({ unsafe: true });
+  const c = client();
+  try {
+    await c.connect(transport());
+    const result = await search(c, 'query');
+    expect(result.isError).toBe(true);
+    expect(result.structuredContent).toBeUndefined();
+    expect(requests()).toEqual(['/search']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('uses the newer saved session instead of prompting twice across MCP processes', async () => {
+  const { transport, requests } = prepare();
+  const first = client('first');
+  const second = client('second');
+  const started = Promise.withResolvers<void>();
   const release = Promise.withResolvers<void>();
-  const awaitingApproval = Promise.withResolvers<void>();
   let approvals = 0;
   first.setRequestHandler(ElicitRequestSchema, async () => {
     approvals++;
-    awaitingApproval.resolve();
+    started.resolve();
     await release.promise;
     return { action: 'accept', content: {} };
   });
@@ -500,36 +459,23 @@ it('rechecks newer persisted credentials before renewing in a second MCP process
     approvals++;
     return { action: 'decline' };
   });
-  const search = (client: Client, query: string) =>
-    client.callTool({ name: 'search', arguments: { query } });
   try {
-    for (const client of clients) {
-      await client.connect(transport());
-      expect((await search(client, 'warmup')).isError).toBeFalsy();
-    }
-    writeFileSync(journal, '');
-    writeFileSync(expired, '');
-    const firstSearch = search(first, 'first');
-    await awaitingApproval.promise;
-    const secondSearch = search(second, 'second');
+    await first.connect(transport());
+    await second.connect(transport());
+    const a = search(first, 'first');
+    await started.promise;
+    const b = search(second, 'second');
     for (let attempt = 0; attempt < 200; attempt++) {
-      const requests = readFileSync(journal, 'utf8').split('\n');
-      if (requests.filter((request) => request === '/search').length >= 2) break;
+      if (requests().filter((path) => path === '/search').length === 2) break;
       await Bun.sleep(10);
     }
-    expect(readFileSync(journal, 'utf8').match(/^\/search$/gm)).toHaveLength(2);
+    expect(requests().filter((path) => path === '/search')).toHaveLength(2);
     release.resolve();
-    const results = await Promise.all([firstSearch, secondSearch]);
-    expect(results.every((result) => !result.isError)).toBe(true);
+    expect((await Promise.all([a, b])).every((result) => !result.isError)).toBe(true);
     expect(approvals).toBe(1);
-    const requests = readFileSync(journal, 'utf8').trim().split('\n');
-    expect(requests.slice(requests.indexOf('/finish') + 1)).toEqual([
-      '/search',
-      '/status',
-      '/search',
-    ]);
+    expect(requests().filter((path) => path === '/finish')).toHaveLength(1);
   } finally {
     release.resolve();
-    await Promise.all(clients.map((client) => client.close()));
+    await Promise.all([first.close(), second.close()]);
   }
 }, 20_000);

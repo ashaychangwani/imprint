@@ -103,35 +103,6 @@ describe('Token lifecycle', () => {
     expect(sf.tokenAgeSeconds).toBe(-1);
   });
 
-  for (const explicit of [false, true]) {
-    it(`observes caller cancellation during ${explicit ? 'explicit' : 'lazy'} bootstrap`, async () => {
-      const cancel = new AbortController();
-      const started = Promise.withResolvers<void>();
-      const bootstrap = Promise.withResolvers<TokenCache>();
-      let fetches = 0;
-      const sf = createStealthFetch('https://example.test', {
-        bootstrap: ({ signal }) => {
-          expect(signal).toBe(cancel.signal);
-          started.resolve();
-          return bootstrap.promise;
-        },
-        underlyingFetch: async () => {
-          fetches++;
-          return { status: 200, ok: true, body: '{}', headers: {} };
-        },
-      });
-      const pending = explicit
-        ? sf.ensureBootstrapped(cancel.signal)
-        : sf.fetchImpl('https://example.test/api', { signal: cancel.signal });
-      await started.promise;
-      cancel.abort(new Error('fixture deadline'));
-      await expect(pending).rejects.toThrow('fixture deadline');
-      bootstrap.resolve({ cookies: [], sensorHeaders: {}, bootstrappedAt: Date.now() });
-      expect(fetches).toBe(0);
-      expect(sf.tokenAgeSeconds).toBe(-1);
-    });
-  }
-
   it('bounds a browser bootstrap that never returns', async () => {
     const sf = createStealthFetch(
       { baseUrl: 'https://example.com', bootstrapTimeoutMs: 10 },

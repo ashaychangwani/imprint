@@ -247,12 +247,11 @@ This refreshes the site's credential backend entry. Modern credential backends s
 ## A protected MCP call returns AUTH_REQUIRED
 
 The local stdio server returns `status: "auth_required"` when managed renewal
-pauses. Follow the returned reason. A client that supports elicitation can ask
-for permission to send a provider approval request. Declined and failed interactive attempts pause new sign-in requests for the
-configured cooldown. Silent status and refresh checks can still run. A provider
-browser verification requirement may need a separate interactive sign-in. Check
-the [site policy](getting-started.md#renew-authenticated-mcp-sessions) and retry
-the protected operation after the session is verified.
+pauses. Follow the returned reason. If the result includes an auth tool,
+next action, and continuation, call that tool with the specified action and
+token. Then retry the protected operation. If the MCP client supports form
+elicitation, it can ask for consent before Imprint sends a new approval request.
+See [session renewal](getting-started.md#renew-authenticated-mcp-sessions).
 
 ## Authenticate action programs
 

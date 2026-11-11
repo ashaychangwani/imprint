@@ -1319,7 +1319,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         // Page.navigate AFTER the override rather than passing the URL at launch.
         // headless renders offscreen (no display); headed needs one (Xvfb on Linux).
         const launch = chromiumLauncherForTest ?? launchChromium;
-        chrome = await withTimeout<LaunchedChromium>(
+        const launched = await withTimeout<LaunchedChromium>(
           launch({
             headless: !headed,
             extraArgs: gpuLaunchArgs(),
@@ -1332,7 +1332,14 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           'Chromium launch',
           cdpCommandTimeoutMs,
         );
-        await withTimeout(chrome.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+        // Close can run after the launch promise resolves and before this await
+        // resumes. Keep the handle local until ownership has been checked.
+        if (lifecycle !== startedIn) {
+          await launched.close();
+          checkOpen();
+        }
+        chrome = launched;
+        await withTimeout(launched.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
         checkOpen();
         // Register the Chrome PID for exit-time cleanup (leak prevention for
         // probe subprocesses that exit before the idle-close timer fires).
@@ -1340,7 +1347,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
       }
       if (!client) {
         const connectCdp = cdpConnectorForTest ?? ((port: number) => CDP({ port }));
-        client = await withTimeout<CdpClient>(
+        const connected = await withTimeout<CdpClient>(
           connectCdp(chrome.port).then(async (connected) => {
             if (lifecycle === startedIn) return connected;
             await connected.close();
@@ -1349,6 +1356,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           'CDP connect',
           cdpCommandTimeoutMs,
         );
+        if (lifecycle !== startedIn) {
+          await connected.close();
+          checkOpen();
+        }
+        client = connected;
       }
       checkOpen();
       const { Runtime, Network, Input, Page } = client;

@@ -217,12 +217,11 @@ semantics.
   Verify the session-reuse path and each login/MFA path actually offered by the
   observed flow separately. Do not restart login just to repeat an already
   passing reuse check, and do not claim an untested branch works.
-- For a site configured for managed MCP session renewal, put a new approval
-  request in its own action. Use `persistCookiesOnPause: false` to keep
-  incomplete auth in the retained browser. On a success outcome,
-  `expiresAtCapture` may name a server expiry captured by the current action
-  as epoch milliseconds. Use `browserSession: "fresh"` only on an independent
-  MCP action that must start without existing cookies or browser storage.
+- On a pause, use `resume: "automatic"` only if the next action can begin
+  without waiting for input through the auth tool. A bounded poll for an
+  already sent approval request can start while the user approves it with the
+  provider. Keep each new approval request in its own action and classify
+  its dispatch effect. The MCP host asks for consent before unsafe actions.
 - `persist` names durable credential interfaces that data tools consume later as
   `${credential.NAME}`. Cookies persist automatically. These interface names do
   not constrain your internal capture names. When they differ, set
