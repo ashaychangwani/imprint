@@ -7,6 +7,7 @@ import {
   AuditReportSchema,
   auditHasCorrectSignal,
   auditPromptTokens,
+  buildAuditCodexMcpEnvArgs,
   buildAuditInitialPrompt,
   buildAuditMcpCommandArgs,
   buildAuditMcpEnvironment,
@@ -213,11 +214,66 @@ describe('partitionAuditTools', () => {
 
 describe('buildAuditMcpEnvironment', () => {
   it('pins the MCP child to the same isolated asset root as the audit driver', () => {
-    expect(buildAuditMcpEnvironment('/tmp/imprint-isolated-audit')).toEqual({
+    expect(buildAuditMcpEnvironment('/tmp/imprint-isolated-audit', {})).toEqual({
       IMPRINT_HOME: '/tmp/imprint-isolated-audit',
       IMPRINT_AUDIT_PACING_MS: '5000',
       IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
     });
+  });
+});
+
+describe('audit browser environment inheritance', () => {
+  const browserEnv = {
+    CHROMIUM_PATH: '/fixture/Chrome "Testing"/chrome',
+    IMPRINT_CDP_HEADED: '1',
+    IMPRINT_JAR_MAX_AGE_SECONDS: '1',
+    IMPRINT_PROXY: 'http://127.0.0.1:8123',
+    DISPLAY: ':42',
+  };
+
+  it('forwards browser settings to the explicit MCP environment without copying unrelated variables', () => {
+    const env = buildAuditMcpEnvironment('/fixture/audit', {
+      ...browserEnv,
+      UNRELATED_SECRET: 'fixture-value',
+      IMPRINT_HOME: '/fixture/wrong-home',
+      IMPRINT_AUDIT_PACING_MS: '0',
+      IMPRINT_AUDIT_TOOL_DEADLINE_MS: '1',
+    });
+    expect(env).toEqual({
+      ...browserEnv,
+      IMPRINT_HOME: '/fixture/audit',
+      IMPRINT_AUDIT_PACING_MS: '5000',
+      IMPRINT_AUDIT_TOOL_DEADLINE_MS: '120000',
+    });
+  });
+
+  it('preserves explicit disabled and empty values while omitting unset settings', () => {
+    const env = buildAuditMcpEnvironment('/fixture/audit', {
+      IMPRINT_CDP_HEADED: '0',
+      IMPRINT_PROXY: '',
+      DISPLAY: undefined,
+    });
+    expect(env.IMPRINT_CDP_HEADED).toBe('0');
+    expect(env.IMPRINT_PROXY).toBe('');
+    expect(env).not.toHaveProperty('DISPLAY');
+    expect(env).not.toHaveProperty('CHROMIUM_PATH');
+  });
+
+  it('serializes every MCP environment entry into Codex exec overrides without losing quoted paths', () => {
+    const env = buildAuditMcpEnvironment('/fixture/audit', browserEnv);
+    const args = buildAuditCodexMcpEnvArgs('imprint-audit-fixture', env);
+    const recovered: Record<string, string> = {};
+    for (let i = 0; i < args.length; i += 2) {
+      expect(args[i]).toBe('-c');
+      const assignment = args[i + 1];
+      if (assignment === undefined) throw new Error('Missing Codex environment assignment');
+      const prefix = 'mcp_servers.imprint-audit-fixture.env.';
+      expect(assignment.startsWith(prefix)).toBe(true);
+      const equals = assignment.indexOf('=');
+      recovered[assignment.slice(prefix.length, equals)] = JSON.parse(assignment.slice(equals + 1));
+    }
+    expect(recovered).toEqual(env);
+    expect(recovered).toMatchObject(browserEnv);
   });
 });
 
