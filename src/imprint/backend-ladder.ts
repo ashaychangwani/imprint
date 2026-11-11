@@ -1177,8 +1177,20 @@ async function runCdpReplay(
       message: 'The browser for this sign-in has closed.',
     };
   }
-  const poolKey =
-    pinned ?? cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
+  const requestedKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
+  if (
+    pinned &&
+    pinned !== requestedKey &&
+    tool.workflow.bootstrap?.captures?.some((capture) => capture.source !== 'cookie')
+  ) {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message:
+        'This sign-in action needs captures from a different bootstrap page. Use standalone sign-in.',
+    };
+  }
+  const poolKey = pinned ?? requestedKey;
   if (tool.workflow.toolKind !== 'authenticate') await prepareTeachBrowserContext(cdpPool, poolKey);
   if (signal?.aborted) throw abortSignalError(signal);
   const credentialHash = credentialStateHash(credentials);
@@ -1356,6 +1368,7 @@ async function runCdpReplay(
     }
     if (jarLikelyStale(result)) clearJar(cacheDir);
     if (result.ok) {
+      if (authSignal) return result;
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
         const postJar = await withAbortSignal(() => cf.mintJar(), authSignal);

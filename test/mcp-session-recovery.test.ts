@@ -26,8 +26,33 @@ function prepare({
   unsafe = false,
   legacyData = false,
   invalidPolicy = false,
-  fastIdle = false,
+  idleMs,
   varyingBootstrap = false,
+  timeoutMs,
+  finishFailure,
+  bootstrapCaptures = false,
+  allowlist = false,
+  keepBrowserOpen = false,
+  serverOnlyRenewal = false,
+  unsafeOtp = false,
+  startAction,
+}: {
+  managed?: boolean;
+  otp?: boolean;
+  refresh?: boolean;
+  unsafe?: boolean;
+  legacyData?: boolean;
+  invalidPolicy?: boolean;
+  idleMs?: number;
+  varyingBootstrap?: boolean;
+  timeoutMs?: number;
+  finishFailure?: 'hang' | 'network' | 'transform';
+  bootstrapCaptures?: boolean;
+  allowlist?: boolean;
+  keepBrowserOpen?: boolean;
+  serverOnlyRenewal?: boolean;
+  unsafeOtp?: boolean;
+  startAction?: string;
 } = {}) {
   const root = mkdtempSync(join(tmpdir(), 'imprint-mcp-renewal-'));
   dirs.push(root);
@@ -44,17 +69,31 @@ function prepare({
         default: 'start',
         choices: names,
       },
+      ...(refresh
+        ? [{ name: 'region', type: 'string', description: 'Region', default: 'us' }]
+        : []),
       ...(otp ? [{ name: 'otp', type: 'string', description: 'Verification code' }] : []),
     ],
     intent: { description: 'Fixture authentication' },
+    ...(finishFailure === 'transform' ? { requestTransformModule: './request-transform.ts' } : {}),
     ...(varyingBootstrap
-      ? { bootstrap: { url: 'https://example.test/bootstrap/${param.action}' } }
+      ? {
+          bootstrap: {
+            url: 'https://example.test/bootstrap/${param.action}',
+            ...(bootstrapCaptures
+              ? { captures: [{ source: 'response_header', name: 'nonce', header: 'x-nonce' }] }
+              : {}),
+          },
+        }
       : {}),
     requests: names.map((name) => ({
-      method: name === 'approve' ? 'POST' : 'GET',
-      url: `https://example.test/${name}${otp && name === 'finish' ? '?otp=${param.otp}' : ''}`,
+      method: name === 'approve' || (name === 'finish' && unsafeOtp) ? 'POST' : 'GET',
+      url: `https://example.test/${name}${otp && name === 'finish' ? '?otp=${param.otp}' : refresh && name === 'refresh' ? '?region=${param.region}' : ''}`,
       headers: {},
-      effect: name === 'approve' ? 'unsafe' : 'safe',
+      effect:
+        name === 'approve' || (name === 'finish' && (unsafeOtp || finishFailure === 'network'))
+          ? 'unsafe'
+          : 'safe',
       captures:
         name === 'finish' || name === 'refresh'
           ? [{ source: 'json', name: 'verified', path: 'verified', equals: true }]
@@ -66,7 +105,8 @@ function prepare({
         names.map((name, request) => [
           name,
           {
-            parameters: name === 'finish' && otp ? ['otp'] : [],
+            parameters:
+              name === 'finish' && otp ? ['otp'] : name === 'refresh' && refresh ? ['region'] : [],
             steps: [{ request }],
             outcome:
               name === 'start' || name === 'approve'
@@ -101,6 +141,14 @@ function prepare({
     mkdirSync(dir, { recursive: true });
     const workflowPath = join(dir, 'workflow.json');
     writeFileSync(workflowPath, JSON.stringify(workflow));
+    if (workflow.requestTransformModule) {
+      writeFileSync(
+        join(dir, workflow.requestTransformModule),
+        `export async function transform(_method: string, url: string) {
+  if (new URL(url).pathname === '/finish') await new Promise(() => {});
+}`,
+      );
+    }
     emit({ workflowPath, outDir: dir });
     if (legacyData && workflow === data) {
       const wrapper = join(dir, 'index.ts');
@@ -123,6 +171,8 @@ function prepare({
             authTool,
             protectedTools: ['search'],
             ...(refresh ? { refreshAction: 'refresh' } : {}),
+            timeoutMs,
+            startAction,
           }),
     );
   }
@@ -134,6 +184,7 @@ function prepare({
   const clock = join(root, 'clock');
   const release = join(root, 'release');
   const cookies = join(root, 'cookies.json');
+  const authorized = join(root, 'authorized');
   writeFileSync(cookies, '[]');
   writeFileSync(
     preload,
@@ -141,9 +192,10 @@ function prepare({
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { __setCdpBrowserFetchFactoryForTest } from ${JSON.stringify(join(runtime, 'backend-ladder.ts'))};
 import { setBackendOverride } from ${JSON.stringify(join(runtime, 'credential-store.ts'))};
-if (${fastIdle}) {
+const idleMs = ${JSON.stringify(idleMs)};
+if (idleMs !== undefined) {
   const originalTimeout = globalThis.setTimeout;
-  globalThis.setTimeout = (fn, ms, ...args) => originalTimeout(fn, ms === 300_000 ? 25 : ms, ...args);
+  globalThis.setTimeout = (fn, ms, ...args) => originalTimeout(fn, ms === 300_000 ? idleMs : ms, ...args);
 }
 const clock = ${JSON.stringify(clock)};
 const now = Date.now;
@@ -164,19 +216,32 @@ const fetchFixture = async (url, init) => {
   appendFileSync(${JSON.stringify(journal)}, path.pathname + '\\n');
   if (path.pathname === '/search') {
     const query = path.searchParams.get('q');
+    if (query === 'recheck-hang' && readFileSync(${JSON.stringify(journal)}, 'utf8').split('/search').length > 2) {
+      await new Promise(() => {});
+    }
     while (query === 'wait' && !existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
-    const authorized = new Headers(init?.headers).get('cookie')?.includes('sid=fresh');
-    return authorized || query === 'public'
+    const signedIn = new Headers(init?.headers).get('cookie')?.includes('sid=fresh') || existsSync(${JSON.stringify(authorized)});
+    while (query === 'stale' && !existsSync(${JSON.stringify(release)})) await Bun.sleep(5);
+    return signedIn || query === 'public'
       ? Response.json({ query, count: 1 })
       : Response.json({}, { status: 401 });
   }
   if (${managed && !invalidPolicy} && path.pathname === '/approve' && init?.allowAmbiguousRetry !== false) {
     throw new Error('Managed approval must opt out of ambiguous retries');
   }
+  if (path.pathname === '/finish' && ${JSON.stringify(finishFailure)} === 'hang') await new Promise(() => {});
+  if (path.pathname === '/finish' && ${JSON.stringify(finishFailure)} === 'network') throw new Error('Response unavailable');
   if (${otp} && path.pathname === '/finish' && path.searchParams.get('otp') !== '123456') {
     return Response.json({}, { status: 400 });
   }
+  if (${refresh} && path.pathname === '/refresh' && path.searchParams.get('region') !== 'us') {
+    throw new Error('Missing configured refresh region');
+  }
   if (path.pathname === '/finish' || path.pathname === '/refresh') {
+    if (${serverOnlyRenewal}) {
+      writeFileSync(${JSON.stringify(authorized)}, '');
+      return Response.json({ verified: true });
+    }
     return Response.json({ verified: true }, { headers: { 'set-cookie': 'sid=fresh; Path=/; Secure' } });
   }
   return Response.json({});
@@ -184,10 +249,16 @@ const fetchFixture = async (url, init) => {
 globalThis.fetch = fetchFixture;
 __setCdpBrowserFetchFactoryForTest(() => {
   appendFileSync(${JSON.stringify(browsers)}, 'browser' + String.fromCharCode(10));
+  const keepAlive = ${keepBrowserOpen} ? setInterval(() => {}, 1000) : undefined;
   return {
     fetchImpl: fetchFixture,
-    mintJar: async () => ({ cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0' }),
-    close: async () => {},
+    mintJar: async () => ({ cookies: getCookies(), ua: 'fixture', html: '', bootstrapEpoch: Date.now(), abckFlag: '0', bootstrapResponseHeaders: { 'x-nonce': 'fixture-nonce' } }),
+    close: async () => {
+      if (!keepAlive) return;
+      await Bun.sleep(2300);
+      clearInterval(keepAlive);
+      appendFileSync(${JSON.stringify(browsers)}, 'closed' + String.fromCharCode(10));
+    },
   };
 });
 `,
@@ -195,7 +266,15 @@ __setCdpBrowserFetchFactoryForTest(() => {
   const transport = () =>
     new StdioClientTransport({
       command: process.execPath,
-      args: ['run', '--preload', preload, join(runtime, '..', 'cli.ts'), 'mcp-server', site],
+      args: [
+        'run',
+        '--preload',
+        preload,
+        join(runtime, '..', 'cli.ts'),
+        'mcp-server',
+        site,
+        ...(allowlist ? ['--include-tools', `search,${authTool}`] : []),
+      ],
       env: { ...getDefaultEnvironment(), IMPRINT_HOME: root },
       stderr: 'ignore',
     });
@@ -266,12 +345,12 @@ for (const invalidPolicy of [false, true]) {
 }
 
 it('refreshes silently and retries the protected read once', async () => {
-  const { transport, requests } = prepare({ refresh: true });
+  const { transport, requests } = prepare({ refresh: true, allowlist: true });
   const c = client();
   try {
     await c.connect(transport());
     expect((await search(c, 'query')).isError).toBeFalsy();
-    expect(requests()).toEqual(['/search', '/refresh', '/search']);
+    expect(requests()).toEqual(['/search', '/search', '/refresh', '/search']);
   } finally {
     await c.close();
   }
@@ -297,6 +376,7 @@ for (const accepted of [true, false]) {
         expect(results.every((result) => !result.isError)).toBe(true);
         expect(requests()).toEqual([
           '/search',
+          '/search',
           '/start',
           '/approve',
           '/finish',
@@ -311,7 +391,7 @@ for (const accepted of [true, false]) {
               (result.structuredContent as { status?: string })?.status === 'auth_required',
           ),
         ).toBe(true);
-        expect(requests()).toEqual(['/search', '/start', '/search', '/search']);
+        expect(requests()).toEqual(['/search', '/search', '/start', '/search', '/search']);
       }
     } finally {
       await c.close();
@@ -319,35 +399,51 @@ for (const accepted of [true, false]) {
   }, 20_000);
 }
 
-it('hands off a required OTP and accepts the original continuation on the auth tool', async () => {
-  const { transport, requests, browsers } = prepare({ otp: true, varyingBootstrap: true });
-  const c = client();
-  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
-  try {
-    await c.connect(transport());
-    const first = await search(c, 'query');
-    expect(first.structuredContent).toMatchObject({
-      status: 'auth_required',
-      authTool,
-      nextAction: 'finish',
+for (const unsafeOtp of [false, true]) {
+  it(`accepts a corrected OTP in the same browser for a ${unsafeOtp ? 'consented write' : 'safe read'}`, async () => {
+    const { transport, requests, browsers } = prepare({
+      otp: true,
+      varyingBootstrap: true,
+      unsafeOtp,
     });
-    const token = (first.structuredContent as { continuation?: string }).continuation;
-    expect(token).toBeDefined();
-    expect(requests()).toEqual(['/search', '/start', '/approve']);
-    const rejected = await callAuth(c, 'finish', token, '000000');
-    expect(rejected.isError).toBe(true);
-    const retry = continuationToken(rejected);
-    expect(retry).toBeDefined();
-    expect((await callAuth(c, 'finish', retry, '123456')).isError).toBeFalsy();
-    expect((await search(c, 'query')).isError).toBeFalsy();
-    expect(readFileSync(browsers, 'utf8').trim().split('\n')).toEqual(['browser']);
-  } finally {
-    await c.close();
-  }
-});
+    const c = client();
+    let approvals = 0;
+    c.setRequestHandler(ElicitRequestSchema, async () => {
+      approvals++;
+      return { action: 'accept', content: {} };
+    });
+    try {
+      await c.connect(transport());
+      const first = await search(c, 'query');
+      expect(first.structuredContent).toMatchObject({
+        status: 'auth_required',
+        authTool,
+        nextAction: 'finish',
+      });
+      const token = (first.structuredContent as { continuation?: string }).continuation;
+      expect(token).toBeDefined();
+      expect(requests()).toEqual(['/search', '/search', '/start', '/approve']);
+      const missing = await callAuth(c, 'finish', token);
+      expect(missing.isError).toBe(true);
+      expect(requests()).toEqual(['/search', '/search', '/start', '/approve']);
+      expect((await callAuth(c, 'approve', token)).isError).toBe(true);
+      expect(requests()).toEqual(['/search', '/search', '/start', '/approve']);
+      const rejected = await callAuth(c, 'finish', token, '000000');
+      expect(rejected.isError).toBe(true);
+      const retry = continuationToken(rejected);
+      expect(retry).toBeDefined();
+      expect((await callAuth(c, 'finish', retry, '123456')).isError).toBeFalsy();
+      expect(approvals).toBe(unsafeOtp ? 3 : 1);
+      expect((await search(c, 'query')).isError).toBeFalsy();
+      expect(readFileSync(browsers, 'utf8').trim().split('\n')).toEqual(['browser']);
+    } finally {
+      await c.close();
+    }
+  });
+}
 
-it('retains a pending OTP while a protected call is ahead of its resume in the queue', async () => {
-  const { transport, requests, release } = prepare({ otp: true });
+it('retains a queued OTP resume past the browser idle deadline', async () => {
+  const { transport, requests, release } = prepare({ otp: true, idleMs: 250 });
   const c = client();
   let approvals = 0;
   c.setRequestHandler(ElicitRequestSchema, async () => {
@@ -361,12 +457,12 @@ it('retains a pending OTP while a protected call is ahead of its resume in the q
     expect(token).toBeDefined();
     const read = search(c, 'wait');
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (requests().filter((path) => path === '/search').length === 2) break;
+      if (requests().filter((path) => path === '/search').length === 3) break;
       await Bun.sleep(5);
     }
-    expect(requests().filter((path) => path === '/search')).toHaveLength(2);
+    expect(requests().filter((path) => path === '/search')).toHaveLength(3);
     const resume = callAuth(c, 'finish', token, '123456');
-    await Bun.sleep(25);
+    await Bun.sleep(350);
     writeFileSync(release, '');
     expect((await read).structuredContent).toMatchObject({ continuation: token });
     expect((await resume).isError).toBeFalsy();
@@ -378,7 +474,7 @@ it('retains a pending OTP while a protected call is ahead of its resume in the q
 }, 20_000);
 
 it('does not resume a managed handoff in a replacement browser after idle eviction', async () => {
-  const { transport, requests } = prepare({ otp: true, fastIdle: true });
+  const { transport, requests } = prepare({ otp: true, idleMs: 25 });
   const c = client();
   c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
   try {
@@ -389,7 +485,7 @@ it('does not resume a managed handoff in a replacement browser after idle evicti
     await Bun.sleep(150);
     const result = await callAuth(c, 'finish', token, '123456');
     expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
-    expect(requests()).toEqual(['/search', '/start', '/approve']);
+    expect(requests()).toEqual(['/search', '/search', '/start', '/approve']);
   } finally {
     await c.close();
   }
@@ -403,15 +499,81 @@ it('does not direct a client without consent support to an unsafe action', async
     const result = await search(c, 'query');
     expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
     expect(result.structuredContent).not.toHaveProperty('nextAction');
-    expect(requests()).toEqual(['/search', '/start']);
+    expect(requests()).toEqual(['/search', '/search', '/start']);
     expect((await c.listTools()).tools.some((tool) => tool.name === authTool)).toBe(true);
   } finally {
     await c.close();
   }
 });
 
-it('does not publish a standalone sign-in token on a protected read', async () => {
+it('requests consent from a client advertising the legacy form capability', async () => {
   const { transport, requests } = prepare();
+  const c = new Client(
+    { name: 'legacy-form', version: '1' },
+    { capabilities: { elicitation: {} } },
+  );
+  let approvals = 0;
+  c.setRequestHandler(ElicitRequestSchema, async () => {
+    approvals++;
+    return { action: 'accept', content: {} };
+  });
+  try {
+    await c.connect(transport());
+    expect((await search(c, 'query')).isError).toBeFalsy();
+    expect(approvals).toBe(1);
+    expect(requests()).toEqual(['/search', '/search', '/start', '/approve', '/finish', '/search']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('does not use bootstrap document captures from a different action', async () => {
+  const { transport, requests } = prepare({ varyingBootstrap: true, bootstrapCaptures: true });
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+  try {
+    await c.connect(transport());
+    expect((await search(c, 'query')).structuredContent).toMatchObject({
+      status: 'auth_required',
+      message: expect.stringContaining('standalone auth tool'),
+    });
+    expect(requests()).toEqual(['/search', '/search', '/start']);
+  } finally {
+    await c.close();
+  }
+});
+
+for (const finishFailure of ['hang', 'network', 'transform'] as const) {
+  it(`settles a managed OTP resume that fails with ${finishFailure}`, async () => {
+    const { transport, requests } = prepare({ otp: true, finishFailure, timeoutMs: 500 });
+    const c = client();
+    c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+    try {
+      await c.connect(transport());
+      const first = await search(c, 'query');
+      const token = (first.structuredContent as { continuation?: string }).continuation;
+      expect(token).toBeDefined();
+      const result = await callAuth(c, 'finish', token, '123456');
+      expect(continuationToken(result)).toBeUndefined();
+      if (finishFailure !== 'network') {
+        expect(result.structuredContent).toMatchObject({ status: 'auth_required' });
+      } else {
+        expect(result.isError).toBe(true);
+      }
+      expect(requests()).toEqual(
+        finishFailure === 'transform'
+          ? ['/search', '/search', '/start', '/approve']
+          : ['/search', '/search', '/start', '/approve', '/finish'],
+      );
+      expect((await search(c, 'public')).isError).toBeFalsy();
+    } finally {
+      await c.close();
+    }
+  });
+}
+
+it('does not share standalone tokens or let an abandoned pause block renewal', async () => {
+  const { transport, requests, clock } = prepare({ refresh: true });
   const c = new Client({ name: 'no-elicitation', version: '1' });
   try {
     await c.connect(transport());
@@ -420,8 +582,74 @@ it('does not publish a standalone sign-in token on a protected read', async () =
     const protectedResult = await search(c, 'query');
     expect(protectedResult.structuredContent).toMatchObject({ status: 'auth_required' });
     expect(protectedResult.structuredContent).not.toHaveProperty('continuation');
-    expect(protectedResult.structuredContent).not.toHaveProperty('nextAction');
     expect(requests()).toEqual(['/start', '/search']);
+    writeFileSync(clock, String(10 * 60 * 1000));
+    expect((await search(c, 'query')).isError).toBeFalsy();
+    expect(requests()).toEqual(['/start', '/search', '/search', '/search', '/refresh', '/search']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('drains a parked sign-in browser despite the client SIGTERM after stdin closes', async () => {
+  const { transport, browsers } = prepare({ otp: true, keepBrowserOpen: true });
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+  try {
+    await c.connect(transport());
+    expect((await search(c, 'query')).structuredContent).toHaveProperty('continuation');
+  } finally {
+    await c.close();
+  }
+  expect(readFileSync(browsers, 'utf8').trim().split('\n')).toEqual(['browser', 'closed']);
+}, 10_000);
+
+it('invalidates the old standalone continuation when the caller explicitly restarts', async () => {
+  const { transport, requests } = prepare();
+  const c = client();
+  try {
+    await c.connect(transport());
+    const first = continuationToken(await callAuth(c, 'start'));
+    expect(first).toBeDefined();
+    expect(continuationToken(await callAuth(c, 'start'))).toBeDefined();
+    const stale = await callAuth(c, 'approve', first);
+    expect(stale.content).toEqual([
+      { type: 'text', text: 'Invalid or expired continuation token.' },
+    ]);
+    expect(requests()).toEqual(['/start', '/start']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('can restart at the compiled entry after recovery used an alternate start action', async () => {
+  const { transport, requests } = prepare({ otp: true, startAction: 'approve' });
+  const c = client();
+  c.setRequestHandler(ElicitRequestSchema, async () => ({ action: 'accept', content: {} }));
+  try {
+    await c.connect(transport());
+    const pending = await search(c, 'query');
+    const token = (pending.structuredContent as { continuation?: string }).continuation;
+    expect(token).toBeDefined();
+    expect(continuationToken(await callAuth(c, 'start'))).toBeDefined();
+    expect((await callAuth(c, 'finish', token, '123456')).isError).toBe(true);
+    expect(requests()).toEqual(['/search', '/search', '/approve', '/start']);
+  } finally {
+    await c.close();
+  }
+});
+
+it('releases the recovery queue when a protected recheck stalls', async () => {
+  const { transport, requests } = prepare({ timeoutMs: 500 });
+  const c = client();
+  try {
+    await c.connect(transport());
+    expect((await search(c, 'recheck-hang')).structuredContent).toMatchObject({
+      status: 'auth_required',
+      message: expect.stringContaining('deadline'),
+    });
+    expect(requests()).toEqual(['/search', '/search']);
+    expect((await search(c, 'public')).isError).toBeFalsy();
   } finally {
     await c.close();
   }
@@ -449,7 +677,7 @@ it('reuses credentials saved while the consent prompt was open', async () => {
   try {
     await c.connect(transport());
     expect((await search(c, 'query')).isError).toBeFalsy();
-    expect(requests()).toEqual(['/search', '/start', '/search']);
+    expect(requests()).toEqual(['/search', '/search', '/start', '/search']);
   } finally {
     await c.close();
   }
@@ -493,10 +721,10 @@ it('uses the newer saved session instead of prompting twice across MCP processes
     await started.promise;
     const b = search(second, 'second');
     for (let attempt = 0; attempt < 200; attempt++) {
-      if (requests().filter((path) => path === '/search').length === 2) break;
+      if (requests().filter((path) => path === '/search').length === 3) break;
       await Bun.sleep(10);
     }
-    expect(requests().filter((path) => path === '/search')).toHaveLength(2);
+    expect(requests().filter((path) => path === '/search')).toHaveLength(3);
     release.resolve();
     expect((await Promise.all([a, b])).every((result) => !result.isError)).toBe(true);
     expect(approvals).toBe(1);
@@ -506,3 +734,44 @@ it('uses the newer saved session instead of prompting twice across MCP processes
     await Promise.all([first.close(), second.close()]);
   }
 }, 20_000);
+
+for (const scenario of ['renewed credentials', 'unchanged credentials', 'a delayed 401'] as const) {
+  it(`shares an OTP handoff across processes with ${scenario}`, async () => {
+    const { transport, requests, release } = prepare({
+      otp: true,
+      serverOnlyRenewal: scenario !== 'renewed credentials',
+    });
+    const first = client('first');
+    const second = client('second');
+    let approvals = 0;
+    for (const c of [first, second]) {
+      c.setRequestHandler(ElicitRequestSchema, async () => {
+        approvals++;
+        return { action: 'accept', content: {} };
+      });
+    }
+    try {
+      await first.connect(transport());
+      await second.connect(transport());
+      const pending = await search(first, 'first');
+      const token = (pending.structuredContent as { continuation?: string }).continuation;
+      expect(token).toBeDefined();
+      const waiting = search(second, scenario === 'a delayed 401' ? 'stale' : 'second');
+      for (let attempt = 0; attempt < 200; attempt++) {
+        if (requests().filter((path) => path === '/search').length === 3) break;
+        await Bun.sleep(10);
+      }
+      expect(requests().filter((path) => path === '/search')).toHaveLength(3);
+      await Bun.sleep(300);
+      expect(requests().filter((path) => path === '/start')).toHaveLength(1);
+      expect((await callAuth(first, 'finish', token, '123456')).isError).toBeFalsy();
+      writeFileSync(release, '');
+      expect((await waiting).isError).toBeFalsy();
+      expect(approvals).toBe(1);
+      expect(requests().filter((path) => path === '/approve')).toHaveLength(1);
+    } finally {
+      writeFileSync(release, '');
+      await Promise.all([first.close(), second.close()]);
+    }
+  }, 20_000);
+}

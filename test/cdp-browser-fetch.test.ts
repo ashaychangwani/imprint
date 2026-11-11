@@ -2265,11 +2265,11 @@ describe('createCdpBrowserFetch CDP timeouts', () => {
       ready: ready.promise,
       close: async () => {
         closes++;
+        ready.reject(new Error('Startup readiness cancelled'));
       },
     });
     await Promise.resolve();
     await browser.close();
-    ready.resolve();
     await expect(jar).rejects.toThrow('Browser closed');
     expect(closes).toBe(1);
   });

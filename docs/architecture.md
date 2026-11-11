@@ -100,7 +100,8 @@ establishes that the website will accept the resulting session.
 
 For opted-in local stdio sites, `mcp-session-recovery.ts` follows the compiled
 auth workflow after a protected call reports expiry. A credential-backend lock
-serializes sign-in across MCP processes. The server checks the credential
+serializes managed sign-in across MCP processes, including pauses that retain a
+browser for human input. The server checks the credential
 revision before writing or retrying and asks the client for consent before an
 unsafe auth action. A paused workflow can return its continuation to the
 existing auth tool.

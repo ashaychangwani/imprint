@@ -95,6 +95,7 @@ export async function withCredentialLock<T>(
   directory: string,
   signal: AbortSignal | undefined,
   work: () => Promise<T>,
+  pollMs = 20,
 ): Promise<T> {
   signal?.throwIfAborted();
   mkdirSync(directory, { recursive: true, mode: 0o700 });
@@ -123,7 +124,7 @@ export async function withCredentialLock<T>(
             (other.ticket === owner.ticket && other.nonce < nonce)),
       );
       if (!ahead) break;
-      await abortableDelay(20, signal);
+      await abortableDelay(pollMs, signal);
     }
     signal?.throwIfAborted();
     result = await work();

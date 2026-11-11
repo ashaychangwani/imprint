@@ -7,6 +7,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve as pathResolve } from 'node:path';
+import { withAbortSignal } from './concurrency.ts';
 import {
   type CookieLookupConstraints,
   type RuntimeCookie,
@@ -983,12 +984,15 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       message: `Auth action ${JSON.stringify(actionName)} requires: ${missingParameters.join(', ')}.`,
     };
   }
+  const authSignal = credentials.authCommitRevision === undefined ? undefined : opts.signal;
   let requestTransform: RequestTransform | undefined;
   if (opts.workflow.requestTransformModule && opts.workflowPath) {
     try {
-      const mod = await importModuleFresh(
-        pathResolve(dirname(opts.workflowPath), opts.workflow.requestTransformModule),
+      const modulePath = pathResolve(
+        dirname(opts.workflowPath),
+        opts.workflow.requestTransformModule,
       );
+      const mod = await withAbortSignal(() => importModuleFresh(modulePath), authSignal);
       if (typeof mod.transform === 'function') {
         requestTransform = mod.transform as RequestTransform;
       }
@@ -1012,6 +1016,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
   let currentRequestIndex = 0;
   let phase: RequestStageFact['stage'] = 'preparation';
   let transportInvoked = false;
+  let managedUnsafeDispatches = 0;
   let httpStatus: number | undefined;
   const recordStage = (
     stage: RequestStageFact['stage'],
@@ -1030,6 +1035,18 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     if (stageFacts.length > 32) stageFacts.shift();
   };
   const fail = (result: RuntimeErrorResult): RuntimeErrorResult => {
+    // A user can correct input after the provider rejects this submission.
+    // Managed MCP still requires consent before sending the corrected request.
+    const canCorrectInput =
+      managedUnsafeDispatches === 1 &&
+      action.parameters.length > 0 &&
+      phase === 'send' &&
+      transportInvoked &&
+      opts.workflow.requests[currentRequestIndex]?.effect === 'unsafe' &&
+      result.error !== 'NETWORK' &&
+      httpStatus !== undefined &&
+      httpStatus >= 400 &&
+      httpStatus < 500;
     return {
       ...result,
       requestStageFacts: [...stageFacts, ...(result.requestStageFacts ?? [])].slice(-32),
@@ -1045,8 +1062,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
         ...result.authExecution,
       },
       continuation:
-        Object.keys(initialState).length > 0 ||
-        (credentials.authCommitRevision !== undefined && opts.initialState !== undefined)
+        (managedUnsafeDispatches === 0 || canCorrectInput) &&
+        (Object.keys(initialState).length > 0 ||
+          (credentials.authCommitRevision !== undefined && opts.initialState !== undefined))
           ? initialState
           : undefined,
     };
@@ -1139,13 +1157,18 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
     const request = substituted.value;
     let navigation = req.navigation;
 
-    if (requestTransform) {
+    const transform = requestTransform;
+    if (transform) {
       try {
-        const transformed = await requestTransform(
-          request.method,
-          request.url,
-          responseSlots.map((slot) => slot.raw),
-          params,
+        const transformed = await withAbortSignal(
+          async () =>
+            transform(
+              request.method,
+              request.url,
+              responseSlots.map((slot) => slot.raw),
+              params,
+            ),
+          authSignal,
         );
         if (typeof transformed === 'string') request.url = transformed;
         else if (transformed) {
@@ -1246,6 +1269,9 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       try {
         transportInvoked = true;
         phase = 'send';
+        const managedUnsafe =
+          credentials.authCommitRevision !== undefined && req.effect === 'unsafe';
+        if (managedUnsafe) managedUnsafeDispatches++;
         const init: BrowserRequestInit = {
           method: request.method,
           headers: request.headers,
@@ -1254,9 +1280,7 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
             ? AbortSignal.any([opts.signal, controller.signal])
             : controller.signal,
           redirect: 'follow',
-          ...(credentials.authCommitRevision !== undefined && req.effect === 'unsafe'
-            ? { allowAmbiguousRetry: false }
-            : {}),
+          ...(managedUnsafe ? { allowAmbiguousRetry: false } : {}),
         };
         response = await fetchFn(request.url, init);
         httpStatus = response.status;
@@ -1420,6 +1444,14 @@ async function executeAuthWorkflow(opts: ExecuteOptions): Promise<ToolResult> {
       if (opts.signal?.aborted) return cancellationFailure();
       if (!executed.ok) {
         lastFailure = executed.result;
+        if (
+          managedUnsafeDispatches > 0 &&
+          lastFailure.error === 'NETWORK' &&
+          transportInvoked &&
+          opts.workflow.requests[step.request]?.effect === 'unsafe'
+        ) {
+          return fail(lastFailure);
+        }
         if (step.onError === 'continue') {
           matched = true;
           break;

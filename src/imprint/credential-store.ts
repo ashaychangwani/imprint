@@ -741,18 +741,31 @@ async function withSiteCredentialLock<T>(
 }
 
 /** Serializes a complete sign-in independently of the credential reads and commits it performs. */
-export async function withSiteAuthRecoveryLock<T>(
+export async function acquireSiteAuthRecoveryLock(
   site: string,
   signal: AbortSignal,
-  work: (directory: string) => Promise<T>,
-): Promise<T> {
+): Promise<() => Promise<void>> {
   signal.throwIfAborted();
   const backend = await getCredentialBackend();
   const directory = pathJoin(
     `${credentialLockDirectory(site, backend)}-auth-recovery`,
     createHash('sha256').update(site).digest('hex'),
   );
-  return withCredentialLock(directory, signal, () => work(directory));
+  return new Promise((resolve, reject) => {
+    const held = withCredentialLock(
+      directory,
+      signal,
+      () =>
+        new Promise<void>((release) => {
+          resolve(() => {
+            release();
+            return held;
+          });
+        }),
+      250,
+    );
+    void held.catch(reject);
+  });
 }
 
 /** Loads everything we know about a site, falling back through the backends.

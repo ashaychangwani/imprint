@@ -1325,6 +1325,8 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             extraArgs: gpuLaunchArgs(),
             ...(headed ? { display: opts.display } : {}),
           }).then(async (launched) => {
+            // Closing a late handle rejects readiness even if no caller adopted it.
+            void launched.ready.catch(() => {});
             if (lifecycle === startedIn) return launched;
             await launched.close();
             throw new Error('Browser closed during Chromium launch.');

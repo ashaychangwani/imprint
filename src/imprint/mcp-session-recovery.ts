@@ -56,6 +56,20 @@ function isAuthenticated(result: ToolResult): boolean {
   );
 }
 
+export function missingAuthInputs(
+  workflow: Workflow,
+  action: string,
+  args: Record<string, unknown> = {},
+): string[] {
+  return (workflow.authConfig?.actions[action]?.parameters ?? []).filter(
+    (name) =>
+      args[name] === undefined &&
+      !workflow.parameters.some(
+        (parameter) => parameter.name === name && parameter.default !== undefined,
+      ),
+  );
+}
+
 /** Requests that need consent. Undefined means this action stays standalone. */
 export function unsafeAuthRequests(workflow: Workflow, action: string): Set<number> | undefined {
   const actions = workflow.authConfig?.actions;
@@ -94,7 +108,7 @@ export async function recoverSession(
   if (
     refresh &&
     refreshAction &&
-    !refreshAction.parameters?.length &&
+    !missingAuthInputs(workflow, refresh).length &&
     refreshAction.steps.every(({ request }) => {
       const effect = workflow.requests[request]?.effect;
       return effect === 'safe' || effect === 'idempotent';
@@ -121,7 +135,7 @@ export async function recoverSession(
     if (!unsafe || [...unsafe].some((request) => dispatchedUnsafe.has(request))) {
       return { status: 'blocked', message: 'This action needs standalone manual sign-in.' };
     }
-    if (config.actions[action]?.parameters?.length) return manual(action, pause);
+    if (missingAuthInputs(workflow, action).length) return manual(action, pause);
 
     if (unsafe.size) {
       if (!host.requestConsent) {
@@ -140,7 +154,10 @@ export async function recoverSession(
     const result = await host.execute(action, pause?.continuation);
     if (isAuthenticated(result)) return { status: 'authenticated' };
     if (result.ok || result.error !== 'ACTION_REQUIRED' || !result.nextAction) {
-      return { status: 'blocked', message: 'The compiled sign-in did not verify the session.' };
+      return {
+        status: 'blocked',
+        message: 'The compiled sign-in did not verify the session. Use the standalone auth tool.',
+      };
     }
     if (result.resume !== 'automatic') return manual(result.nextAction, result);
     action = result.nextAction;
