@@ -244,6 +244,15 @@ imprint login <site> --from-session ~/.imprint/<site>/sessions/<ts>.json
 
 This refreshes the site's credential backend entry. Modern credential backends store cookies, named secrets, and declared durable storage values in the OS keychain when available, with an encrypted fallback for headless systems. The legacy JSON path is still read for migration, but new credentials should be managed with `imprint login` and `imprint credential *`.
 
+## A protected MCP call returns AUTH_REQUIRED
+
+The local stdio server returns `status: "auth_required"` when managed renewal
+pauses. Follow the returned reason. If the result includes an auth tool,
+next action, and continuation, call that tool with the specified action and
+token. Then retry the protected operation. If the MCP client supports form
+elicitation, it can ask for consent before Imprint sends a new approval request.
+See [session renewal](getting-started.md#renew-authenticated-mcp-sessions).
+
 ## Authenticate action programs
 
 Authentication runs through the compiled `workflow.json` action program in one persistent local browser. It never falls back to `playbook.yaml`.

@@ -147,7 +147,7 @@ describe('AuthContinuationStore', () => {
       state: { ticket: 'private-ticket' },
     });
 
-    expect(store.consume(token, 'authenticate_fixture', 'finish')).toEqual({
+    expect(store.consume(token, 'authenticate_fixture', 'finish')?.state).toEqual({
       ticket: 'private-ticket',
     });
     expect(store.consume(token, 'authenticate_fixture', 'finish')).toBeUndefined();

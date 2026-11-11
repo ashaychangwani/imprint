@@ -251,6 +251,9 @@ const BootstrapCaptureSchema = z.discriminatedUnion('source', [
 ]);
 export type BootstrapCapture = z.infer<typeof BootstrapCaptureSchema>;
 
+/** Managed authentication can disable transport retry for an ambiguous dispatch. */
+export type BrowserRequestInit = RequestInit & { allowAmbiguousRetry?: false };
+
 const WorkflowRequestBaseSchema = z.object({
   method: z.string(),
   /** Sequence number of the captured request that grounds this outgoing
@@ -370,6 +373,7 @@ const AuthOutcomeSchema = z.discriminatedUnion('type', [
     .object({
       type: z.literal('pause'),
       next: z.string().min(1),
+      resume: z.literal('automatic').optional(),
       evidence: z.array(z.string().min(1)).optional().default([]),
       carry: z.array(z.string().min(1)).optional().default([]),
       message: z.string().min(1),
@@ -614,6 +618,7 @@ export type ToolResult<T = unknown> =
        *  unchanged on the next auth call. */
       continuation?: Record<string, unknown>;
       nextAction?: string;
+      resume?: 'automatic';
     };
 
 // ─── Cron config (input to `imprint cron`) ───────────────────────────────────

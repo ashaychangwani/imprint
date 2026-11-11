@@ -45,6 +45,7 @@ import {
 } from './chromium.ts';
 import { recordBrowserCredentialObservation } from './credential-observation.ts';
 import { createLog } from './log.ts';
+import type { BrowserRequestInit } from './types.ts';
 import type { NavigationNetworkResponseMatcher } from './types.ts';
 
 const log = createLog('cdp-browser');
@@ -1106,6 +1107,7 @@ export function buildInPageFetchExpr(
   body: string | null,
   reqTimeoutMs: number,
   sameOriginIframeSrc?: string,
+  allowAmbiguousRetry = true,
 ): string {
   const iframeNativeFetchSetup = `
           ifr = document.createElement('iframe');
@@ -1157,10 +1159,12 @@ export function buildInPageFetchExpr(
           if (ifr) try { ifr.remove(); } catch (_) {}
           return { ok: false, error: String(e) };
         }`;
+  const primarySetup =
+    !allowAmbiguousRetry && !sameOriginIframeSrc ? iframeNativeFetchSetup : iframeSetup;
   return `(async () => {
-      const primary = await (async () => {${fetchOnce(iframeSetup)}
+      const primary = await (async () => {${fetchOnce(primarySetup)}
       })();
-      if (${sameOriginIframeSrc ? 'false' : 'true'} && !primary.ok) {
+      if (${allowAmbiguousRetry && !sameOriginIframeSrc} && !primary.ok) {
         const fallback = await (async () => {${fetchOnce(iframeNativeFetchSetup)}
         })();
         return JSON.stringify(fallback);
@@ -1258,10 +1262,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
   const activeNetworkBodyReads = new Set<Promise<void>>();
   let finishActiveNetworkResponse: ((requestId: string) => void) | undefined;
   let navigationInProgress = false;
+  let lifecycle = 0;
   let discoveryRequested = false;
   let discovery: AuthBrowserDiscovery | undefined;
 
   async function close(): Promise<void> {
+    lifecycle++;
     discovery?.close();
     discovery = undefined;
     const c = client;
@@ -1300,6 +1306,10 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
   async function ensure(): Promise<CdpClient> {
     if (client && bootstrapped) return client;
+    const startedIn = lifecycle;
+    const checkOpen = () => {
+      if (lifecycle !== startedIn) throw new Error('Browser closed during CDP startup.');
+    };
     try {
       const headed = opts.headed ?? false;
       if (!chrome) {
@@ -1309,24 +1319,52 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         // Page.navigate AFTER the override rather than passing the URL at launch.
         // headless renders offscreen (no display); headed needs one (Xvfb on Linux).
         const launch = chromiumLauncherForTest ?? launchChromium;
-        chrome = await withTimeout(
+        const launched = await withTimeout<LaunchedChromium>(
           launch({
             headless: !headed,
             extraArgs: gpuLaunchArgs(),
             ...(headed ? { display: opts.display } : {}),
+          }).then(async (launched) => {
+            // Closing a late handle rejects readiness even if no caller adopted it.
+            void launched.ready.catch(() => {});
+            if (lifecycle === startedIn) return launched;
+            await launched.close();
+            throw new Error('Browser closed during Chromium launch.');
           }),
           'Chromium launch',
           cdpCommandTimeoutMs,
         );
-        await withTimeout(chrome.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+        // Close can run after the launch promise resolves and before this await
+        // resumes. Keep the handle local until ownership has been checked.
+        if (lifecycle !== startedIn) {
+          await launched.close();
+          checkOpen();
+        }
+        chrome = launched;
+        await withTimeout(launched.ready, 'Chromium CDP readiness', cdpCommandTimeoutMs);
+        checkOpen();
         // Register the Chrome PID for exit-time cleanup (leak prevention for
         // probe subprocesses that exit before the idle-close timer fires).
         if (chrome.process.pid !== undefined) __registerChromePid(chrome.process.pid);
       }
       if (!client) {
         const connectCdp = cdpConnectorForTest ?? ((port: number) => CDP({ port }));
-        client = await withTimeout(connectCdp(chrome.port), 'CDP connect', cdpCommandTimeoutMs);
+        const connected = await withTimeout<CdpClient>(
+          connectCdp(chrome.port).then(async (connected) => {
+            if (lifecycle === startedIn) return connected;
+            await connected.close();
+            throw new Error('Browser closed during CDP connect.');
+          }),
+          'CDP connect',
+          cdpCommandTimeoutMs,
+        );
+        if (lifecycle !== startedIn) {
+          await connected.close();
+          checkOpen();
+        }
+        client = connected;
       }
+      checkOpen();
       const { Runtime, Network, Input, Page } = client;
       await withTimeout(Runtime.enable(), 'CDP Runtime.enable', cdpCommandTimeoutMs);
       await withTimeout(Network.enable(), 'CDP Network.enable', cdpCommandTimeoutMs);
@@ -1685,10 +1723,11 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         i++;
       }
       log(`_abck status after interaction: ~${status}~`);
+      checkOpen();
       bootstrapped = true;
       return client;
     } catch (err) {
-      await close();
+      if (lifecycle === startedIn) await close();
       throw err;
     }
   }
@@ -1713,7 +1752,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
 
   const fetchImpl: typeof fetch = (async (
     input: string | URL | Request,
-    init?: RequestInit,
+    init?: BrowserRequestInit,
   ): Promise<Response> => {
     const c = await ensure();
     const url =
@@ -1766,6 +1805,7 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         body,
         reqTimeoutMs,
         sameOriginIframeSrc,
+        init?.allowAmbiguousRetry,
       );
       const { result } = await withTimeout(
         c.Runtime.evaluate({
@@ -1907,6 +1947,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
             status: payload.status,
             headers: new Headers(payload.headers),
           });
+        }
+        if (init?.allowAmbiguousRetry === false) {
+          throw new Error('The browser could not confirm the request outcome. No retry was sent.');
         }
         // The in-page sibling fetch failed — almost always a genuine CORS block
         // (the page can't read the cross-origin response). Fall back to plain

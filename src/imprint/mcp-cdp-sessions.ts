@@ -19,7 +19,11 @@ export class McpCdpSessions {
     }
   }
 
-  finishCall(site: string, toolName: string): void {
+  finishCall(
+    site: string,
+    toolName: string,
+    onIdle?: (browser: CdpBrowserFetch, closing: Promise<void>) => void,
+  ): void {
     this.beginCall(site, toolName);
     const prefix = cdpReplayPoolKey(site, toolName, '');
     for (const [key, session] of this.pool) {
@@ -29,7 +33,8 @@ export class McpCdpSessions {
         if (this.pool.get(key) !== session) return;
         this.pool.delete(key);
         this.winners.delete(`${site}:${toolName}`);
-        void session.close().catch(() => {});
+        const closing = session.close().catch(() => {});
+        onIdle?.(session, closing);
       }, this.idleMs);
       timer.unref();
       this.timers.set(key, timer);

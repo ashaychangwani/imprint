@@ -98,6 +98,14 @@ Cookie scope is preserved: host-only cookies are planted without a Domain
 attribute, and Chrome's acceptance response is checked. None of these facts
 establishes that the website will accept the resulting session.
 
+For opted-in local stdio sites, `mcp-session-recovery.ts` follows the compiled
+auth workflow after a protected call reports expiry. A credential-backend lock
+serializes managed sign-in across MCP processes, including pauses that retain a
+browser for human input. The server checks the credential
+revision before writing or retrying and asks the client for consent before an
+unsafe auth action. A paused workflow can return its continuation to the
+existing auth tool.
+
 Auth compilers also expose `interact_verification_browser` through the same API,
 CLI and native checkpoints. The agent chooses browser actions to investigate a
 flow absent from the original recording. `auth-browser-discovery.ts` captures

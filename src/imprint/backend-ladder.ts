@@ -350,6 +350,8 @@ export async function runWithLadder(
     /** Per-site CDP browser pool so cdp-replay reuses a live Chrome across
      *  calls (~2-5s) instead of launching a fresh one each time (~33s). */
     cdpPool?: Map<string, CdpBrowserFetch>;
+    /** A managed continuation must use the browser that produced it. */
+    authBrowser?: CdpBrowserFetch;
     /** Per-session memo of the backend that last served each tool. Once set, the
      *  next call starts at that backend instead of re-walking the doomed early
      *  rungs — the runtime analog of the compile path's `compileWinningBackend`.
@@ -492,6 +494,7 @@ export async function runWithLadder(
             options?.signal,
             options?.onResponse ? onResponse : undefined,
             options?.onPreparedRequest ? onPreparedRequest : undefined,
+            options?.authBrowser,
           );
           break;
         case 'stealth-fetch': {
@@ -1131,6 +1134,7 @@ async function runCdpReplay(
   signal?: AbortSignal,
   onResponse?: (observation: ResponseObservation) => void,
   onPreparedRequest?: (observation: PreparedRequestObservation) => void,
+  authBrowser?: CdpBrowserFetch,
 ): Promise<ToolResult> {
   const credentials = credentialOverride ??
     (await loadCredentialStore(tool.site, signal)) ?? {
@@ -1162,7 +1166,31 @@ async function runCdpReplay(
       .update(bootstrapUrl ?? baseUrl)
       .digest('hex'),
   );
-  const poolKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
+  const pinned =
+    authBrowser && cdpPool
+      ? [...cdpPool].find(([, browser]) => browser === authBrowser)?.[0]
+      : undefined;
+  if (authBrowser && pinned === undefined) {
+    return {
+      ok: false,
+      error: 'AUTH_EXPIRED',
+      message: 'The browser for this sign-in has closed.',
+    };
+  }
+  const requestedKey = cdpReplayPoolKey(tool.site, tool.workflow.toolName, bootstrapUrl ?? baseUrl);
+  if (
+    pinned &&
+    pinned !== requestedKey &&
+    tool.workflow.bootstrap?.captures?.some((capture) => capture.source !== 'cookie')
+  ) {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message:
+        'This sign-in action needs captures from a different bootstrap page. Use standalone sign-in.',
+    };
+  }
+  const poolKey = pinned ?? requestedKey;
   if (tool.workflow.toolKind !== 'authenticate') await prepareTeachBrowserContext(cdpPool, poolKey);
   if (signal?.aborted) throw abortSignalError(signal);
   const credentialHash = credentialStateHash(credentials);
@@ -1247,8 +1275,11 @@ async function runCdpReplay(
     if (cdpPool) cdpPool.set(poolKey, cf);
   }
 
+  // Existing callers keep their normal timing. Managed auth owns this browser
+  // and closes it when the recovery deadline or client cancellation fires.
+  const authSignal = credentials.authCommitRevision === undefined ? undefined : signal;
   try {
-    const jar = await cf.mintJar();
+    const jar = await withAbortSignal(() => cf.mintJar(), authSignal);
     if (signal?.aborted) throw abortSignalError(signal);
     const observedCookies = jar.cookies.map((c) => ({
       name: c.name,
@@ -1283,16 +1314,26 @@ async function runCdpReplay(
       return captureResult.result;
     }
 
+    const navigate = cf.navigate?.bind(cf);
+    const snapshotCookies = cf.snapshotCookies?.bind(cf);
+    const fetchImpl: typeof fetch = authSignal
+      ? Object.assign(
+          (input: Parameters<typeof fetch>[0], init?: RequestInit) =>
+            withAbortSignal(() => cf.fetchImpl(input, init), authSignal),
+          { preconnect: cf.fetchImpl.preconnect },
+        )
+      : cf.fetchImpl;
     let runtimeCookies: CredentialStore['cookies'] | undefined;
     let result = await tool.toolFn(paramsWithDefaults, {
       credentials: bootstrappedCredentials,
       initialState: { ...callerState, ...captureResult.state },
-      fetchImpl: cf.fetchImpl,
+      fetchImpl,
       browser:
-        cf.navigate && cf.snapshotCookies
+        navigate && snapshotCookies
           ? {
-              navigate: cf.navigate.bind(cf),
-              snapshotCookies: cf.snapshotCookies.bind(cf),
+              navigate: (...args: Parameters<NonNullable<CdpBrowserFetch['navigate']>>) =>
+                withAbortSignal(() => navigate(...args), authSignal),
+              snapshotCookies: () => withAbortSignal(snapshotCookies, authSignal),
               initialCookies: observedCookies,
             }
           : undefined,
@@ -1327,9 +1368,10 @@ async function runCdpReplay(
     }
     if (jarLikelyStale(result)) clearJar(cacheDir);
     if (result.ok) {
+      if (authSignal) return result;
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
       try {
-        const postJar = await cf.mintJar();
+        const postJar = await withAbortSignal(() => cf.mintJar(), authSignal);
         recordBrowserCookieState(
           { ...credentials, cookies: postJar.cookies },
           'cdp-after-request',
@@ -1390,14 +1432,16 @@ async function runCdpReplay(
       // A paused auth action is healthy progress. Retain the browser so the next
       // declared action sees the same cookies, page, and browser-owned state.
       if (ownsSession) cdpPool.set(poolKey, cf);
-      try {
-        const postJar = await cf.mintJar();
-        saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
-      } catch (err) {
-        clearJar(cacheDir);
-        log(
-          `cdp-replay paused cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
-        );
+      if (credentials.authCommitRevision === undefined) {
+        try {
+          const postJar = await cf.mintJar();
+          saveJar(cacheDir, { ...postJar, credentialStateHash: credentialHash });
+        } catch (err) {
+          clearJar(cacheDir);
+          log(
+            `cdp-replay paused cookie snapshot unavailable: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
       }
       // Deliberately do NOT close cf — the pool retains it for the completion phase.
     } else if (cdpPool) {

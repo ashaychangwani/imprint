@@ -264,6 +264,49 @@ imprint mcp
 
 See [MCP Maintenance](mcp-maintenance.md) for direct disable/delete/prune commands and recording deletion caveats.
 
+## Renew authenticated MCP sessions
+
+Local stdio MCP servers can opt in to session recovery for read-only tools.
+When a protected call reports `AUTH_EXPIRED`, Imprint rechecks it before
+starting sign-in in case another process restored the session. If it still
+reports expiry, Imprint follows the compiled auth workflow and retries the
+original call once after successful sign-in.
+
+Save `mcp-session-recovery.json` in the site's directory under `IMPRINT_HOME`
+(default `~/.imprint`). Use the names of your generated tools.
+
+```json
+{
+  "authTool": "authenticate_site",
+  "protectedTools": ["search"]
+}
+```
+
+Recovery starts with the auth workflow's entry action. The file may specify
+`startAction` to use another compiled action and `refreshAction` to try a silent
+refresh first. The refresh action must be executable with its defaults and
+contain only safe or idempotent requests. If it reports `AUTH_EXPIRED`, recovery
+tries the configured sign-in action. Other refresh failures stop recovery.
+`timeoutMs` sets the deadline for a recovery call or resumed action and defaults
+to four minutes. Existing manual continuation tokens keep their normal lifetime.
+
+The protected workflow must declare each request `"effect": "safe"` for automatic
+replay. The retry uses workflow backends and skips the playbook. Recovery asks
+for consent through MCP form elicitation before running a sign-in action with an
+unsafe request. While the protected call drives recovery, `"resume": "automatic"`
+allows it to follow the declared next action. For example, a workflow can send
+one approval request with consent and then poll the same challenge. Steps that
+need human input can continue through the existing auth tool. It executes one
+action per call and returns the next action and any continuation token. While a
+managed handoff waits for input, it keeps its browser and sign-in lock.
+Standalone sign-in is available when the workflow needs bootstrap document
+captures from a different page.
+
+Auth recovery uses Chromium and can carry cookies and named secrets to the
+retried tool. Check a real protected call after expiry to verify that the
+site's session state can be reused. Sites that require browser-only state may
+need a manual browser sign-in.
+
 ## Schedule it
 
 Drop a `cron.json` next to your generated tool:
