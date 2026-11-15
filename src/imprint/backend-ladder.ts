@@ -376,10 +376,12 @@ export async function runWithLadder(
     throw new Error('runWithLadder: empty ladder');
   }
 
-  const permittedLadder =
-    tool.workflow.toolKind === 'authenticate'
-      ? ladder.filter((backend) => backend !== 'playbook')
-      : ladder;
+  const permittedLadder: ConcreteBackend[] =
+    tool.workflow.browserStartup === 'native'
+      ? ['cdp-replay']
+      : tool.workflow.toolKind === 'authenticate'
+        ? ladder.filter((backend) => backend !== 'playbook')
+        : ladder;
   if (permittedLadder.length === 0) {
     return {
       result: {
@@ -1143,6 +1145,30 @@ async function runCdpReplay(
       values: {},
       storage: [],
     };
+  const nativeStartup = tool.workflow.browserStartup === 'native';
+  if (
+    nativeStartup &&
+    (authBrowser ||
+      tool.workflow.toolKind === 'authenticate' ||
+      tool.workflow.authConfig ||
+      tool.workflow.bootstrap?.captures?.length ||
+      credentials.cookies.length ||
+      credentials.storage?.length ||
+      Object.keys(credentials.values).length ||
+      tool.workflow.requests.some(
+        (request) =>
+          request.mode === 'navigate' ||
+          !['GET', 'HEAD'].includes(request.method.toUpperCase()) ||
+          (request.effect !== undefined && request.effect !== 'safe'),
+      ))
+  ) {
+    return {
+      ok: false,
+      error: 'STATE_MISSING',
+      message:
+        'Native browser startup requires public GET or HEAD fetches without credential state or bootstrap captures.',
+    };
+  }
   const paramsWithDefaults = withWorkflowDefaults(tool.workflow, params);
   let baseUrl: string;
   try {
@@ -1226,7 +1252,7 @@ async function runCdpReplay(
     // workflows do not inherit them implicitly. Current credential-store cookies
     // are different: they represent durable device/session state and remain
     // available unless the caller intentionally supplies a clean credential store.
-    if (tool.workflow.toolKind !== 'authenticate') {
+    if (!nativeStartup && tool.workflow.toolKind !== 'authenticate') {
       try {
         const rec = newestRecording(recordingDir);
         let cached = loadJar(cacheDir);
@@ -1264,7 +1290,11 @@ async function runCdpReplay(
       // headed. Auth is interactive (the user is present to approve the 2FA), so a
       // visible window is fine; data-tool cdp-replay stays headless.
       // `IMPRINT_CDP_HEADED=1` forces headed for any rung.
-      headed: tool.workflow.toolKind === 'authenticate' || process.env.IMPRINT_CDP_HEADED === '1',
+      nativeStartup,
+      headed:
+        nativeStartup ||
+        tool.workflow.toolKind === 'authenticate' ||
+        process.env.IMPRINT_CDP_HEADED === '1',
       // Cross-origin Set-Cookie re-injection only when the (auth) workflow
       // declares it — never a blanket default. See AuthConfig.crossOriginCookieReinjection.
       reinjectCrossOriginCookies: tool.workflow.authConfig?.crossOriginCookieReinjection ?? false,
@@ -1366,10 +1396,14 @@ async function runCdpReplay(
         // A failed diagnostic must preserve the original consumer failure.
       }
     }
-    if (jarLikelyStale(result)) clearJar(cacheDir);
+    if (!nativeStartup && jarLikelyStale(result)) clearJar(cacheDir);
     if (result.ok) {
       if (authSignal) return result;
       if (cdpPool && ownsSession) cdpPool.set(poolKey, cf);
+      if (nativeStartup) {
+        if (!cdpPool && ownsSession) await cf.close();
+        return result;
+      }
       try {
         const postJar = await withAbortSignal(() => cf.mintJar(), authSignal);
         recordBrowserCookieState(
@@ -2009,10 +2043,11 @@ export async function runWorkflowWithLadder(opts: {
     // A caller that requires a specific rung (the 2FA auth verifier → cdp-replay
     // for cross-phase session continuity) runs ONLY that rung, with no fallback —
     // falling to another rung would lose the live session and defeat the pin.
-    if (opts.forceBackend) {
-      log(`forced backend: ${opts.forceBackend} (probe + memo skipped)`);
+    const forcedBackend = workflow.browserStartup === 'native' ? 'cdp-replay' : opts.forceBackend;
+    if (forcedBackend) {
+      log(`forced backend: ${forcedBackend} (probe + memo skipped)`);
       const result = await runWithLadder(
-        [opts.forceBackend],
+        [forcedBackend],
         tool,
         opts.params,
         assetRoot,

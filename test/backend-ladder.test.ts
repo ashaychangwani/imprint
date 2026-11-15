@@ -178,6 +178,49 @@ describe('resolveLadder', () => {
   });
 });
 
+describe('native browser replay', () => {
+  it('uses only browser replay, including when a browser startup fails', async () => {
+    const behavior = { calls: { fetch: 0, stealth: 0 } };
+    const tool = makeFakeTool('catalog', behavior);
+    tool.workflow.browserStartup = 'native';
+    __setCdpBrowserFetchFactoryForTest((options) => {
+      expect(options).toMatchObject({ nativeStartup: true, headed: true });
+      expect(options.seedCookies ?? []).toEqual([]);
+      return {
+        fetchImpl: fetch,
+        ensureBootstrapped: async () => [],
+        mintJar: async () => {
+          throw new Error('fixture unavailable');
+        },
+        close: async () => {},
+      };
+    });
+    const result = await runWithLadder(['fetch', 'stealth-fetch'], tool, {}, root, new Map());
+    expect(result.usedBackend).toBe('cdp-replay');
+    expect(result.result).toMatchObject({ ok: false, error: 'NETWORK' });
+    expect(result.attempts.map((attempt) => attempt.backend)).toEqual(['cdp-replay']);
+    expect(behavior.calls).toEqual({ fetch: 0, stealth: 0 });
+  });
+
+  it('rejects credential state and writes before launching a browser', async () => {
+    const tool = makeFakeTool('inventory', { calls: { fetch: 0, stealth: 0 } });
+    tool.workflow.browserStartup = 'native';
+    __setCdpBrowserFetchFactoryForTest(() => {
+      throw new Error('unexpected browser launch');
+    });
+    const withCredentials = await runWithLadder(['fetch'], tool, {}, root, new Map(), {
+      credentials: { site: tool.site, values: { fixture: 'value' }, cookies: [] },
+    });
+    expect(withCredentials.result).toMatchObject({ ok: false, error: 'STATE_MISSING' });
+    tool.workflow.requests = tool.workflow.requests.map((request) => ({
+      ...request,
+      method: 'POST',
+    }));
+    const write = await runWithLadder(['fetch'], tool, {}, root, new Map());
+    expect(write.result).toMatchObject({ ok: false, error: 'STATE_MISSING' });
+  });
+});
+
 describe('runWithLadder — single-rung explicit', () => {
   it('passes cancellation into fetch and never escalates or memoizes a cancelled call', async () => {
     const controller = new AbortController();

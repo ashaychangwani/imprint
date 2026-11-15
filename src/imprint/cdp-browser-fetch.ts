@@ -491,6 +491,8 @@ export interface CdpBrowserFetchOptions {
    *  needed as a fallback on a GPU-less host where headless WebGL falls back to
    *  SwiftShader and the site fingerprints it — pair with `display`/Xvfb. */
   headed?: boolean;
+  /** Load the initial document with Chromium’s default browser identity. */
+  nativeStartup?: boolean;
   /** X display for HEADED Chrome on Linux (passed to launchChromium). Only used
    *  when `headed` is set; headless renders offscreen and needs no display. */
   display?: string;
@@ -1322,7 +1324,12 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
         const launched = await withTimeout<LaunchedChromium>(
           launch({
             headless: !headed,
-            extraArgs: gpuLaunchArgs(),
+            ...(opts.nativeStartup
+              ? {
+                  url: navUrl,
+                  extraArgs: process.platform === 'linux' ? ['--disable-dev-shm-usage'] : [],
+                }
+              : { extraArgs: gpuLaunchArgs() }),
             ...(headed ? { display: opts.display } : {}),
           }).then(async (launched) => {
             // Closing a late handle rejects readiness even if no caller adopted it.
@@ -1557,6 +1564,38 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
           `seeded ${seedCookieDiagnostics.accepted}/${seedCookieDiagnostics.attempted} cookies before navigate; rejected=${seedCookieDiagnostics.rejected} failed=${seedCookieDiagnostics.failed}`,
         );
       }
+      if (opts.nativeStartup) {
+        const origin = new URL(navUrl).origin;
+        const deadline = Date.now() + cdpCommandTimeoutMs;
+        let status: number | undefined;
+        do {
+          checkOpen();
+          const { result } = await withTimeout(
+            Runtime.evaluate({
+              expression: `({
+                ready: document.readyState === 'complete' && !!document.body,
+                origin: location.origin,
+                status: performance.getEntriesByType('navigation')[0]?.responseStatus,
+              })`,
+              returnByValue: true,
+            }),
+            'CDP native document readiness',
+            Math.max(1, deadline - Date.now()),
+          );
+          checkOpen();
+          const page = result.value as { ready?: boolean; origin?: string; status?: number };
+          status = page?.status;
+          if (page?.ready && page.origin === origin && status && status >= 200 && status < 300) {
+            bootstrapped = true;
+            return client;
+          }
+          if (page?.ready && status && status >= 400) break;
+          await sleep(Math.min(250, Math.max(0, deadline - Date.now())));
+        } while (Date.now() < deadline);
+        throw new Error(
+          `Browser startup did not reach a usable document (HTTP ${status ?? 'unknown'}).`,
+        );
+      }
       // Strip the `HeadlessChrome` UA token (Akamai's only headless edge-tell) and
       // send matching client hints — BEFORE navigating to the protected origin.
       try {
@@ -1785,6 +1824,9 @@ export function createCdpBrowserFetch(opts: CdpBrowserFetchOptions): CdpBrowserF
     }
     const body = typeof init?.body === 'string' ? init.body : init?.body ? String(init.body) : null;
     const requestOrigin = new URL(fullUrl).origin;
+    if (opts.nativeStartup && requestOrigin !== new URL(navUrl).origin) {
+      throw new Error('Native browser replay requires same-origin requests.');
+    }
 
     // Run a request IN the live trusted page via Runtime.evaluate(fetch). Returns
     // a structured payload (ok + status/body/headers, or ok:false + error string

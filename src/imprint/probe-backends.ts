@@ -440,6 +440,7 @@ function workflowNeedsBootstrap(workflow: ResolvedTool['workflow']): boolean {
 export function probeCandidateBackendsForWorkflow(
   workflow: ResolvedTool['workflow'],
 ): ConcreteBackend[] {
+  if (workflow.browserStartup === 'native') return ['cdp-replay'];
   return workflowNeedsBootstrap(workflow)
     ? ['fetch', 'cdp-replay', 'fetch-bootstrap', 'stealth-fetch', 'playbook']
     : ['fetch', 'stealth-fetch', 'playbook'];
