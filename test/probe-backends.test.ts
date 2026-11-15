@@ -752,6 +752,18 @@ describe('runtime backend learning', () => {
 });
 
 describe('probeCandidateBackendsForWorkflow', () => {
+  it('probes only browser replay for workflows that request native startup', () => {
+    const workflow = WorkflowSchema.parse({
+      toolName: 'catalog',
+      site: 'fixture',
+      browserStartup: 'native',
+      intent: { description: 'Read catalog' },
+      parameters: [],
+      requests: [{ method: 'GET', url: 'https://catalog.fixture.test/api', headers: {} }],
+    });
+    expect(probeCandidateBackendsForWorkflow(workflow)).toEqual(['cdp-replay']);
+  });
+
   it('includes browser-backed API probes for an explicitly declared navigation request', () => {
     const workflow = WorkflowSchema.parse({
       toolName: 'stateful_checkout',

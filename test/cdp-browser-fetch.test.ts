@@ -2332,3 +2332,67 @@ describe('createCdpBrowserFetch CDP timeouts', () => {
     expect(chromeClosed).toBe(1);
   });
 });
+
+describe('native document startup', () => {
+  for (const [origin, status] of [
+    ['https://catalog.fixture.test', 200],
+    ['https://inventory.fixture.test', 429],
+  ] as const) {
+    it(`uses the original Chromium document for HTTP ${status}`, async () => {
+      let closed = 0;
+      const unexpected = () => {
+        throw new Error('Legacy browser startup was called');
+      };
+      __setCdpBrowserFetchHooksForTest({
+        launchChromium: async (options) => {
+          expect(options).toMatchObject({ url: origin, headless: false });
+          return {
+            process: {} as never,
+            port: 12345,
+            userDataDir: '/tmp/imprint-fake-chrome',
+            ready: Promise.resolve(),
+            close: async () => {
+              closed++;
+            },
+          };
+        },
+        connectCdp: async () =>
+          ({
+            Runtime: {
+              enable: async () => ({}),
+              evaluate: async ({ expression }: { expression: string }) => {
+                if (expression.includes('responseStatus'))
+                  return { result: { value: { origin, status, ready: true } } };
+                expect(expression).toBe('document.documentElement.outerHTML');
+                return { result: { value: '<html>Catalog</html>' } };
+              },
+            },
+            Network: {
+              enable: async () => ({}),
+              requestWillBeSent: () => {},
+              responseReceived: () => {},
+              loadingFinished: () => {},
+              loadingFailed: () => {},
+              setUserAgentOverride: unexpected,
+              getAllCookies: async () => ({ cookies: [] }),
+            },
+            Page: { enable: async () => ({}), navigate: unexpected },
+            Input: { dispatchMouseEvent: unexpected },
+            close: async () => {},
+          }) as never,
+      });
+      const browser = createCdpBrowserFetch({ baseUrl: origin, headed: true, nativeStartup: true });
+      try {
+        if (status === 200) {
+          await expect(browser.mintJar()).resolves.toMatchObject({ html: '<html>Catalog</html>' });
+        } else {
+          await expect(browser.mintJar()).rejects.toThrow('HTTP 429');
+          expect(closed).toBe(1);
+        }
+      } finally {
+        await browser.close();
+      }
+      expect(closed).toBe(1);
+    });
+  }
+});

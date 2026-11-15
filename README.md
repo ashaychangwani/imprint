@@ -224,6 +224,8 @@ Teaching now selects a fixed set of recording-backed examples and matches live c
 
 Repair or extend an installed data tool with `imprint refine <site> --tool <name> --issue "<change>" --from-session <recording.json>`. Refinement works in an isolated staging home, preserves existing parameter contracts, and requires recording/live verification plus a strict audit before replacement. Failed refinements preserve installed tools and local evidence. Use `imprint audit <site> --strict` to reject known broken calls even when the aggregate score exceeds 95%. See [targeted refinement](docs/refinement.md). Audits forward explicitly set browser settings (`CHROMIUM_PATH`, `IMPRINT_CDP_HEADED`, `IMPRINT_JAR_MAX_AGE_SECONDS`, `IMPRINT_PROXY`, and `DISPLAY`) into their isolated MCP server for either audit provider. See [audit troubleshooting](docs/troubleshooting.md#imprint-audit--scoring-a-sites-generated-tools).
 
+Public read workflows can opt into native Chromium startup and browser-only replay with `"browserStartup": "native"`. See [browser replay troubleshooting](docs/troubleshooting.md#native-browser-startup).
+
 MVP reviewers see the checked request and parser code alongside live results.
 Publication retains the backend from that exact reviewed passing call in
 `backends.json`, so a fresh MCP process starts on the tested path. This records

@@ -446,6 +446,21 @@ lose their current verification. The next attempt recompiles or rechecks those
 tools in the master-authored wave order. Independent verified tools do not need
 to be rebuilt.
 
+## Native browser startup
+
+If a public read workflow needs a normal Chromium document load before replay,
+set `"browserStartup": "native"` at the top level of its workflow JSON and
+regenerate its wrapper with `imprint emit <workflow.json> --force`. Verify the
+emitted tool with `imprint probe-backends <site> --tool <tool>` using valid inputs.
+
+This setting uses headed Chromium and browser replay. Chromium loads the
+bootstrap URL (or the inferred origin) with its native browser identity. Replay
+waits for a successful document load and keeps requests in the browser. This
+mode supports public same-origin GET and HEAD fetches without stored
+credentials or bootstrap captures. On Linux, Imprint can start Xvfb for headed
+execution. A rejected document is surfaced as an error, with its HTTP status
+when Chromium reports one.
+
 ## `imprint audit` — scoring a site's generated tools
 
 `imprint audit <site>` exercises every generated tool against the site's real MCP server and prints a deterministic score:

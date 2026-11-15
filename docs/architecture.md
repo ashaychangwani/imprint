@@ -584,6 +584,12 @@ to match a fresh page load. It does not decide which background call is semantic
 meaningful, and the capability does not automatically change a tool's rung or
 share browser state with another tool.
 
+**Native browser startup.** A workflow can opt into `browserStartup: "native"`
+for public same-origin reads. Backend probing and execution use only CDP replay.
+Chromium loads the bootstrap document directly and Imprint waits for document
+readiness with a bounded deadline. The mode uses Chromium's native identity,
+skips recorded cookie seeding, and retains per-tool browser isolation.
+
 **CDP pool.** The `cdp-replay` pool keys each browser by site, tool, and rendered bootstrap URL. Repeated calls in that context can reuse the browser; measure warm execution separately from launch and navigation. The MCP server's `McpCdpSessions` closes a tool's browser contexts and clears its backend memo after five idle minutes or an audit-call timeout, preserving sibling tools. An active call suspends its idle timers. Timeout cancellation reaches request execution and prevents escalation into another rung. A cancelled setup cannot replace or remove a newer session. Shutdown drains the entire pool. `probe-backends` uses a temporary pool for cold/warm measurements; compile uses its own verification pool.
 
 An explicit `workflow.bootstrap.url` is resolved before inspecting later request URLs, which may depend on state captured by that bootstrap. Without an explicit bootstrap, the existing Referer/first-request fallback supplies the starting URL. The runtime follows the agent's declared URL and captures without inferring what the captured values mean.

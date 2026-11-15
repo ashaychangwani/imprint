@@ -456,6 +456,8 @@ export function persistedCaptureName(
 export const WorkflowSchema = z.object({
   toolName: z.string(),
   toolKind: z.enum(['data', 'authenticate']).optional(),
+  /** Opt into a clean, headed Chromium session for public browser reads. */
+  browserStartup: z.literal('native').optional(),
   intent: z.object({
     description: z.string(),
     /** Concatenated narration the user spoke while recording. */
