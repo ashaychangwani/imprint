@@ -3,7 +3,7 @@
  *
  * Tool: get_flight_location_details
  * Site: google-flights
- * Intent: Resolve a selected airport, city, or place into detailed Google Flights location metadata.
+ * Intent: Resolve a selected Google Flights airport code or city entity identifier into canonical location metadata.
  *
  * To regenerate: imprint emit ~/.imprint/google-flights/get_flight_location_details/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,37 +20,32 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_flight_location_details",
   "intent": {
-    "description": "Resolve a selected airport, city, or place into detailed Google Flights location metadata.",
-    "userSaid": "searched for a multi city flight; multi city from SJC to SAN to LAX to SFO"
+    "description": "Resolve a selected Google Flights airport code or city entity identifier into canonical location metadata.",
+    "userSaid": "Resolve a selected airport or city identifier into detailed flight-location metadata."
   },
   "parameters": [
     {
       "name": "location_id",
       "type": "string",
-      "description": "Airport code such as SJC or Google place id such as /m/0d9jr.",
-      "default": "SJC",
-      "verified": true
-    },
-    {
-      "name": "location_type",
-      "type": "string",
-      "description": "Google Flights location type code: use 0 for airport_code or 5 for google_place_id/city place ids.",
-      "default": "0",
-      "verified": true
+      "description": "Selected three-letter airport code or slash-prefixed Google city entity identifier to resolve.",
+      "verified": true,
+      "sourcedFrom": {
+        "tool": "search_flight_locations",
+        "field": "location_id"
+      }
     }
   ],
   "requests": [
     {
       "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/batchexecute?rpcids=tDoGIe&source-path=%2Ftravel%2Fflights&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.nonce}&rt=c",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/batchexecute?rpcids=tDoGIe&source-path=%2Ftravel%2Fflights&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
       "headers": {
         "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
         "X-Same-Domain": "1",
         "Referer": "https://www.google.com/travel/flights",
-        "Accept-Language": "en-US,en;q=0.9",
         "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
       },
-      "body": "f.req=%5B%5B%5B%22tDoGIe%22%2C%22%5Bnull%2C%5B%5B%5C%22${param.location_id}%5C%22%2C${param.location_type}%5D%5D%5D%22%2Cnull%2C%22generic%22%5D%5D%5D&",
+      "body": "f.req=${param.location_id}",
       "effect": "safe"
     }
   ],
@@ -63,7 +59,7 @@ const WORKFLOW: Workflow = {
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\\\"FdrFJe\\\":\\\"([^\\\"]+)\\\"",
+        "pattern": "[\"']FdrFJe[\"']\\s*:\\s*[\"'](-?\\d+)[\"']",
         "group": 1
       },
       {
@@ -71,31 +67,28 @@ const WORKFLOW: Workflow = {
         "required": true,
         "capability": "browser_bootstrap",
         "source": "html_regex",
-        "pattern": "\\\"cfb2h\\\":\\\"([^\\\"]+)\\\"",
+        "pattern": "[\"']cfb2h[\"']\\s*:\\s*[\"']([^\"']+)[\"']",
         "group": 1
       }
     ]
   },
   "parserModule": "./parser.ts",
-  "requestTransformModule": "../_shared/google_flights_transport.ts",
+  "requestTransformModule": "./request-transform.ts",
   "liveVerified": true
 };
 
 export interface GetFlightLocationDetailsInput {
-  /** Airport code such as SJC or Google place id such as /m/0d9jr. */
-  location_id?: string;
-  /** Google Flights location type code: use 0 for airport_code or 5 for google_place_id/city place ids. */
-  location_type?: string;
+  /** Selected three-letter airport code or slash-prefixed Google city entity identifier to resolve. */
+  location_id: string;
 }
 
 export async function getFlightLocationDetails(
   input: GetFlightLocationDetailsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    location_id: input.location_id ?? "SJC",
-    location_type: input.location_type ?? "0",
+    location_id: input.location_id,
 
   };
   return executeWorkflow({
@@ -103,6 +96,7 @@ export async function getFlightLocationDetails(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

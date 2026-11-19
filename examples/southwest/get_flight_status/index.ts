@@ -3,7 +3,7 @@
  *
  * Tool: get_flight_status
  * Site: southwest
- * Intent: Get Southwest flight status for a flight segment.
+ * Intent: Get the current operating status of a Southwest flight by date, route, and flight number.
  *
  * To regenerate: imprint emit ~/.imprint/southwest/get_flight_status/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,83 +20,70 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_flight_status",
   "intent": {
-    "description": "Get Southwest flight status for a flight segment.",
-    "userSaid": "selected my upcoming flight"
+    "description": "Get the current operating status of a Southwest flight by date, route, and flight number.",
+    "userSaid": "Get flight status details for a Southwest flight."
   },
   "parameters": [
     {
       "name": "departure_date",
       "type": "string",
-      "description": "Flight departure date in YYYY-MM-DD format.",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "description": "Flight departure date in YYYY-MM-DD format. Southwest's live flight-status API supports the current operating window; use today or tomorrow.",
+      "verified": true
     },
     {
       "name": "origination_airport_code",
       "type": "string",
       "description": "Origin airport code.",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "verified": true
     },
     {
       "name": "destination_airport_code",
       "type": "string",
       "description": "Destination airport code.",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "verified": true
     },
     {
       "name": "flight_number",
       "type": "string",
       "description": "Southwest flight number.",
-      "verified": false,
-      "verifyNote": "waived-bot"
+      "verified": true
     }
   ],
   "requests": [
     {
       "method": "GET",
-      "url": "https://www.southwest.com/swa-ui/bootstrap/landing-home-page-v2/1/data.js",
+      "url": "https://www.southwest.com/air/flight-status/path",
       "headers": {
-        "Accept": "application/javascript, text/javascript, */*; q=0.01"
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       },
-      "captures": [
-        {
-          "name": "southwest_api_key",
-          "required": true,
-          "capability": "ordinary_http",
-          "source": "text_regex",
-          "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\\\"]+)\"",
-          "group": 1
-        }
-      ],
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.southwest.com/api/air-operations/v1/air-operations/api/air/flights/statuses",
-      "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/json",
-        "Referer": "https://www.southwest.com/air/manage-reservation/view",
-        "x-api-key": "${state.southwest_api_key}",
-        "x-app-id": "air-manage-reservation-v2",
-        "x-app-version": "27.0.0",
-        "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}"
+      "mode": "navigate",
+      "navigation": {
+        "waitUntil": "domcontentloaded",
+        "timeoutMs": 60000,
+        "pollIntervalMs": 100,
+        "selector": "h1 span[aria-label^=\"flight number\"], [data-test=\"serviceErrorMessageBody\"]"
       },
-      "body": "{\"application\":\"air-manage-reservation-v2\",\"flightStatusRequests\":[{\"departureDate\":\"${param.departure_date}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"flightNumber\":\"${param.flight_number}\",\"originationAirportCode\":\"${param.origination_airport_code}\"}],\"site\":\"southwest\"}",
       "effect": "safe"
     }
   ],
   "site": "southwest",
   "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Historical and distant-future flight status",
+      "reason": "Southwest exposes operational status only for its current operating window; use today or tomorrow."
+    },
+    {
+      "feature": "Rendered-page transport",
+      "reason": "Southwest's route-specific API represents a valid no-status combination as HTTP 400. The generated tool instead navigates the public date-and-flight-number result page and applies exact origin/destination filters to the rendered result."
+    }
+  ],
   "liveVerified": true
 };
 
 export interface GetFlightStatusInput {
-  /** Flight departure date in YYYY-MM-DD format. */
+  /** Flight departure date in YYYY-MM-DD format. Southwest's live flight-status API supports the current operating window; use today or tomorrow. */
   departure_date: string;
   /** Origin airport code. */
   origination_airport_code: string;
@@ -107,7 +95,7 @@ export interface GetFlightStatusInput {
 
 export async function getFlightStatus(
   input: GetFlightStatusInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -122,6 +110,7 @@ export async function getFlightStatus(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

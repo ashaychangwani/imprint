@@ -3,7 +3,7 @@
  *
  * Tool: get_account_details
  * Site: southwest
- * Intent: Get Southwest Rapid Rewards account details for the logged-in user.
+ * Intent: Get the signed-in Southwest member's account and loyalty status.
  *
  * To regenerate: imprint emit ~/.imprint/southwest/get_account_details/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,7 +20,7 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "get_account_details",
   "intent": {
-    "description": "Get Southwest Rapid Rewards account details for the logged-in user.",
+    "description": "Get the signed-in Southwest member's account and loyalty status.",
     "userSaid": "logged into southwest"
   },
   "parameters": [],
@@ -33,83 +34,31 @@ const WORKFLOW: Workflow = {
       "captures": [
         {
           "name": "southwest_api_key",
-          "required": true,
-          "capability": "ordinary_http",
           "source": "text_regex",
           "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\"]+)\"",
-          "group": 1
+          "group": 1,
+          "required": true,
+          "capability": "ordinary_http"
         }
       ],
       "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.southwest.com/api/security/v4/security/token",
-      "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Content-Type": "application/x-www-form-urlencoded",
-        "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
-        "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}",
-        "Origin": "https://www.southwest.com"
-      },
-      "body": "username=${credential.username}&password=${credential.password}&scope=openid&response_type=id_token+swa_token&client_id=6b6199ac-6726-4642-b5bd-86eb07062161",
-      "captures": [
-        {
-          "name": "access_token",
-          "required": true,
-          "capability": "ordinary_http",
-          "source": "json",
-          "path": "$.access_token"
-        },
-        {
-          "name": "id_token",
-          "required": true,
-          "capability": "ordinary_http",
-          "source": "json",
-          "path": "$.id_token"
-        }
-      ],
-      "effect": "idempotent"
     },
     {
       "method": "GET",
       "url": "https://www.southwest.com/api/loyalty-management/v2/loyalty-management/accounts/self/customer-details-secure",
       "headers": {
-        "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.southwest.com/",
+        "x-api-key": "${state.southwest_api_key}",
         "x-app-id": "landing-home-page-v2",
         "x-app-version": "27.0.0",
         "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}"
-      },
-      "effect": "safe"
-    },
-    {
-      "method": "GET",
-      "url": "https://www.southwest.com/api/security/v4/security/userinfo",
-      "headers": {
         "Accept": "application/json, text/plain, */*",
-        "Referer": "https://www.southwest.com/",
-        "x-app-id": "landing-home-page-v2",
-        "x-app-version": "27.0.0",
-        "x-channel-id": "southwest",
-        "x-diagnostic": "{\"spa\":\"27.0.0\"}",
-        "x-user-experience-id": "${generated.uuid}",
-        "x-api-key": "${state.southwest_api_key}"
+        "Referer": "https://www.southwest.com/"
       },
       "effect": "safe"
     }
   ],
   "site": "southwest",
-  "parserModule": "./parser.ts",
-  "liveVerified": true
+  "parserModule": "./parser.ts"
 };
 
 export interface GetAccountDetailsInput {
@@ -118,7 +67,7 @@ export interface GetAccountDetailsInput {
 
 export async function getAccountDetails(
   _input: GetAccountDetailsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
@@ -130,6 +79,7 @@ export async function getAccountDetails(
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });

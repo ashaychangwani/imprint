@@ -1,78 +1,120 @@
 {
   "toolName": "search_hotels",
-  "intent": {
-    "description": "Search Google Hotels for lodging options by destination, stay dates, travelers, pricing filters, amenities, hotel class, brands, sort order, and property type.",
-    "userSaid": "searched for hotels at chicago loop from july 3-6; changed number of adults; filtered min and max price; added all 19 filters for amenities; added filters for 2 star, 4 star and 5 star; added all the brand filters; sorted by lowest price, then highest ratings, most reviewed and then back to relevance; change property type to vacation rentals instead of hotels; changed location to tahoe city; searched for hotels in denver downtown"
-  },
   "site": "google-hotels",
+  "intent": {
+    "description": "Search Google Travel lodging properties by destination and stay dates.",
+    "userSaid": "Searched Chicago Loop and Tahoe/Denver destinations, changed dates and guests, filtered price/rating/star classes, switched to vacation rentals, and changed sorting."
+  },
   "parameters": [
     {
-      "name": "destination",
+      "name": "location",
       "type": "string",
-      "description": "Destination query or place name such as Chicago Loop, Tahoe City, or Denver Downtown.",
-      "default": "chicago loop",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Destination or free-text hotel query.",
+      "verified": true
     },
     {
       "name": "check_in_date",
       "type": "string",
       "description": "Check-in date in YYYY-MM-DD format.",
-      "default": "2026-07-03",
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
     },
     {
       "name": "check_out_date",
       "type": "string",
       "description": "Check-out date in YYYY-MM-DD format.",
-      "default": "2026-07-06",
-      "verified": false,
-      "verifyNote": "annotated"
+      "verified": true
+    }
+  ],
+  "bootstrap": {
+    "url": "https://www.google.com/travel/search?qs=OAA",
+    "waitUntil": "domcontentloaded",
+    "captures": [
+      {
+        "source": "html_regex",
+        "name": "bl",
+        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      },
+      {
+        "source": "html_regex",
+        "name": "f_sid",
+        "pattern": "\"FdrFJe\":\"(-?[0-9]+)\"",
+        "group": 1,
+        "required": true,
+        "capability": "browser_bootstrap"
+      }
+    ]
+  },
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "discover:${param.location}",
+      "captures": [
+        {
+          "source": "text_regex",
+          "name": "destination_id",
+          "pattern": "\\\\\\\"((?:0x[0-9a-f]+:0x[0-9a-f]+|/[mg]/[A-Za-z0-9_-]+))\\\\\\\"(?:,null){0,6},\\\\\\\"((?!0x)[^\\\"\\\\]+)\\\\\\\"",
+          "group": 1,
+          "required": true,
+          "capability": "ordinary_http"
+        }
+      ]
     },
     {
-      "name": "min_price",
-      "type": "number",
-      "description": "Minimum nightly price filter. Use 0 for no minimum.",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "hotel_classes",
-      "type": "string",
-      "description": "Comma-separated star classes to include, such as 2,4,5.",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "property_type",
-      "type": "string",
-      "description": "Property type: hotels or vacation_rentals.",
-      "default": "hotels",
-      "verified": false,
-      "verifyNote": "annotated"
+      "method": "POST",
+      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "X-Same-Domain": "1",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "refine:${state.destination_id}:${param.location}|${param.check_in_date}|${param.check_out_date}"
     }
   ],
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "requests": [
+  "limitations": [
     {
-      "method": "POST",
-      "url": "https://www.google.com/_/TravelFrontendUi/data/batchexecute?rpcids=AtySUc&source-path=%2Ftravel%2Fsearch&f.sid=-7129101702754032847&bl=boq_travel-frontend-ui_20260603.00_p0&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=3543921&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "Accept-Language": "en-US,en;q=0.9",
-        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36",
-        "Referer": "https://www.google.com/travel/search?q=${param.destination}&ap=MAA",
-        "x-goog-ext-190139975-jspb": "[\"US\",\"ZZ\",\"DTQmiQ==\"]",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "f.req=${param.destination}|${param.check_in_date}|${param.check_out_date}|USD|${param.min_price}|${param.hotel_classes}|${param.property_type}&",
-      "effect": "safe"
+      "feature": "Amenity filters",
+      "reason": "The recording proves numeric amenity IDs but does not provide a durable name-to-ID catalog, so accepting names would require guessing.",
+      "omittedParameters": [
+        "amenities"
+      ]
+    },
+    {
+      "feature": "Brand filters",
+      "reason": "The recording contains selected numeric brand IDs without a stable public mapping from caller brand names.",
+      "omittedParameters": [
+        "brands"
+      ]
+    },
+    {
+      "feature": "Destination entity selection",
+      "reason": "The workflow does not select an arbitrary /m/ token. It first performs the recorded free-text search, captures only the destination context identifier structurally paired with its display name, then uses that minted identifier for the dated refinement request."
+    },
+    {
+      "feature": "Property-type, guest, currency, filter, display, and sort controls",
+      "reason": "Live differential verification showed Google replay can return apartment inventory in both recorded property modes, while the recording does not provide enough stable positional semantics to prove the remaining options constrain current live results. They are omitted rather than advertised as potentially inert inputs.",
+      "omittedParameters": [
+        "adults",
+        "children",
+        "currency",
+        "property_type",
+        "min_rating",
+        "min_price",
+        "max_price",
+        "price_display",
+        "star_classes",
+        "sort_by"
+      ]
     }
-  ],
-  "liveVerified": true
+  ]
 }

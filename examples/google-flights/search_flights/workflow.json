@@ -1,130 +1,104 @@
 {
   "toolName": "search_flights",
   "intent": {
-    "description": "Search Google Flights for one-way, round-trip, or multi-city flight options with filters.",
-    "userSaid": "searched for a round trip flight; searched for a one way flight; played with the stops and the airlines filters; added bags; played with the price and time filters; played with the duration filter"
+    "description": "Search Google Flights for one-way itineraries with passenger and recorded filter controls.",
+    "userSaid": "searched for flights and played with stops, bags, price, time, and duration filters"
   },
-  "site": "google-flights",
   "parameters": [
     {
       "name": "trip_type",
       "type": "string",
-      "description": "Ticket type such as round_trip, one_way, or multi_city.",
-      "default": "round_trip",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Only one_way is supported by this emitted search tool.",
+      "default": "one_way"
     },
     {
-      "name": "origin",
+      "name": "legs",
       "type": "string",
-      "description": "Origin airport code, city code, or place identifier for one-way and round-trip searches.",
-      "default": "SJC",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "destination",
-      "type": "string",
-      "description": "Destination airport code, city code, or place identifier for one-way and round-trip searches.",
-      "default": "SAN",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "departure_date",
-      "type": "string",
-      "description": "Departure date in YYYY-MM-DD format.",
-      "default": "2026-07-12",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "return_date",
-      "type": "string",
-      "description": "Return date in YYYY-MM-DD format for round-trip searches.",
-      "default": "2026-07-16",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "itinerary",
-      "type": "string",
-      "description": "Multi-city itinerary as semicolon-separated origin,destination,date legs, such as SFO,LAX,2026-09-01;LAX,JFK,2026-09-04. Supplying this value selects multi-city search semantics.",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
-    },
-    {
-      "name": "selection_token",
-      "type": "string",
-      "description": "Selection token from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selected_flights to fetch the next leg options.",
-      "default": "",
-      "verified": true
-    },
-    {
-      "name": "selected_flights",
-      "type": "string",
-      "description": "JSON array of already selected leg tuples from a prior search_flights result. For staged round-trip or multi-city selection, pass this with selection_token to fetch the next leg options and emit a complete selected_flights array.",
-      "default": "",
-      "verified": true
+      "description": "A single origin,destination,YYYY-MM-DD flight leg."
     },
     {
       "name": "adults",
       "type": "number",
-      "description": "Number of adult passengers.",
-      "default": 1,
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Adult passengers.",
+      "default": 1
     },
     {
-      "name": "stops",
+      "name": "children",
+      "type": "number",
+      "description": "Child passengers.",
+      "default": 0
+    },
+    {
+      "name": "cabin_class",
       "type": "string",
-      "description": "Stops filter for routes with both nonstop and connecting options, such as any, nonstop_only, one_stop_or_fewer, or two_stops_or_fewer.",
-      "default": "any",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Only economy is supported by the recording.",
+      "default": "economy"
+    },
+    {
+      "name": "max_stops",
+      "type": "number",
+      "description": "Maximum stops per leg; 0 means unrestricted.",
+      "default": 0
     },
     {
       "name": "airlines",
       "type": "string",
-      "description": "Comma-separated airline or alliance codes to include, such as AS, AA, WN, ONEWORLD, SKYTEAM, or STAR_ALLIANCE.",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Comma-separated airline codes to include.",
+      "default": ""
     },
     {
-      "name": "bags",
+      "name": "alliances",
+      "type": "string",
+      "description": "Comma-separated alliance codes: ONEWORLD, SKYTEAM, or STAR_ALLIANCE.",
+      "default": ""
+    },
+    {
+      "name": "carry_on_bags",
       "type": "number",
-      "description": "Number of bags to include in fare filtering.",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Only 0 is supported by the recording.",
+      "default": 0
     },
     {
       "name": "max_price",
       "type": "number",
-      "description": "Maximum fare price in USD.",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Maximum total fare; 0 means unrestricted.",
+      "default": 0
     },
     {
       "name": "outbound_time_range",
       "type": "string",
-      "description": "Outbound departure or arrival time constraints encoded as start and end hours, such as 2-21.",
-      "default": "",
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "departure_start,departure_end,arrival_start,arrival_end; each hour must be an integer from 0 through 23.",
+      "default": ""
     },
     {
       "name": "max_duration_minutes",
       "type": "number",
-      "description": "Maximum flight duration in minutes.",
-      "default": 0,
-      "verified": false,
-      "verifyNote": "annotated"
+      "description": "Maximum itinerary duration; 0 means unrestricted.",
+      "default": 0
+    },
+    {
+      "name": "sort_order",
+      "type": "string",
+      "description": "best, price, departure_time, arrival_time, or duration.",
+      "default": "best"
     }
   ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
+        "X-Same-Domain": "1",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "trip_type=${param.trip_type}&legs=${param.legs}&adults=${param.adults}&children=${param.children}&cabin_class=${param.cabin_class}&max_stops=${param.max_stops}&airlines=${param.airlines}&alliances=${param.alliances}&carry_on_bags=${param.carry_on_bags}&max_price=${param.max_price}&outbound_time_range=${param.outbound_time_range}&max_duration_minutes=${param.max_duration_minutes}&sort_order=${param.sort_order}",
+      "effect": "safe"
+    }
+  ],
+  "site": "google-flights",
   "bootstrap": {
     "url": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
     "waitUntil": "domcontentloaded",
@@ -132,7 +106,7 @@
       {
         "source": "html_regex",
         "name": "f_sid",
-        "pattern": "\"FdrFJe\":\"(-?\\d+)\"",
+        "pattern": "FdrFJe[^0-9-]{1,40}(-?[0-9]{10,})",
         "group": 1,
         "required": true,
         "capability": "browser_bootstrap"
@@ -140,30 +114,52 @@
       {
         "source": "html_regex",
         "name": "bl",
-        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "pattern": "(boq_travel-frontend-flights-ui_[A-Za-z0-9_.-]+)",
         "group": 1,
         "required": true,
         "capability": "browser_bootstrap"
       }
     ]
   },
-  "requests": [
-    {
-      "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.nonce}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "Referer": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
-        "Accept-Language": "en-US,en;q=0.9",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "trip_type=${param.trip_type}&origin=${param.origin}&destination=${param.destination}&departure_date=${param.departure_date}&return_date=${param.return_date}&itinerary=${param.itinerary}&selection_token=${param.selection_token}&selected_flights=${param.selected_flights}&adults=${param.adults}&stops=${param.stops}&airlines=${param.airlines}&bags=${param.bags}&max_price=${param.max_price}&outbound_time_range=${param.outbound_time_range}&max_duration_minutes=${param.max_duration_minutes}",
-      "effect": "safe"
-    }
-  ],
   "parserModule": "./parser.ts",
   "requestTransformModule": "./request-transform.ts",
-  "liveVerified": true
+  "limitations": [
+    {
+      "feature": "Price currency selection",
+      "reason": "The recorded shopping contract requires the static USD page metadata header and provides no grounded request position for varying currency independently.",
+      "omittedParameters": [
+        "currency"
+      ]
+    },
+    {
+      "feature": "Non-economy cabin classes",
+      "reason": "The recordings and live verification ground economy only.",
+      "omittedParameters": []
+    },
+    {
+      "feature": "Carry-on bag filtering",
+      "reason": "The recorded field did not produce a discriminating live result, so only the unfiltered value 0 is supported.",
+      "omittedParameters": []
+    },
+    {
+      "feature": "Infant passenger mixes",
+      "reason": "The recording did not exercise infant passenger changes, and live differentials produced incomplete carrier results without passenger-adjusted fares.",
+      "omittedParameters": [
+        "infants_in_seat",
+        "infants_on_lap"
+      ]
+    },
+    {
+      "feature": "Exhaustive server-side price discovery",
+      "reason": "Google's recorded server price slot can omit cheaper baseline itineraries at restrictive caps, so max_price is enforced as a deterministic postcondition over the returned result set.",
+      "omittedParameters": []
+    },
+    {
+      "feature": "Round-trip and multi-city staged search",
+      "reason": "The emitted producer currently proves complete one-way selections only. Use get_flight_calendar_prices for round-trip price discovery; later-leg staged selection remains user-assisted.",
+      "omittedParameters": [
+        "return_time_range"
+      ]
+    }
+  ]
 }

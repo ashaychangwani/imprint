@@ -1,32 +1,69 @@
 {
   "toolName": "get_flight_booking_options",
   "intent": {
-    "description": "Get booking and fare details for a selected Google Flights itinerary.",
-    "userSaid": "clicked one of the one-way fares to find more details and booking details; saw the options for another flight; chose round trip fares; kept exploring round trip fare details; clicked the option for the first leg; clicked the option for the second leg and came to the booking options page"
+    "description": "Get fare details and booking providers for a selected flight itinerary.",
+    "userSaid": "Clicked selected one-way, round-trip, and multi-city fares to view fare and booking details."
   },
-  "site": "google-flights",
   "parameters": [
+    {
+      "name": "trip_type",
+      "type": "string",
+      "description": "Trip type: one_way, round_trip, or multi_city.",
+      "default": "one_way"
+    },
     {
       "name": "selected_flights",
       "type": "string",
-      "description": "JSON array of selected segment tuples [origin, departureDate, destination, null, carrierCode, flightNumber]. For round-trip and multi-city booking, pass the complete ordered array of selected legs; a single first-leg value is treated as a one-way booking.",
-      "verified": true,
+      "description": "Fresh selection_data JSON emitted by search_flights.",
       "sourcedFrom": {
         "tool": "search_flights",
-        "field": "selected_flights"
+        "field": "selection_data"
       }
+    },
+    {
+      "name": "adults",
+      "type": "number",
+      "description": "Number of adult passengers.",
+      "default": 1
+    },
+    {
+      "name": "children",
+      "type": "number",
+      "description": "Number of child passengers.",
+      "default": 0
+    },
+    {
+      "name": "cabin_class",
+      "type": "string",
+      "description": "Only economy is supported by the recording.",
+      "default": "economy"
     }
   ],
+  "requests": [
+    {
+      "method": "POST",
+      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetBookingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
+      "headers": {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
+        "Referer": "https://www.google.com/travel/flights",
+        "X-Same-Domain": "1",
+        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
+        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
+      },
+      "body": "f.req=${param.selected_flights}&trip_type=${param.trip_type}&adults=${param.adults}&children=${param.children}&cabin_class=${param.cabin_class}",
+      "effect": "safe"
+    }
+  ],
+  "site": "google-flights",
   "bootstrap": {
-    "url": "https://www.google.com/travel/flights/search?tfs=CBwQAhoeEgoyMDI2LTA2LTA4agcIARIDU0pDcgcIARIDU0FOGh4SCjIwMjYtMDYtMTFqBwgBEgNTQU5yBwgBEgNTSkNAAUgBcAGCAQsI____________AZgBAQ",
+    "url": "https://www.google.com/travel/flights",
     "waitUntil": "domcontentloaded",
-    "waitMs": 500,
-    "timeoutMs": 30000,
+    "waitMs": 1500,
     "captures": [
       {
         "source": "html_regex",
         "name": "f_sid",
-        "pattern": "(?:FdrFJe|f\\.sid)[^0-9-]{0,80}(-?[0-9]{10,})",
+        "pattern": "FdrFJe[^0-9-]{1,40}(-?[0-9]{10,})",
         "group": 1,
         "required": true,
         "capability": "browser_bootstrap"
@@ -34,52 +71,20 @@
       {
         "source": "html_regex",
         "name": "bl",
-        "pattern": "\"cfb2h\":\"([^\"]+)\"",
+        "pattern": "(boq_travel-frontend-flights-ui_[A-Za-z0-9_.-]+)",
         "group": 1,
         "required": true,
         "capability": "browser_bootstrap"
       }
     ]
   },
-  "requests": [
-    {
-      "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetShoppingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
-      "effect": "safe"
-    },
-    {
-      "method": "POST",
-      "url": "https://www.google.com/_/FlightsFrontendUi/data/travel.frontend.flights.FlightsFrontendService/GetBookingResults?f.sid=${state.f_sid}&bl=${state.bl}&hl=en-US&soc-app=162&soc-platform=1&soc-device=1&_reqid=${generated.epoch_ms}&rt=c",
-      "headers": {
-        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8",
-        "X-Same-Domain": "1",
-        "sec-ch-ua-full-version": "\"148.0.7778.96\"",
-        "x-goog-ext-259736195-jspb": "[\"en-US\",\"US\",\"USD\",2,null,[420],null,null,7,[]]"
-      },
-      "body": "{\"selected_flights\":\"${param.selected_flights}\"}",
-      "effect": "safe"
-    }
-  ],
-  "requestTransformModule": "./request-transform.ts",
   "parserModule": "./parser.ts",
-  "liveVerified": true
+  "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Non-economy booking cabins",
+      "reason": "The recordings and producer-consumer live chain ground economy only.",
+      "omittedParameters": []
+    }
+  ]
 }

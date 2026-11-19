@@ -3,7 +3,7 @@
  *
  * Tool: search_flights
  * Site: southwest
- * Intent: Search Southwest one-way or round-trip flight times and fares for a route and date.
+ * Intent: Search Southwest flights and fares for a route, dates, and time preferences using the recorded one-adult baseline.
  *
  * To regenerate: imprint emit ~/.imprint/southwest/search_flights/workflow.json --force
  */
@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   executeWorkflow,
+  type BrowserNavigationTransport,
   type CredentialStore,
 } from 'imprint/runtime';
 import type { ToolResult, Workflow } from 'imprint/types';
@@ -19,51 +20,78 @@ import type { ToolResult, Workflow } from 'imprint/types';
 const WORKFLOW: Workflow = {
   "toolName": "search_flights",
   "intent": {
-    "description": "Search Southwest one-way or round-trip flight times and fares for a route and date.",
-    "userSaid": "i just specified the departure and arrival airports (SJC and SAN) i set teh depart date now i changed to one way trip only now i clicked search"
+    "description": "Search Southwest flights and fares for a route, dates, and time preferences using the recorded one-adult baseline.",
+    "userSaid": "Search Southwest flights between selected airports for one-way or round-trip travel, including time preferences."
   },
   "parameters": [
     {
       "name": "origination_airport_code",
       "type": "string",
-      "description": "Origin airport code, such as SJC.",
-      "default": "SJC"
+      "description": "Origin airport code such as SJC.",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "destination_airport_code",
       "type": "string",
-      "description": "Destination airport code, such as SAN.",
-      "default": "SAN"
+      "description": "Destination airport code such as SAN or LGA.",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "departure_date",
       "type": "string",
-      "description": "Outbound departure date in YYYY-MM-DD format.",
-      "default": "2026-08-20"
+      "description": "Departure date in YYYY-MM-DD format.",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "return_date",
       "type": "string",
-      "description": "Return date in YYYY-MM-DD format for round trips; empty for one-way searches.",
-      "default": ""
+      "description": "Return date in YYYY-MM-DD format for round trips.",
+      "default": "",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "trip_type",
       "type": "string",
-      "description": "Trip type, oneway or roundtrip.",
-      "default": "oneway"
+      "description": "Trip type: oneway or roundtrip.",
+      "default": "oneway",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
-      "name": "adults_count",
-      "type": "number",
-      "description": "Number of adult passengers.",
-      "default": 1
+      "name": "departure_time_of_day",
+      "type": "string",
+      "description": "Time window: ALL_DAY, BEFORE_NOON, NOON_TO_SIX, or AFTER_SIX.",
+      "default": "ALL_DAY",
+      "verified": false,
+      "verifyNote": "semantic-gap"
+    },
+    {
+      "name": "return_time_of_day",
+      "type": "string",
+      "description": "Time window: ALL_DAY, BEFORE_NOON, NOON_TO_SIX, or AFTER_SIX.",
+      "default": "ALL_DAY",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     },
     {
       "name": "fare_type",
       "type": "string",
-      "description": "Fare currency type: USD for dollars, POINTS for Rapid Rewards points.",
-      "default": "USD"
+      "description": "Fare currency; only USD is recorded.",
+      "default": "USD",
+      "verified": false,
+      "verifyNote": "semantic-gap"
+    },
+    {
+      "name": "promo_code",
+      "type": "string",
+      "description": "Optional promotional code.",
+      "default": "",
+      "verified": false,
+      "verifyNote": "semantic-gap"
     }
   ],
   "requests": [
@@ -76,11 +104,11 @@ const WORKFLOW: Workflow = {
       "captures": [
         {
           "name": "southwest_api_key",
-          "required": true,
-          "capability": "ordinary_http",
           "source": "text_regex",
           "pattern": "\"swa-bootstrap-landing-home-page-v2/api-keys\":\\[function\\(require,module,exports\\)\\{\\s*module\\.exports = \\{[^}]*\"prod\":\"([^\"]+)\"",
-          "group": 1
+          "group": 1,
+          "required": true,
+          "capability": "ordinary_http"
         }
       ],
       "effect": "safe"
@@ -94,54 +122,81 @@ const WORKFLOW: Workflow = {
         "X-API-Key": "${state.southwest_api_key}",
         "X-App-ID": "air-booking",
         "X-Channel-ID": "southwest",
-        "X-User-Experience-ID": "${generated.uuid}",
-        "Referer": "https://www.southwest.com/air/booking/select-depart.html?adultsCount=${param.adults_count}&adultPassengersCount=${param.adults_count}&destinationAirportCode=${param.destination_airport_code}&departureDate=${param.departure_date}&departureTimeOfDay=ALL_DAY&fareType=${param.fare_type}&int=HOMEQBOMAIR&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=&returnDate=${param.return_date}&returnTimeOfDay=ALL_DAY&tripType=${param.trip_type}"
+        "X-User-Experience-ID": "${generated.uuid}"
       },
-      "body": "{\"adultPassengersCount\":\"${param.adults_count}\",\"adultsCount\":\"${param.adults_count}\",\"departureDate\":\"${param.departure_date}\",\"departureTimeOfDay\":\"ALL_DAY\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"fareType\":\"${param.fare_type}\",\"int\":\"HOMEQBOMAIR\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"\",\"returnDate\":\"${param.return_date}\",\"returnTimeOfDay\":\"ALL_DAY\",\"tripType\":\"${param.trip_type}\",\"application\":\"air-booking\",\"site\":\"southwest\"}",
+      "body": "{\"adultPassengersCount\":\"1\",\"adultsCount\":\"1\",\"departureDate\":\"${param.departure_date}\",\"departureTimeOfDay\":\"${param.departure_time_of_day}\",\"destinationAirportCode\":\"${param.destination_airport_code}\",\"fareType\":\"${param.fare_type}\",\"int\":\"HOMEQBOMAIR\",\"originationAirportCode\":\"${param.origination_airport_code}\",\"passengerType\":\"ADULT\",\"promoCode\":\"${param.promo_code}\",\"returnDate\":\"${param.return_date}\",\"returnTimeOfDay\":\"${param.return_time_of_day}\",\"tripType\":\"${param.trip_type}\",\"application\":\"air-booking\",\"site\":\"southwest\"}",
       "effect": "safe"
     }
   ],
   "site": "southwest",
-  "parserModule": "./parser.ts"
+  "bootstrap": {
+    "url": "https://www.southwest.com/air/booking/select-depart.html?adultsCount=1&adultPassengersCount=1&destinationAirportCode=${param.destination_airport_code}&departureDate=${param.departure_date}&departureTimeOfDay=${param.departure_time_of_day}&fareType=${param.fare_type}&originationAirportCode=${param.origination_airport_code}&passengerType=ADULT&promoCode=${param.promo_code}&returnDate=${param.return_date}&returnTimeOfDay=${param.return_time_of_day}&tripType=${param.trip_type}",
+    "waitUntil": "domcontentloaded",
+    "waitMs": 3000,
+    "timeoutMs": 60000
+  },
+  "parserModule": "./parser.ts",
+  "requestTransformModule": "./request-transform.ts",
+  "limitations": [
+    {
+      "feature": "Unrecorded fare currencies and promotional codes",
+      "reason": "The recording only proves fare_type USD and an empty promo_code; the transform rejects other values."
+    },
+    {
+      "feature": "Passenger-count selection",
+      "reason": "Independent live calls for adult, teen, older-child, younger-child, and lap-infant count variations returned equivalent adult-only inventory and fare output. The generated tool therefore searches the recorded one-adult baseline; changing passengers remains user-assisted."
+    },
+    {
+      "feature": "Provider-side time-window enforcement",
+      "reason": "Southwest may return every time window even when a window is requested; the generated parser deterministically filters each outbound and return bound by the provider time tags."
+    }
+  ],
+  "liveVerified": true
 };
 
 export interface SearchFlightsInput {
-  /** Origin airport code, such as SJC. */
-  origination_airport_code?: string;
-  /** Destination airport code, such as SAN. */
-  destination_airport_code?: string;
-  /** Outbound departure date in YYYY-MM-DD format. */
-  departure_date?: string;
-  /** Return date in YYYY-MM-DD format for round trips; empty for one-way searches. */
+  /** Origin airport code such as SJC. */
+  origination_airport_code: string;
+  /** Destination airport code such as SAN or LGA. */
+  destination_airport_code: string;
+  /** Departure date in YYYY-MM-DD format. */
+  departure_date: string;
+  /** Return date in YYYY-MM-DD format for round trips. */
   return_date?: string;
-  /** Trip type, oneway or roundtrip. */
+  /** Trip type: oneway or roundtrip. */
   trip_type?: string;
-  /** Number of adult passengers. */
-  adults_count?: number;
-  /** Fare currency type: USD for dollars, POINTS for Rapid Rewards points. */
+  /** Time window: ALL_DAY, BEFORE_NOON, NOON_TO_SIX, or AFTER_SIX. */
+  departure_time_of_day?: string;
+  /** Time window: ALL_DAY, BEFORE_NOON, NOON_TO_SIX, or AFTER_SIX. */
+  return_time_of_day?: string;
+  /** Fare currency; only USD is recorded. */
   fare_type?: string;
+  /** Optional promotional code. */
+  promo_code?: string;
 }
 
 export async function searchFlights(
   input: SearchFlightsInput,
-  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; initialState?: Record<string, unknown> } = {},
+  opts: { credentials?: CredentialStore; fetchImpl?: typeof fetch; browser?: BrowserNavigationTransport; initialState?: Record<string, unknown> } = {},
 ): Promise<ToolResult> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const params: Record<string, string | number | boolean> = {
-    origination_airport_code: input.origination_airport_code ?? "SJC",
-    destination_airport_code: input.destination_airport_code ?? "SAN",
-    departure_date: input.departure_date ?? "2026-08-20",
     return_date: input.return_date ?? "",
     trip_type: input.trip_type ?? "oneway",
-    adults_count: input.adults_count ?? 1,
+    departure_time_of_day: input.departure_time_of_day ?? "ALL_DAY",
+    return_time_of_day: input.return_time_of_day ?? "ALL_DAY",
     fare_type: input.fare_type ?? "USD",
-
+    promo_code: input.promo_code ?? "",
+    origination_airport_code: input.origination_airport_code,
+    destination_airport_code: input.destination_airport_code,
+    departure_date: input.departure_date,
   };
   return executeWorkflow({
     workflow: WORKFLOW,
     params,
     credentials: opts.credentials,
     fetchImpl: opts.fetchImpl,
+    browser: opts.browser,
     initialState: opts.initialState,
     workflowPath: join(__dirname, 'workflow.json'),
   });
